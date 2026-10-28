@@ -651,8 +651,8 @@ export async function startMarketplaceWorkers(ctx: AppContext) {
     );
   for (const name of Object.values(QUEUES))
     await ctx.boss.createQueue(name, { retryLimit: 3, retryDelay: 5, expireInSeconds: 120 });
-  // A single app instance owns these leases. Restart recovery never changes keys or expiry.
-  await ctx.pool.query('UPDATE broker_vms SET lease_until=NULL WHERE lease_until IS NOT NULL');
+  // Rolling deployments can overlap even with one configured replica. Preserve an
+  // existing worker's lease; lifecycle claims requeue until its bounded expiry.
   await ctx.pool.query(
     "INSERT INTO broker_settings(key,value) VALUES('maxConcurrentVms',$1) ON CONFLICT(key) DO NOTHING",
     [ctx.config.maxConcurrentVms],

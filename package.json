@@ -19,7 +19,9 @@
     "check": "npm run typecheck && npm test && npm run build",
     "seed:production": "node dist/scripts/seed.js",
     "format": "prettier --write src scripts tests *.ts *.json",
-    "test:recovery": "tsx scripts/verify-recovery.ts"
+    "test:recovery": "tsx scripts/verify-recovery.ts",
+    "db:migrate:production": "node dist/scripts/migrate.js",
+    "configure:real:production": "node dist/scripts/configure-real.js"
   },
   "dependencies": {
     "@fastify/middie": "^9.0.3",
@@ -49,6 +51,7 @@
     "@types/ws": "^8.18.1",
     "@vitejs/plugin-react": "^5.1.0",
     "prettier": "^3.9.10",
+    "railway": "3.16.0",
     "tsx": "^4.20.6",
     "typescript": "^5.9.3",
     "vite": "^7.2.2",

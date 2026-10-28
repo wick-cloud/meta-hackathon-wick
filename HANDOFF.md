@@ -1,4 +1,17 @@
-# Wick Broker — current reviewed handoff
+# Railway support on the review branch
+
+The branch now builds a production Docker image for Railway, with one app and PostgreSQL declared in [`.railway/railway.ts`](.railway/railway.ts). Follow [docs/RAILWAY.md](docs/RAILWAY.md) for first-time setup, private variables, invited accounts and real Wick configuration. Railway cloud resources have not been provisioned by this change. The existing VM preview still runs commission commit `ce20808f1660e9705ada775614593a3d11bc506e`.
+
+- The official Railway SDK is pinned at 3.16.0 as a development dependency. Its configuration typechecks and evaluates locally to the app/database resources with preserved private variables. No authenticated Railway plan/apply was run. The obsolete `railway.toml` was removed in favor of current IaC.
+- Docker builds without database or API credentials, uses explicit source copies, installs production dependencies only, and runs as UID 1000. The configuration runs compiled migrations before deployment, starts Node directly, checks `/ready`, uses one always-on replica, and allows 30 seconds for graceful draining. It never automatically seeds accounts.
+- Startup now preserves active 90-second VM leases during rolling process overlap. Two isolated PostgreSQL regressions verify one lifecycle create/invoice, delayed competing work and expired-lease recovery using the original key.
+- **314/314 tests across 20 suites passed** in a disposable Linux Node 24 / PostgreSQL 16 Docker environment in 32.24 seconds. Typecheck, formatting and diff checks passed.
+- Production-image smoke passed: repeated compiled migrations, explicit first-time seed, dynamic port 4317, SPA deep link, invited-account login, unchanged 30-second fixture auction, terminal WebSocket readiness, fixed 15% invoice, graceful container restart with the same database and auth secret, preserved session/environment/expiry/quote, exactly one invoice, and confirmed fixture cleanup. The app never exposed an upstream key. No real Wick VM or Meta call was made; the test network had no external access. Temporary Docker containers, network and environment file were removed.
+- The image was checked without the Railway development SDK or private `.env` in its runtime. Published SDK dependencies may bring their own production tools; production migration/setup commands invoke compiled JavaScript and do not depend on development `tsx` scripts.
+
+Private build/test reports remain outside Git. These checks demonstrate container behavior and local deployment configuration, not an executed Railway cloud deployment. The preceding commission verification and historical live-scale boundary remain below.
+
+# Wick Broker — commission handoff
 
 The provider commission update is deployed to the existing preview on `codex/broker-real-wick`, based on `5c846952fa1d54642d4a8db00c5a5726e1c07a8d`. Verification and cutover completed on 2026-10-28. Migration 010 was applied, the verified build was promoted, and health/readiness confirmed real Wick with fixture Muse. Existing accounts, sessions and rental history were preserved without seeding; zero active VMs or open auctions were present at cutover. A private recovery snapshot and preceding build remain outside Git.
 

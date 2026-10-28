@@ -34,7 +34,7 @@ A termination response is only acceptance. Supplier capacity is released only af
 
 Provisioning and cleanup each have a maximum of 60 durable attempts, with bounded delays and upstream timeouts. Unresolved cleanup retains the reservation and appears in administrator configuration. The administrator can explicitly retry reconciliation. Startup restores work for open auctions and unresolved VMs without changing their key or expiry. Queue inserts and related domain changes use one PostgreSQL transaction.
 
-This service is deployed as one application instance. Startup clears leases from the prior process before registering workers. PostgreSQL locks and uniqueness constraints still protect duplicate job delivery.
+This service is deployed as one application instance. Startup preserves active lifecycle leases during deployment overlap. A competing worker retries after the remaining 90-second lease; expired leases are recovered with the existing create key. PostgreSQL locks and uniqueness constraints still protect duplicate job delivery.
 
 ## Explicit adapter modes
 

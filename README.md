@@ -56,9 +56,9 @@ Read [Wick contract evidence](docs/WICK_CONTRACT.md) and [Muse contract evidence
 
 ## Deploy shape
 
-One Railway app service using `Dockerfile` and `railway.toml`, plus PostgreSQL. Set `DATABASE_URL`, `APP_URL` (HTTPS in production), `BETTER_AUTH_SECRET`, explicit adapter modes, and required real credentials. The same always-on process serves UI, APIs, authentication, terminal WebSockets, and durable queue consumers. Use one replica for v1. `/health` is liveness; `/ready` checks database availability after startup. Migrations run under an advisory lock at startup; SIGTERM closes connections and drains jobs.
+Deploy the review branch as **one always-on Railway app and PostgreSQL**. The Dockerfile builds Node 24 without runtime credentials and includes production migration/seed/setup commands. [Railway configuration](.railway/railway.ts) declares the branch, database reference, migration hook, readiness check and one replica. Follow the [Railway deployment guide](docs/RAILWAY.md) for service variables, first-time accounts and real Wick setup.
 
-Run the explicit seed separately where environment-supplied seed passwords are available: `npm run db:seed` from the development checkout or `npm run seed:production` in the built image. No external deployment or service-account changes were performed during this build.
+Migrations run separately before deployment and remain advisory-locked at startup. Active VM leases survive brief process overlap during redeploys; SIGTERM drains jobs. Account seeding is an explicit first-time action and never runs on a normal deployment.
 
 ## Verification
 
