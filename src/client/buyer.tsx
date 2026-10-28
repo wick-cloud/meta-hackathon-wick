@@ -31,6 +31,7 @@ import {
   dateTime,
   loadDraft,
   money,
+  moneyMicros,
   post,
   rentalSourceLabel,
   saveDraft,
@@ -336,7 +337,7 @@ export function NewEnvironment() {
 }
 
 export function RequestReview() {
-  const { catalog, modes, targetMarkupBps } = useSession(),
+  const { catalog, modes } = useSession(),
     navigate = useNavigate();
   const [draft, setDraft] = useState<Draft | null>(loadDraft),
     [busy, setBusy] = useState(false),
@@ -518,8 +519,8 @@ export function RequestReview() {
               min={1}
             />
             <p className="field-hint">
-              Your ceiling for the entire rental. The lowest eligible bid wins; there is no hourly
-              billing.
+              Your ceiling for the entire rental. The lowest eligible bid wins. No Broker fee is
+              added to the accepted total; the provider pays the 15% commission.
             </p>
             {draft.receipt && <ReceiptCard receipt={draft.receipt} mode={draft.museMode} />}
           </section>
@@ -544,13 +545,13 @@ export function RequestReview() {
                     </DetailRow>
                     <DetailRow label="Suggested target quote">
                       {money(
-                        fixedQuote(managedPricing(selected, targetMarkupBps), draft.durationMinutes)
-                          .totalPriceCents,
+                        fixedQuote(managedPricing(selected), draft.durationMinutes).totalPriceCents,
                       )}
                     </DetailRow>
                     <p className="field-hint">
-                      Published rate × duration, plus {(targetMarkupBps ?? 2000) / 100}% target
-                      markup; rounded up once to cents. The accepted offer freezes your total.
+                      The suggested total covers estimated compute after the provider’s 15%
+                      commission. Your accepted offer freezes the full rental price, with no added
+                      Broker fee.
                     </p>
                   </>
                 )}
@@ -1164,17 +1165,19 @@ export function VMDetail({ id }: { id: string }) {
             </span>
           </DetailRow>
           <DetailRow label="Rental price">{money(vm.priceCents)} USD · fixed total</DetailRow>
+          <DetailRow label="Added buyer fee">$0.00</DetailRow>
           {vm.pricing && (
             <>
               <DetailRow label="Wick compute estimate">
-                ${(Number(vm.pricing.upstreamEstimatedComputeMicros) / 1000000).toFixed(6)} USD for
-                the full term
+                {moneyMicros(vm.pricing.upstreamEstimatedComputeMicros)} USD for the full term
               </DetailRow>
               <p className="field-hint">
-                The estimate uses the frozen published rate and is not settled usage. Customer fixed
-                quote is the accepted provider bid. The {vm.pricing.markupBps / 100}% target markup
-                suggests {money(vm.pricing.targetTotalPriceCents ?? vm.pricing.totalPriceCents)}{' '}
-                USD, rounded up once to cents (minimum one cent). No payment due.
+                The estimate uses the frozen published rate and is not settled usage. Your rental
+                price is the accepted provider bid.
+                {vm.pricing.model === 'wick-managed-rate-v1' && vm.pricing.markupBps !== undefined
+                  ? ` This historical quote used a ${vm.pricing.markupBps / 100}% target markup; its accepted price is unchanged.`
+                  : ' The provider pays Broker’s 15% commission from that total. No Broker fee is added for you.'}{' '}
+                No payment due.
               </p>
             </>
           )}
@@ -1273,10 +1276,11 @@ export function Invoices() {
           <h3>These are demo invoices. No payment due.</h3>
           <p>
             Customer fixed quotes are separate from Wick’s actual internal usage. Full-term compute
-            estimates are not settled usage. No payments or payouts are collected.
+            estimates are not settled usage. Broker’s 15% commission comes from provider revenue,
+            not an added buyer fee. No payments or payouts are collected.
           </p>
         </div>
-        <span className="quiet-badge">Platform fee: $0.00</span>
+        <span className="quiet-badge">Added buyer fee: $0.00</span>
       </div>
       <div className="stats-grid">
         <StatCard

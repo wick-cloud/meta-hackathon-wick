@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import type { CatalogItem } from '../src/shared/types.js';
 import {
   acceptedBidQuote,
+  commissionPricing,
+  revenueShare,
   fixedQuote,
   managedPricing,
   requireCurrentRate,
@@ -30,7 +32,7 @@ const item: CatalogItem = {
 };
 
 describe('managed fixed quotes (offline)', () => {
-  it('prices actual duration with integer markup before one upward cent rounding', () => {
+  it('prices the gross rental so the provider net covers compute after the 15% commission', () => {
     const pricing = managedPricing(item);
     expect([15, 30, 60].map((duration) => fixedQuote(pricing, duration).totalPriceCents)).toEqual([
       1, 2, 3,
@@ -39,23 +41,74 @@ describe('managed fixed quotes (offline)', () => {
       upstreamEstimatedComputeMicros: '9000',
       totalPriceCents: 2,
       durationSeconds: 1800,
-      markupBps: 2000,
+      commissionBps: 1500,
       rounding: 'ceil-once-to-cent-minimum-one-cent',
     });
   });
-  it('handles exact integer cent boundaries, free rates and configurable markup', () => {
+  it('handles exact after-commission cent boundaries and free rates', () => {
     expect(
-      fixedQuote(managedPricing({ ...item, rateMicrosPerSecond: 100 }, 0), 15).totalPriceCents,
+      fixedQuote(managedPricing({ ...item, rateMicrosPerSecond: 85 }), 15).totalPriceCents,
     ).toBe(9);
     expect(
-      fixedQuote(managedPricing({ ...item, rateMicrosPerSecond: 100 }, 1), 15).totalPriceCents,
+      fixedQuote(managedPricing({ ...item, rateMicrosPerSecond: 86 }), 15).totalPriceCents,
     ).toBe(10);
     expect(
       fixedQuote(managedPricing({ ...item, rateMicrosPerSecond: 0 }), 60).totalPriceCents,
     ).toBe(1);
     expect(
-      fixedQuote(managedPricing({ ...item, rateMicrosPerSecond: 101 }, 10000), 15).totalPriceCents,
-    ).toBe(19);
+      fixedQuote(managedPricing({ ...item, rateMicrosPerSecond: 100 }), 15).totalPriceCents,
+    ).toBe(11);
+  });
+  it('splits every price exactly without increasing the buyer total or rounding small fees up', () => {
+    expect(revenueShare(10000)).toEqual({
+      commissionBps: 1500,
+      grossCents: 10000,
+      brokerFeeMicros: '15000000',
+      providerNetMicros: '85000000',
+    });
+    expect(revenueShare(3)).toEqual({
+      commissionBps: 1500,
+      grossCents: 3,
+      brokerFeeMicros: '4500',
+      providerNetMicros: '25500',
+    });
+    for (const price of [0, 1, 2, 3, 99, 100, 100000000]) {
+      const split = revenueShare(price);
+      expect(BigInt(split.brokerFeeMicros) + BigInt(split.providerNetMicros)).toBe(
+        BigInt(price) * 10000n,
+      );
+      expect(BigInt(split.brokerFeeMicros) * 100n).toBe(BigInt(price) * 10000n * 15n);
+    }
+    for (const price of [-1, 0.5, NaN, Infinity, 100000001])
+      expect(() => revenueShare(price)).toThrow();
+  });
+  it('preserves legacy markup snapshots while new bids on old offerings use the provider commission', () => {
+    const legacy = {
+      ...managedPricing({ ...item, rateMicrosPerSecond: 100 }),
+      model: 'wick-managed-rate-v1' as const,
+      commissionBps: undefined,
+      markupBps: 2000,
+    };
+    expect(fixedQuote(legacy, 30)).toMatchObject({
+      totalPriceCents: 22,
+      priceBasis: 'target-markup',
+      markupBps: 2000,
+    });
+    expect(fixedQuote(legacy, 30)).not.toHaveProperty('revenueShare');
+    expect(fixedQuote(commissionPricing(legacy), 30)).toMatchObject({
+      totalPriceCents: 22,
+      commissionBps: 1500,
+      priceBasis: 'provider-commission-floor',
+    });
+    expect(acceptedBidQuote(legacy, 30, 22)).toMatchObject({
+      model: 'wick-provider-commission-v1',
+      revenueShare: revenueShare(22),
+    });
+    expect(legacy.markupBps).toBe(2000);
+    expect(acceptedBidQuote(legacy, 30, 22)).not.toHaveProperty('markupBps');
+    const distinct = { ...legacy, rateMicrosPerSecond: 47 };
+    expect(fixedQuote(distinct, 30).totalPriceCents).toBe(11);
+    expect(fixedQuote(commissionPricing(distinct), 30).totalPriceCents).toBe(10);
   });
   it('rejects unsafe values and never silently rounds upstream rates', () => {
     for (const rateMicrosPerSecond of [-1, 1.2, Number.MAX_SAFE_INTEGER + 1, NaN, Infinity])
@@ -63,7 +116,7 @@ describe('managed fixed quotes (offline)', () => {
     expect(() =>
       fixedQuote(managedPricing({ ...item, rateMicrosPerSecond: Number.MAX_SAFE_INTEGER }), 60),
     ).toThrow(/limit/);
-    expect(() => managedPricing(item, -1)).toThrow();
+    expect(() => fixedQuote({ ...managedPricing(item), commissionBps: 2000 }, 30)).toThrow();
     expect(() => fixedQuote(managedPricing(item), 16)).toThrow();
   });
   it('requires rate provenance, rejects BYOK and detects changed snapshots', () => {
@@ -82,15 +135,19 @@ describe('managed fixed quotes (offline)', () => {
   });
   it('preserves competitive accepted prices while separately freezing target and compute floor', () => {
     const pricing = managedPricing(item);
-    expect(acceptedBidQuote(pricing, 30, 1)).toMatchObject({
-      totalPriceCents: 1,
+    expect(acceptedBidQuote(pricing, 30, 2)).toMatchObject({
+      totalPriceCents: 2,
       targetTotalPriceCents: 2,
-      upstreamCostFloorCents: 1,
+      upstreamCostFloorCents: 2,
       upstreamEstimatedComputeMicros: '9000',
       priceBasis: 'provider-bid',
-      markupBps: 2000,
+      commissionBps: 1500,
     });
-    expect(acceptedBidQuote(pricing, 30, 7).totalPriceCents).toBe(7);
+    expect(() => acceptedBidQuote(pricing, 30, 1)).toThrow(/cost floor/);
+    expect(acceptedBidQuote(pricing, 30, 7)).toMatchObject({
+      totalPriceCents: 7,
+      revenueShare: revenueShare(7),
+    });
     const costlier = managedPricing({ ...item, rateMicrosPerSecond: 23 });
     expect(acceptedBidQuote(costlier, 15, 3).upstreamCostFloorCents).toBe(3);
     expect(() => acceptedBidQuote(costlier, 15, 2)).toThrow(/cost floor/);

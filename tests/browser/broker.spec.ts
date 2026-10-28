@@ -15,7 +15,16 @@ async function signIn(page: Page, email: string, password: string) {
   await page.goto('/');
   await page.getByLabel('Email', { exact: true }).fill(email);
   await page.getByLabel('Password', { exact: true }).fill(password);
+  const signedIn = page.waitForResponse(
+    (response) =>
+      new URL(response.url()).pathname === '/api/auth/sign-in/email' &&
+      response.request().method() === 'POST',
+  );
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+  expect(
+    (await signedIn).status(),
+    'Fixture UI sign-in must succeed before checking the session',
+  ).toBe(200);
   await expect
     .poll(async () => {
       const response = await page.request.get('/api/me');
@@ -31,6 +40,7 @@ test('anonymous visitors cannot read customer environments or provider policy', 
   await expect(page.getByRole('button', { name: 'Sign in', exact: true })).toBeVisible();
   expect((await page.request.get('/api/vms')).status()).toBe(401);
   expect((await page.request.get('/api/provider/dashboard')).status()).toBe(401);
+  expect((await page.request.get('/api/provider/earnings')).status()).toBe(401);
 });
 
 test('buyer manually reviews an immutable request, receives a VM and one demo invoice', async ({
@@ -44,6 +54,7 @@ test('buyer manually reviews an immutable request, receives a VM and one demo in
     'Browser tests never allocate real Wick compute or call paid Muse.',
   );
   expect((await page.request.get('/api/provider/dashboard')).status()).toBe(403);
+  expect((await page.request.get('/api/provider/earnings')).status()).toBe(403);
 
   await page.goto('/new');
   await page
@@ -105,6 +116,12 @@ test('buyer manually reviews an immutable request, receives a VM and one demo in
     const invoices = await (await page.request.get('/api/invoices')).json();
     const charged = invoices.items.filter((invoice: { vmId: string }) => invoice.vmId === vmId);
     expect(charged).toHaveLength(1);
+    expect(charged[0].feeCents).toBe(0);
+    expect(charged[0].revenueShare.commissionBps).toBe(1500);
+    expect(charged[0].revenueShare.grossCents).toBe(charged[0].totalCents);
+    expect(BigInt(charged[0].revenueShare.brokerFeeMicros) * 100n).toBe(
+      BigInt(charged[0].totalCents) * 10000n * 15n,
+    );
     await page.goto('/invoices');
     await expect(page.getByText('No payment due', { exact: false }).first()).toBeVisible();
   } finally {
@@ -113,7 +130,9 @@ test('buyer manually reviews an immutable request, receives a VM and one demo in
   }
 });
 
-test('provider sees simulated supply and cannot use buyer endpoints', async ({ page }) => {
+test('provider reviews exact commission and historical earnings without buyer access', async ({
+  page,
+}) => {
   test.skip(
     !providerPassword,
     'Set SEED_SUPPLIER_A_PASSWORD to exercise actual seeded provider auth.',
@@ -125,6 +144,85 @@ test('provider sees simulated supply and cannot use buyer endpoints', async ({ p
   await expect(page.getByRole('link', { name: 'Capacity', exact: true })).toBeVisible();
   await page.getByRole('link', { name: 'Capacity', exact: true }).click();
   await expect(page.getByText(/simulated demo supply/i).first()).toBeVisible();
+  const me = await (await page.request.get('/api/me')).json();
+  test.skip(me.modes.wick !== 'fixture' || me.modes.muse !== 'fixture', 'Isolated fixture only.');
+  await page.goto('/provider/policy');
+  await page.getByLabel('Base total price (USD)').fill('0.03');
+  const breakdown = page.locator('[aria-label="Rental revenue breakdown"]');
+  await expect(breakdown.getByText('$0.0045', { exact: true })).toBeVisible();
+  await expect(breakdown.getByText('$0.0255', { exact: true })).toBeVisible();
+  await expect(breakdown.getByText(/before compute costs/)).toBeVisible();
+  // No policy is saved. These response fixtures exercise historic and paginated
+  // presentation; the negotiated-rental case checks the real earnings API below.
+  const common = {
+    vmId: 'fixture-vm',
+    catalogName: 'Fixture environment',
+    currency: 'USD',
+    status: 'demo',
+    label: 'No payment due',
+  };
+  await page.route('**/api/provider/earnings*', (route) => {
+    const more = new URL(route.request().url()).searchParams.has('cursor');
+    return route.fulfill({
+      json: more
+        ? {
+            items: [
+              {
+                ...common,
+                id: 'tiny-two',
+                createdAt: '2026-10-26T00:00:00Z',
+                totalCents: 1,
+                legacy: false,
+                revenueShare: {
+                  commissionBps: 1500,
+                  grossCents: 1,
+                  brokerFeeMicros: '1500',
+                  providerNetMicros: '8500',
+                },
+              },
+            ],
+          }
+        : {
+            items: [
+              {
+                ...common,
+                id: 'tiny-one',
+                createdAt: '2026-10-28T00:00:00Z',
+                totalCents: 3,
+                legacy: false,
+                revenueShare: {
+                  commissionBps: 1500,
+                  grossCents: 3,
+                  brokerFeeMicros: '4500',
+                  providerNetMicros: '25500',
+                },
+              },
+              {
+                ...common,
+                id: 'legacy-one',
+                createdAt: '2026-10-27T00:00:00Z',
+                totalCents: 100,
+                legacy: true,
+              },
+            ],
+            nextCursor: 'fixture-next-page',
+          },
+    });
+  });
+  await page.getByRole('link', { name: 'Earnings', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Your share, clearly.' })).toBeVisible();
+  const legacy = page.locator('[data-invoice-id="legacy-one"]');
+  await expect(legacy.getByText('Not assessed', { exact: true })).toHaveCount(2);
+  await expect(legacy.getByText('Historical · unchanged')).toBeVisible();
+  await expect(
+    page.locator('[data-invoice-id="tiny-one"]').getByText('$0.0045', { exact: true }),
+  ).toBeVisible();
+  await page.getByRole('button', { name: 'Load more', exact: true }).click();
+  await expect(page.locator('[data-invoice-id="tiny-two"]')).toBeVisible();
+  await expect(page.locator('.stats-grid').getByText('$0.04', { exact: true })).toBeVisible();
+  await expect(page.locator('.stats-grid').getByText('$0.006', { exact: true })).toBeVisible();
+  await expect(page.locator('.stats-grid').getByText('$0.034', { exact: true })).toBeVisible();
+  await expect(page.getByText('Demo earnings · no payouts', { exact: true })).toBeVisible();
 });
 
 test('buyer Muse fixture prepares an editable review with an honest receipt', async ({ page }) => {
@@ -254,6 +352,7 @@ test('admin changes catalog approval and concurrent limit with server role enfor
     'Admin browser mutations are restricted to the explicit fixture application.',
   );
   expect((await page.request.get('/api/provider/dashboard')).status()).toBe(403);
+  expect((await page.request.get('/api/provider/earnings')).status()).toBe(403);
   expect((await page.request.get('/api/vms')).status()).toBe(403);
   const catalog = original.catalog.find((item: { approved: boolean }) => item.approved);
   expect(catalog).toBeTruthy();

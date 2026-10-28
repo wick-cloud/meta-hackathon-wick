@@ -9,7 +9,16 @@ async function signIn(page: Page, email: string, password: string) {
   await page.goto('/');
   await page.getByLabel('Email', { exact: true }).fill(email);
   await page.getByLabel('Password', { exact: true }).fill(password);
+  const signedIn = page.waitForResponse(
+    (response) =>
+      new URL(response.url()).pathname === '/api/auth/sign-in/email' &&
+      response.request().method() === 'POST',
+  );
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+  expect(
+    (await signedIn).status(),
+    'Fixture UI sign-in must succeed before checking the session',
+  ).toBe(200);
   await expect
     .poll(async () => (await (await page.request.get('/api/me')).json()).user?.email)
     .toBe(email);
@@ -179,11 +188,9 @@ test('reviewed provider limits and explicit buyer counteroffer acceptance create
     expect(proposedReceipt.modelCalled).toBe(false);
     expect(proposedReceipt.message).toContain('No slot is held');
     await providerPage.reload();
-    const decisions = providerPage
-      .locator('section')
-      .filter({
-        has: providerPage.getByRole('heading', { name: 'Counteroffer decisions', exact: true }),
-      });
+    const decisions = providerPage.locator('section').filter({
+      has: providerPage.getByRole('heading', { name: 'Counteroffer decisions', exact: true }),
+    });
     await expect(
       decisions
         .getByText('Counteroffer proposed; waiting for explicit buyer acceptance. No slot is held.')
@@ -229,6 +236,19 @@ test('reviewed provider limits and explicit buyer counteroffer acceptance create
       (invoice: { vmId: string }) => invoice.vmId === vmId,
     );
     expect(invoices).toHaveLength(1);
+    expect(invoices[0].feeCents).toBe(0);
+    expect(invoices[0].revenueShare.commissionBps).toBe(1500);
+    expect(invoices[0].revenueShare.grossCents).toBe(detail.offers[0].totalPriceCents);
+    const earnings = (await (await providerPage.request.get('/api/provider/earnings')).json())
+      .items;
+    const recorded = earnings.find((item: { vmId: string }) => item.vmId === vmId);
+    expect(recorded.revenueShare).toEqual(invoices[0].revenueShare);
+    expect(recorded.legacy).toBe(false);
+    await providerPage.getByRole('link', { name: 'Earnings', exact: true }).click();
+    await expect(providerPage.locator(`[data-invoice-id="${recorded.id}"]`)).toBeVisible();
+    await expect(
+      providerPage.getByText('Demo earnings · no payouts', { exact: true }),
+    ).toBeVisible();
     expect(invoices[0].amountCents ?? invoices[0].totalPriceCents ?? invoices[0].totalCents).toBe(
       detail.offers[0].totalPriceCents,
     );

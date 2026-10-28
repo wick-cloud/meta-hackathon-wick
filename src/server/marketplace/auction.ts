@@ -3,6 +3,8 @@ import type { PoolClient } from 'pg';
 import { availableForBids } from './policy.js';
 import {
   acceptedBidQuote,
+  commissionPricing,
+  revenueShare,
   fixedQuote,
   managedPricing,
   requireCurrentRate,
@@ -87,7 +89,7 @@ export async function createRequest(
     if (ctx.wick.mode === 'real') {
       try {
         requireFreshManagedRate(catalog);
-        pricing = managedPricing(catalog, ctx.config.targetMarkupBps);
+        pricing = managedPricing(catalog);
       } catch (error) {
         throw new HttpError(400, (error as Error).message);
       }
@@ -235,7 +237,11 @@ export async function submitBid(
           requestId,
           p.id,
           offering.id,
-          { ...offeringView(offering), ...(pricing ? { pricing } : {}) },
+          {
+            ...offeringView(offering),
+            revenueShare: revenueShare(price),
+            ...(pricing ? { pricing } : {}),
+          },
           price,
         ],
       )
@@ -386,6 +392,9 @@ export async function awardHeldBid(ctx: AppContext, db: PoolClient, request: Row
         totalPriceCents: winner.total_price_cents,
         currency: 'USD',
         feeCents: 0,
+        ...(winner.offering_snapshot.revenueShare
+          ? { revenueShare: winner.offering_snapshot.revenueShare }
+          : {}),
         offering: winner.offering_snapshot,
         acceptedAt: isoDate(winner.created_at),
         ...(winner.offering_snapshot.pricing ? { pricing: winner.offering_snapshot.pricing } : {}),
@@ -450,7 +459,7 @@ export async function proposeBid(ctx: AppContext, actor: Actor, requestId: strin
         throw new Error('Publish a current managed-rate offering first.');
       requireCurrentRate(offering.pricing, item);
       requireCurrentRate(offering.pricing, request.catalog_snapshot);
-      realPricing = fixedQuote(offering.pricing, request.duration_minutes);
+      realPricing = fixedQuote(commissionPricing(offering.pricing), request.duration_minutes);
     } catch (error) {
       throw new HttpError(409, (error as Error).message);
     }

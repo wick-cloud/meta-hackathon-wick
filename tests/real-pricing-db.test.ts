@@ -6,6 +6,7 @@ import { migrate } from '../src/server/db.js';
 import { loadConfig } from '../src/server/config.js';
 import type { AppContext } from '../src/server/context.js';
 import type { Actor, CatalogItem } from '../src/shared/types.js';
+import { revenueShare } from '../src/shared/pricing.js';
 import { configureRealMarketplace } from '../src/server/marketplace/configure-real.js';
 import {
   createRequest,
@@ -55,7 +56,6 @@ const options = {
   catalogIds: [item.id],
   supplierEmails: [supplier.email],
   capacity: 21,
-  markupBps: 2000,
   autoBid: false,
 };
 
@@ -139,9 +139,9 @@ describe.skipIf(!databaseUrl)('real pricing database contracts with zero network
     await configureRealMarketplace(pool, [item], options);
     const request = await makeRequest();
     expect(request.pricing?.totalPriceCents).toBe(2);
-    const bid = await submitBid(ctx, supplier, request.id, { totalPriceCents: 1 });
+    const bid = await submitBid(ctx, supplier, request.id, { totalPriceCents: 2 });
     expect(bid.pricing).toMatchObject({
-      totalPriceCents: 1,
+      totalPriceCents: 2,
       targetTotalPriceCents: 2,
       priceBasis: 'provider-bid',
     });
@@ -186,6 +186,30 @@ describe.skipIf(!databaseUrl)('real pricing database contracts with zero network
     expect(ctx.wick.create).not.toHaveBeenCalled();
   });
 
+  it('uses 15% net coverage for new bids on a legacy 20% offering without rewriting it', async () => {
+    const source = { ...item, rateMicrosPerSecond: 47 };
+    await configureRealMarketplace(pool, [source], options);
+    await pool.query(
+      'UPDATE broker_offerings SET pricing=(pricing-\'commissionBps\') || \'{"model":"wick-managed-rate-v1","markupBps":2000}\'::jsonb,price_cents=11',
+    );
+    const before = (await pool.query('SELECT pricing,price_cents FROM broker_offerings')).rows[0];
+    const request = await makeRequest();
+    expect(request.pricing?.totalPriceCents).toBe(10);
+    await expect(submitBid(ctx, supplier, request.id, { totalPriceCents: 9 })).rejects.toThrow(
+      /cost floor/,
+    );
+    const bid = await submitBid(ctx, supplier, request.id, { totalPriceCents: 10 });
+    expect(bid.pricing).toMatchObject({
+      model: 'wick-provider-commission-v1',
+      totalPriceCents: 10,
+      commissionBps: 1500,
+    });
+    expect(bid.revenueShare).toEqual(revenueShare(10));
+    expect((await pool.query('SELECT pricing,price_cents FROM broker_offerings')).rows[0]).toEqual(
+      before,
+    );
+  });
+
   it('rejects stale offerings after catalog rate increases and preserves the old request snapshot', async () => {
     await configureRealMarketplace(pool, [item], options);
     const request = await makeRequest();
@@ -224,6 +248,7 @@ describe.skipIf(!databaseUrl)('real pricing database contracts with zero network
     );
     const bid = await submitBid(ctx, supplier, request.id, { totalPriceCents: 8 });
     expect(bid.totalPriceCents).toBe(8);
+    expect(bid.revenueShare).toEqual(revenueShare(8));
     expect(bid.pricing).toMatchObject({
       totalPriceCents: 8,
       targetTotalPriceCents: 2,
@@ -281,7 +306,7 @@ describe.skipIf(!databaseUrl)('real pricing database contracts with zero network
   it('rejects stale and future chosen catalog sources before new requests while preserving existing quote views', async () => {
     await configureRealMarketplace(pool, [item], options);
     const request = await makeRequest();
-    const bid = await submitBid(ctx, supplier, request.id, { totalPriceCents: 1 });
+    const bid = await submitBid(ctx, supplier, request.id, { totalPriceCents: 2 });
     const frozen = (
       await pool.query('SELECT offering_snapshot FROM broker_bids WHERE id=$1', [bid.id])
     ).rows[0];
@@ -352,7 +377,7 @@ describe.skipIf(!databaseUrl)('real pricing database contracts with zero network
         "ALTER TABLE broker_requests ALTER COLUMN closes_at SET DEFAULT now()+interval '30 seconds'",
       );
     }
-    const bid = await submitBid(scoped, supplier, request.id, { totalPriceCents: 1 });
+    const bid = await submitBid(scoped, supplier, request.id, { totalPriceCents: 2 });
     await new Promise((resolve) =>
       setTimeout(resolve, Math.max(0, Date.parse(request.closesAt!) - Date.now()) + 25),
     );
@@ -363,7 +388,8 @@ describe.skipIf(!databaseUrl)('real pricing database contracts with zero network
         [request.id],
       )
     ).rows[0];
-    expect(frozen.quote_snapshot.totalPriceCents).toBe(1);
+    expect(frozen.quote_snapshot.totalPriceCents).toBe(2);
+    expect(frozen.quote_snapshot.revenueShare).toEqual(revenueShare(2));
     expect(
       (await pool.query('SELECT status FROM broker_bids WHERE id=$1', [bid.id])).rows[0].status,
     ).toBe('won');

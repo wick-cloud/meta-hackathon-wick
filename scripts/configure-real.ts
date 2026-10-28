@@ -34,8 +34,7 @@ async function main() {
               quoteCents: Object.fromEntries(
                 item.durationMinutes.map((duration) => [
                   duration,
-                  fixedQuote(managedPricing(item, config.targetMarkupBps), duration)
-                    .totalPriceCents,
+                  fixedQuote(managedPricing(item), duration).totalPriceCents,
                 ]),
               ),
             })),
@@ -65,14 +64,13 @@ async function main() {
       catalogIds,
       supplierEmails,
       capacity,
-      markupBps: config.targetMarkupBps,
       autoBid: autoBid === 'true',
     });
     console.log(
       JSON.stringify({
         ...summary,
         mode: 'real',
-        targetMarkupBps: config.targetMarkupBps,
+        commissionBps: 1500,
         note: 'Explicit real configurations approved. Demo supplier allocations configured. Accounts, passwords, sessions, reservations and frozen quotes preserved. No VMs allocated; no payment due.',
       }),
     );

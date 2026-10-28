@@ -46,7 +46,6 @@ export function offeringPriceCandidates(
   catalog: CatalogItem[],
   policy: SupplierPolicy,
   mode: 'fixture' | 'real',
-  markupBps: number,
 ) {
   return catalog
     .filter(
@@ -63,7 +62,7 @@ export function offeringPriceCandidates(
           requireFreshManagedRate(item);
           price = Math.max(
             policy.minimumPriceCents,
-            fixedQuote(managedPricing(item, markupBps), 30).totalPriceCents,
+            fixedQuote(managedPricing(item), 30).totalPriceCents,
           );
         } catch {
           return [];

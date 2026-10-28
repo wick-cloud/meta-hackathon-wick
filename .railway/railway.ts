@@ -1,0 +1,55 @@
+import { defineRailway, github, postgres, preserve, project, service } from 'railway/iac';
+
+// Use a dedicated Railway project. Secrets are entered in Railway, never in this file.
+export default defineRailway(() => {
+  const db = postgres('Postgres');
+  const broker = service('wick-broker', {
+    source: github('wick-cloud/meta-hackathon-wick', { branch: 'codex/broker-real-wick' }),
+    build: { builder: 'DOCKERFILE', dockerfilePath: 'Dockerfile' },
+    deploy: {
+      startCommand: 'node dist/src/server/index.js',
+      preDeployCommand: ['npm run db:migrate:production'],
+      preDeployTimeoutSeconds: 120,
+      healthcheckPath: '/ready',
+      healthcheckTimeout: 120,
+      numReplicas: 1,
+      sleepApplication: false,
+      overlapSeconds: 0,
+      drainingSeconds: 30,
+      restartPolicyType: 'ON_FAILURE',
+      restartPolicyMaxRetries: 5,
+    },
+    env: {
+      NODE_ENV: 'production',
+      HOST: '0.0.0.0',
+      DATABASE_URL: db.env.DATABASE_URL,
+      APP_URL: preserve(),
+      BETTER_AUTH_SECRET: preserve(),
+      WICK_MODE: preserve(),
+      MUSE_MODE: preserve(),
+      WICK_API_BASE: preserve(),
+      WICK_API_KEY: preserve(),
+      WICK_ORGANIZATION_ID: preserve(),
+      WICK_GROUP_ID: preserve(),
+      META_API_BASE: preserve(),
+      META_API_KEY: preserve(),
+      MAX_CONCURRENT_VMS: preserve(),
+      LOG_LEVEL: preserve(),
+      SEED_BUYER_EMAIL: preserve(),
+      SEED_BUYER_PASSWORD: preserve(),
+      SEED_SUPPLIER_A_EMAIL: preserve(),
+      SEED_SUPPLIER_A_PASSWORD: preserve(),
+      SEED_SUPPLIER_B_EMAIL: preserve(),
+      SEED_SUPPLIER_B_PASSWORD: preserve(),
+      SEED_SUPPLIER_C_EMAIL: preserve(),
+      SEED_SUPPLIER_C_PASSWORD: preserve(),
+      SEED_ADMIN_EMAIL: preserve(),
+      SEED_ADMIN_PASSWORD: preserve(),
+      REAL_CATALOG_IDS: preserve(),
+      REAL_SUPPLIER_EMAILS: preserve(),
+      REAL_SUPPLIER_CAPACITY: preserve(),
+      REAL_SUPPLIER_AUTO_BID: preserve(),
+    },
+  });
+  return project('meta-hackathon-wick', { resources: [broker, db] });
+});

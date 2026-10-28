@@ -57,7 +57,6 @@ export async function registerMuse(app: FastifyInstance, ctx: AppContext) {
       allowed,
       provider.policy,
       ctx.wick.mode,
-      ctx.config.targetMarkupBps,
     ).filter((candidate) => {
       const item = allowed.find((entry) => entry.id === candidate.catalogId)!;
       return demand.some(

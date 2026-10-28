@@ -8,13 +8,14 @@ import type {
   Translation,
   FixedQuote,
   ManagedPricing,
+  RevenueShare,
 } from '../shared/types';
 
 export interface Session {
   user: Actor | null;
   modes: { wick: Mode; muse: Mode };
   catalog: CatalogItem[];
-  targetMarkupBps?: number;
+  commissionBps?: number;
 }
 export interface EnvironmentRequest {
   id: string;
@@ -29,6 +30,7 @@ export interface EnvironmentRequest {
   createdAt: string;
   winningBidId?: string | null;
   pricing?: FixedQuote;
+  revenueShare?: RevenueShare;
 }
 export interface Bid {
   id: string;
@@ -55,6 +57,7 @@ export interface VM {
   failureReason?: string | null;
   cleanupPending?: boolean;
   pricing?: FixedQuote;
+  revenueShare?: RevenueShare;
 }
 export interface Invoice {
   id: string;
@@ -69,6 +72,19 @@ export interface Invoice {
   catalogName?: string;
   number?: string;
   pricing?: FixedQuote;
+  revenueShare?: RevenueShare;
+}
+export interface ProviderEarning {
+  id: string;
+  vmId: string;
+  catalogName: string;
+  createdAt: string;
+  totalCents: number;
+  revenueShare?: RevenueShare;
+  legacy: boolean;
+  currency: string;
+  status: string;
+  label: string;
 }
 export interface Offering {
   id: string;
@@ -166,6 +182,17 @@ export const put = <T>(url: string, body: unknown) =>
   api<T>(url, { method: 'PUT', body: JSON.stringify(body) });
 export const money = (cents: number | undefined) =>
   new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format((cents ?? 0) / 100);
+/** Preserve the exact provider split, including fractions of a cent. */
+export const moneyMicros = (value: string | bigint) => {
+  const micros = BigInt(value);
+  const whole = micros / 1000000n;
+  const fraction = (micros % 1000000n)
+    .toString()
+    .padStart(6, '0')
+    .replace(/0+$/, '')
+    .padEnd(2, '0');
+  return `$${new Intl.NumberFormat('en-US').format(whole)}.${fraction}`;
+};
 export const dateTime = (value: string | undefined | null) =>
   value
     ? new Date(value).toLocaleString(undefined, {

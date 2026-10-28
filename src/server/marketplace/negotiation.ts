@@ -4,6 +4,8 @@ import type { PoolClient } from 'pg';
 import type { Actor, CatalogItem, Mode } from '../../shared/types.js';
 import {
   acceptedBidQuote,
+  commissionPricing,
+  revenueShare,
   fixedQuote,
   managedPricing,
   requireCurrentRate,
@@ -336,7 +338,7 @@ function quoteCandidate(
   if (ctx.wick.mode === 'real') {
     if (!offering.pricing) throw new HttpError(409, 'A current managed-rate offering is required.');
     requireCurrentRate(offering.pricing, item);
-    const target = fixedQuote(offering.pricing, duration);
+    const target = fixedQuote(commissionPricing(offering.pricing), duration);
     price = target.totalPriceCents;
     pricing = acceptedBidQuote(
       offering.pricing,
@@ -352,7 +354,11 @@ function quoteCandidate(
     (p.policy.maxPriceCents !== undefined && price > p.policy.maxPriceCents)
   )
     return;
-  return { totalPriceCents: price, ...(pricing ? { pricing } : {}) };
+  return {
+    totalPriceCents: price,
+    revenueShare: revenueShare(price),
+    ...(pricing ? { pricing } : {}),
+  };
 }
 type ProposalResult = Awaited<ReturnType<typeof getIntent>>;
 function proposalResult(intent: Row, offers: Row[]): ProposalResult {
@@ -719,8 +725,15 @@ export async function acceptCounteroffer(
     } catch {
       throw new HttpError(409, 'The managed rate is stale or changed. Review a new alternative.');
     }
-    if (!quote || quote.totalPriceCents !== snap.totalPriceCents)
-      throw new HttpError(409, 'The reviewed fixed total changed. Review a new alternative.');
+    if (
+      !quote ||
+      quote.totalPriceCents !== snap.totalPriceCents ||
+      hash(snap.revenueShare ?? null) !== hash(quote.revenueShare)
+    )
+      throw new HttpError(
+        409,
+        'The reviewed fixed total or provider commission changed. Review a new alternative.',
+      );
     const reviewedAfter: Desired = {
       ...requirements(catalog.item),
       region: catalog.item.region,
@@ -762,10 +775,7 @@ export async function acceptCounteroffer(
     } catch {
       throw new HttpError(409, 'The managed rate became stale. Review a new alternative.');
     }
-    const pricing =
-      ctx.wick.mode === 'real'
-        ? managedPricing(catalog.item, offering.pricing.markupBps)
-        : undefined;
+    const pricing = ctx.wick.mode === 'real' ? managedPricing(catalog.item) : undefined;
     const request = (
       await db.query(
         `INSERT INTO broker_requests(buyer_id,description,catalog_id,catalog_snapshot,region,duration_minutes,max_price_cents,requirements,prior_request_id,negotiation_intent_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
@@ -795,7 +805,11 @@ export async function acceptCounteroffer(
           request.id,
           p.id,
           offering.id,
-          { ...offeringView(offering), ...(quote.pricing ? { pricing: quote.pricing } : {}) },
+          {
+            ...offeringView(offering),
+            revenueShare: revenueShare(snap.totalPriceCents),
+            ...(quote.pricing ? { pricing: quote.pricing } : {}),
+          },
           snap.totalPriceCents,
         ],
       )

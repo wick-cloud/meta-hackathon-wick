@@ -35,7 +35,9 @@ The accepted request freezes the lower approved hard budget, so later retries ca
 
 ## Deterministic pricing and reviewed offering suggestions
 
-Managed prices retain the published rate, source time, integer compute floor and configurable 20% target. BigInt applies markup before one upward cent rounding, minimum one cent. Manual competitive bids remain possible within provider policy, buyer budget and compute floor. Muse bid suggestions select/decline a server-computed price; model output never supplies the money. Fixed customer quotes and demo invoices remain separate from upstream estimated reservations and actual usage, with **No payment due** and no payments/payouts.
+New rentals use a fixed 15% commission deducted from provider gross revenue, with 85% retained by the provider before compute costs and no added customer fee. Managed suggestions and bid floors use `max(1, ceil(raw upstream micro-USD / 8500))` cents so the provider share covers the compute estimate. There is no additional target markup. Integer micro-USD snapshots preserve the exact split at binding acceptance and invoice readiness; historical accepted quotes and invoices retain their original terms. Provider limits and buyer budgets remain gross rental amounts.
+
+Muse bid suggestions select or decline a server-computed gross price; model output never supplies the money or commission rate. Fixed customer quotes, demo provider earnings, upstream estimates and actual usage remain separate. Invoices say **No payment due** and no payments or payouts occur.
 
 `POST /api/provider/offerings/propose` aggregates only recent unresolved demand in the current Wick mode and applicable provider catalog allowlist. It excludes resolved substitutes/retries and duplicate source-intent demand, considers at most 200 recent requests and 200 recent intents before a combined 200-row/40-group bound, and uses a seven-day window. Buyer identities and free text are not selected. Unsupported exact dimensions that no existing configuration satisfies do not become invented provider offerings.
 

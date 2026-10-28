@@ -671,14 +671,12 @@ async function main() {
       });
       const pricing = offering.pricing;
       assert(
-        pricing?.model === 'wick-managed-rate-v1' &&
+        pricing?.model === 'wick-provider-commission-v1' &&
+          pricing.commissionBps === 1500 &&
           String(pricing.rateMicrosPerSecond) === String(approvedRate),
         'Offering must freeze the managed published rate.',
       );
-      const cents =
-        (BigInt(pricing.rateMicrosPerSecond) * 900n * (10000n + BigInt(pricing.markupBps)) +
-          99999999n) /
-        100000000n;
+      const cents = (BigInt(pricing.rateMicrosPerSecond) * 900n + 8499n) / 8500n;
       quoteCents = Math.max(1, Number(cents));
       assert(Number.isSafeInteger(quoteCents));
       const configured = await api('admin', '/api/admin/config');
@@ -686,7 +684,7 @@ async function main() {
       journal.append('configuration-complete', {
         fixedQuoteCents: quoteCents,
         publishedRate: approvedRate,
-        markupBps: pricing.markupBps,
+        commissionBps: pricing.commissionBps,
         capacity: 20,
         maxConcurrentVms: 20,
       });

@@ -108,8 +108,14 @@ export async function markReady(
       vm.request_id,
     ]);
     await db.query(
-      `INSERT INTO broker_invoices(vm_id,buyer_id,provider_id,subtotal_cents,total_cents) VALUES($1,$2,$3,$4,$4) ON CONFLICT(vm_id) DO NOTHING`,
-      [vmId, vm.buyer_id, vm.provider_id, vm.quote_snapshot.totalPriceCents],
+      `INSERT INTO broker_invoices(vm_id,buyer_id,provider_id,subtotal_cents,total_cents,revenue_share) VALUES($1,$2,$3,$4,$4,$5) ON CONFLICT(vm_id) DO NOTHING`,
+      [
+        vmId,
+        vm.buyer_id,
+        vm.provider_id,
+        vm.quote_snapshot.totalPriceCents,
+        vm.quote_snapshot.revenueShare ?? null,
+      ],
     );
     await activity(
       db,

@@ -8,8 +8,14 @@ import { migrate } from '../src/server/db.js';
 import { loadConfig } from '../src/server/config.js';
 import type { AppContext } from '../src/server/context.js';
 import type { Actor, CatalogItem } from '../src/shared/types.js';
-import { QUEUES } from '../src/server/marketplace/db.js';
-import { closeAuction, createRequest, submitBid } from '../src/server/marketplace/auction.js';
+import { QUEUES, transaction } from '../src/server/marketplace/db.js';
+import { revenueShare } from '../src/shared/pricing.js';
+import {
+  awardHeldBid,
+  closeAuction,
+  createRequest,
+  submitBid,
+} from '../src/server/marketplace/auction.js';
 import {
   cleanupVm,
   markReady,
@@ -17,7 +23,7 @@ import {
   terminateVm,
 } from '../src/server/marketplace/lifecycle.js';
 import type { WickAdapter, WickEnvironment } from '../src/server/integrations/types.js';
-import { registerMarketplace } from '../src/server/marketplace/index.js';
+import { registerMarketplace, startMarketplaceWorkers } from '../src/server/marketplace/index.js';
 import { getCatalog, syncCatalog } from '../src/server/marketplace/data.js';
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
@@ -213,6 +219,116 @@ describe.skipIf(!databaseUrl)('PostgreSQL marketplace concurrency and invariants
     };
     return { state, wick, lifecycle: { ...ctx, wick } };
   }
+
+  function startupWithoutConsumers(lifecycle: AppContext): AppContext {
+    // Exercise recovery SQL without starting a second polling loop in the test.
+    // Queue sends still use the actual PostgreSQL queue and transaction owner.
+    return {
+      ...lifecycle,
+      boss: {
+        createQueue: vi.fn(async () => {}),
+        work: vi.fn(async () => {}),
+        unschedule: vi.fn(async () => {}),
+        send: boss.send.bind(boss),
+      } as unknown as PgBoss,
+    };
+  }
+
+  it('overlapping startup preserves the active worker lease and defers a duplicate lifecycle job', async () => {
+    const { vm } = await awardedVm();
+    const { lifecycle, wick } = lifecycleContext({
+      id: 'rolling-deploy-environment',
+      status: 'running',
+      expiresAt: new Date(Date.now() + 1_800_000).toISOString(),
+    });
+    let releaseCreate!: (value: { environment: WickEnvironment }) => void;
+    let markEntered!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      markEntered = resolve;
+    });
+    const response = new Promise<{ environment: WickEnvironment }>((resolve) => {
+      releaseCreate = resolve;
+    });
+    vi.mocked(wick.create).mockImplementation(async () => {
+      markEntered();
+      return response;
+    });
+    const first = provisionVm(lifecycle, vm.id);
+    await entered;
+    try {
+      const before = (
+        await pool.query('SELECT lease_until,poll_attempts FROM broker_vms WHERE id=$1', [vm.id])
+      ).rows[0];
+      const overlapping = startupWithoutConsumers(lifecycle);
+      await startMarketplaceWorkers(overlapping);
+      expect(
+        (await pool.query('SELECT lease_until,poll_attempts FROM broker_vms WHERE id=$1', [vm.id]))
+          .rows[0],
+      ).toEqual(before);
+      await provisionVm(overlapping, vm.id);
+      expect(
+        (await pool.query('SELECT lease_until,poll_attempts FROM broker_vms WHERE id=$1', [vm.id]))
+          .rows[0],
+      ).toEqual(before);
+      expect(before.poll_attempts).toBe(1);
+      expect(wick.create).toHaveBeenCalledTimes(1);
+      expect(
+        Number(
+          (
+            await pool.query(
+              `SELECT count(*) FROM ${queueSchema}.job WHERE name=$1 AND data->>'vmId'=$2 AND start_after>$3::timestamptz`,
+              [QUEUES.provision, vm.id, before.lease_until],
+            )
+          ).rows[0].count,
+        ),
+      ).toBe(1);
+    } finally {
+      releaseCreate({
+        environment: {
+          id: 'rolling-deploy-environment',
+          status: 'running',
+          expiresAt: new Date(Date.now() + 1_800_000).toISOString(),
+        },
+      });
+      await first;
+    }
+    expect(wick.create).toHaveBeenCalledTimes(1);
+    expect(
+      Number(
+        (await pool.query('SELECT count(*) FROM broker_invoices WHERE vm_id=$1', [vm.id])).rows[0]
+          .count,
+      ),
+    ).toBe(1);
+  });
+
+  it('startup recovers an expired lifecycle lease without changing the persisted create key', async () => {
+    const { vm } = await awardedVm();
+    const { lifecycle, wick } = lifecycleContext({
+      id: 'expired-lease-environment',
+      status: 'running',
+      expiresAt: new Date(Date.now() + 1_800_000).toISOString(),
+    });
+    await pool.query("UPDATE broker_vms SET lease_until=now()-interval '1 second' WHERE id=$1", [
+      vm.id,
+    ]);
+    const recovered = startupWithoutConsumers(lifecycle);
+    await startMarketplaceWorkers(recovered);
+    await provisionVm(recovered, vm.id);
+    expect(wick.create).toHaveBeenCalledExactlyOnceWith(vm.create_input, vm.create_key);
+    expect(
+      (
+        await pool.query('SELECT status,create_key,lease_until FROM broker_vms WHERE id=$1', [
+          vm.id,
+        ])
+      ).rows[0],
+    ).toEqual({ status: 'running', create_key: vm.create_key, lease_until: null });
+    expect(
+      Number(
+        (await pool.query('SELECT count(*) FROM broker_invoices WHERE vm_id=$1', [vm.id])).rows[0]
+          .count,
+      ),
+    ).toBe(1);
+  });
 
   it('competing bids cannot reserve one supplier slot twice', async () => {
     const supplier = await provider(1);
@@ -612,9 +728,53 @@ describe.skipIf(!databaseUrl)('PostgreSQL marketplace concurrency and invariants
     expect(invoices[0].total_cents).toBe(200);
     expect(invoices[0].fee_cents).toBe(0);
     expect(invoices[0].status).toBe('demo');
+    expect(invoices[0].revenue_share).toBeNull(); // A pre-commission binding bid stays historical.
+    expect(vm.quote_snapshot).not.toHaveProperty('revenueShare');
     expect(
       (await pool.query('SELECT status FROM broker_vms WHERE id=$1', [vm.id])).rows[0].status,
     ).toBe('running');
+  });
+
+  it('freezes the exact provider share at binding bid and copies it once at concurrent readiness', async () => {
+    const supplier = await provider();
+    const requestId = await request();
+    const accepted = await submitBid(ctx, supplier.actor, requestId, { totalPriceCents: 200 });
+    const split = revenueShare(200);
+    expect(accepted.revenueShare).toEqual(split);
+    const { vmId } = await transaction(pool, async (db) => {
+      const r = (
+        await db.query('SELECT * FROM broker_requests WHERE id=$1 FOR UPDATE', [requestId])
+      ).rows[0];
+      await db.query('SELECT id FROM broker_providers WHERE id=$1 FOR UPDATE', [
+        supplier.providerId,
+      ]);
+      const b = (await db.query('SELECT * FROM broker_bids WHERE id=$1', [accepted.id])).rows[0];
+      return awardHeldBid(ctx, db, r, b);
+    });
+    const frozen = (await pool.query('SELECT quote_snapshot FROM broker_vms WHERE id=$1', [vmId]))
+      .rows[0].quote_snapshot;
+    expect(frozen.revenueShare).toEqual(split);
+    const { lifecycle } = lifecycleContext({
+      id: 'test-commission-environment',
+      status: 'running',
+      expiresAt: new Date(Date.now() + 1800000).toISOString(),
+    });
+    await Promise.all(Array.from({ length: 4 }, () => provisionVm(lifecycle, vmId)));
+    await Promise.all(Array.from({ length: 4 }, () => markReady(lifecycle, vmId)));
+    const invoices = (await pool.query('SELECT * FROM broker_invoices WHERE vm_id=$1', [vmId]))
+      .rows;
+    expect(invoices).toHaveLength(1);
+    expect(invoices[0]).toMatchObject({
+      subtotal_cents: 200,
+      fee_cents: 0,
+      total_cents: 200,
+      revenue_share: split,
+      status: 'demo',
+    });
+    expect(
+      (await pool.query('SELECT quote_snapshot FROM broker_vms WHERE id=$1', [vmId])).rows[0]
+        .quote_snapshot,
+    ).toEqual(frozen);
   });
 
   it('does not charge for running without terminal capability and never extends observed admission expiry', async () => {

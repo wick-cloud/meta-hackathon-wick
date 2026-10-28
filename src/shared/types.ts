@@ -31,11 +31,13 @@ export interface CatalogItem {
   resources?: { cpu: number; memoryGb: number; diskGb?: number; gpu?: string };
 }
 export interface ManagedPricing {
-  model: 'wick-managed-rate-v1';
+  model: 'wick-managed-rate-v1' | 'wick-provider-commission-v1';
   rateMicrosPerSecond: number;
   rateRetrievedAt: string;
   rateSource: 'wick-customer-catalog';
-  markupBps: number;
+  /** Present only on immutable historical markup snapshots. */
+  markupBps?: number;
+  commissionBps?: number;
 }
 export interface FixedQuote extends ManagedPricing {
   durationSeconds: number;
@@ -44,7 +46,8 @@ export interface FixedQuote extends ManagedPricing {
   /** Optional on historical snapshots. The target is a suggestion, not a mandatory bid. */
   targetTotalPriceCents?: number;
   upstreamCostFloorCents?: number;
-  priceBasis?: 'target-markup' | 'provider-bid';
+  priceBasis?: 'target-markup' | 'provider-commission-floor' | 'provider-bid';
+  revenueShare?: RevenueShare;
   currency: 'USD';
   rounding: 'ceil-once-to-cent-minimum-one-cent';
 }
@@ -87,4 +90,12 @@ export interface OfferingProposal {
   priceCents: number;
   durationMinutes?: number;
   priceBasis?: 'server-priced-candidate';
+}
+
+/** Gross buyer quote split exactly in micro-USD; provider net is before compute costs. */
+export interface RevenueShare {
+  commissionBps: 1500;
+  grossCents: number;
+  brokerFeeMicros: string;
+  providerNetMicros: string;
 }

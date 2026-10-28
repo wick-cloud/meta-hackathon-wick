@@ -6632,3 +6632,19 @@ td .quiet-badge {
 .load-more .button {
   min-width: 130px;
 }
+
+/* Provider commission is deducted from the reviewed gross rental total. */
+.provider-revenue-split {
+  margin: 16px 0;
+  padding: 14px 16px;
+  border: 1px solid var(--border, #e3e8df);
+  border-radius: 12px;
+  background: #f6f8f3;
+}
+.provider-revenue-split .detail-row:last-of-type {
+  color: #33543a;
+  font-weight: 600;
+}
+.provider-revenue-split .field-hint {
+  margin-bottom: 0;
+}
