@@ -27,6 +27,7 @@ import type {
   Receipt,
   SupplierPolicy,
 } from '../shared/types';
+import { fixedQuote, managedPricing } from '../shared/pricing';
 import {
   api,
   dateTime,
@@ -829,8 +830,14 @@ export function ProviderRequests() {
 export function ProviderOfferings() {
   const { data, error, loading, reload, nextCursor, loadingMore, loadMore, moreError } =
       usePagedResource<Offering>('/api/provider/offerings'),
-    { catalog, modes } = useSession(),
-    approved = catalog.filter((item) => item.approved);
+    { catalog, modes, targetMarkupBps } = useSession(),
+    dashboard = useResource<Dashboard>('/api/provider/dashboard'),
+    approved = catalog.filter(
+      (item) =>
+        item.approved &&
+        (!dashboard.data?.policy.allowedCatalogIds ||
+          dashboard.data.policy.allowedCatalogIds.includes(item.id)),
+    );
   const [draft, setDraft] = useState<OfferingProposal>({
       catalogId: approved[0]?.id || '',
       name: '',
@@ -847,13 +854,31 @@ export function ProviderOfferings() {
       mode: Mode;
       modelCalled?: boolean;
     } | null>(null);
+  let publishPrice: number | undefined = draft.priceCents;
+  let quoteError = '';
+  if (modes.wick === 'real' && draft.priceBasis !== 'server-priced-candidate') {
+    try {
+      const selected = approved.find((item) => item.id === draft.catalogId);
+      if (!selected || !dashboard.data)
+        throw new Error('Loading your approved configuration and current pricing policy.');
+      publishPrice = Math.max(
+        fixedQuote(managedPricing(selected, targetMarkupBps), 30).totalPriceCents,
+        dashboard.data.policy.minimumPriceCents,
+      );
+    } catch (error) {
+      publishPrice = undefined;
+      quoteError =
+        error instanceof Error ? error.message : 'A current rate is required to review this price.';
+    }
+  }
   async function create(event: FormEvent) {
     event.preventDefault();
+    if (publishPrice === undefined) return;
     setBusy('create');
     setActionError('');
     setSuccess('');
     try {
-      await post('/api/provider/offerings', draft);
+      await post('/api/provider/offerings', { ...draft, priceCents: publishPrice });
       setShowForm(false);
       setSuccess('Offering published. New bids can use this revision.');
       setDraft({ catalogId: approved[0]?.id || '', name: '', description: '', priceCents: 150 });
@@ -962,7 +987,11 @@ export function ProviderOfferings() {
                     <p>{proposal.description}</p>
                     <span>
                       {money(proposal.priceCents)}{' '}
-                      {modes.wick === 'real' ? '· 30 minute example' : 'fixed fixture rental total'}
+                      {proposal.durationMinutes
+                        ? `· ${proposal.durationMinutes} minute example`
+                        : modes.wick === 'real'
+                          ? '· 30 minute example'
+                          : 'fixed fixture rental total'}
                     </span>
                   </div>
                   <button
@@ -1015,7 +1044,14 @@ export function ProviderOfferings() {
                 <select
                   id="offering-config"
                   value={draft.catalogId}
-                  onChange={(e) => setDraft({ ...draft, catalogId: e.target.value })}
+                  onChange={(e) =>
+                    setDraft({
+                      ...draft,
+                      catalogId: e.target.value,
+                      durationMinutes: undefined,
+                      priceBasis: undefined,
+                    })
+                  }
                   required
                 >
                   {approved.map((item) => (
@@ -1048,12 +1084,18 @@ export function ProviderOfferings() {
                   min={1}
                 />
               ) : (
-                <p className="field-hint">
-                  Publishing stores a 30 minute example based on the current Wick rate and target
-                  markup. Each rental gets a duration-specific fixed quote. Your binding bid can
-                  differ within your policy and the buyer’s budget, at or above the rounded upstream
-                  compute cost.
-                </p>
+                <div className="field">
+                  <span>Reviewed 30 minute example</span>
+                  <strong>
+                    {publishPrice === undefined ? 'Quote unavailable' : money(publishPrice)}
+                  </strong>
+                  <p className="field-hint">
+                    Publishing stores this example total. A changed rate or policy is rejected for a
+                    fresh review. Each rental gets a duration-specific fixed quote. Binding bids may
+                    differ within your policy, the buyer’s budget, and the upstream compute floor.
+                  </p>
+                  <ErrorBox error={quoteError} />
+                </div>
               )}
               <div className="field">
                 <span>Supported durations</span>
@@ -1069,7 +1111,10 @@ export function ProviderOfferings() {
               </div>
             </div>
             <div className="form-actions">
-              <button className="button primary" disabled={!!busy || !draft.catalogId}>
+              <button
+                className="button primary"
+                disabled={!!busy || !draft.catalogId || publishPrice === undefined}
+              >
                 {busy === 'create' ? (
                   <Spinner label="Publishing" />
                 ) : (
