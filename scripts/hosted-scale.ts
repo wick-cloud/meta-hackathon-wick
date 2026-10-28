@@ -481,6 +481,8 @@ interface Shell {
   resize: TerminalMarkerProof;
   noStty: TerminalMarkerProof;
   ready: boolean;
+  inputFramesSent: number;
+  outputBytes: number;
   lastPong: number;
   state: string;
 }
@@ -531,6 +533,21 @@ async function run(h: Header) {
       if (result !== undefined) return result;
       await delay(1000);
     }
+    for (const shell of shells)
+      journal.append('terminal-checkpoint', {
+        vmId: shell.vmId,
+        reason: 'bounded-wait-timeout',
+        ready: shell.ready,
+        inputSent: shell.inputFramesSent > 0,
+        inputFramesSent: shell.inputFramesSent,
+        outputBytes: shell.outputBytes,
+        pongReceived: shell.lastPong > 0,
+        socketOpen: shell.ws.readyState === WebSocket.OPEN,
+        t0: shell.t0.matched,
+        t1: shell.t1.matched,
+        resize: shell.resize.matched,
+        resizeUnavailable: shell.noStty.matched,
+      });
     throw new Error('BOUNDED_WAIT_TIMEOUT');
   }
   function shell(vm: Json): Shell {
@@ -551,6 +568,8 @@ async function run(h: Header) {
       resize: new TerminalMarkerProof(prefix + '_RESIZE'),
       noStty: new TerminalMarkerProof(prefix + '_NO_STTY'),
       ready: false,
+      inputFramesSent: 0,
+      outputBytes: 0,
       lastPong: 0,
       state: nonce,
     };
@@ -574,17 +593,19 @@ async function run(h: Header) {
               data:
                 "test -t 0 && test -t 1 && export BROKER_PROBE_STATE='" +
                 nonce +
-                "' && cd /tmp && printf 'HOSTED_%s%s_T0\\n' '" +
+                "' && cd /tmp && printf '\\nHOSTED_%s%s_T0\\n' '" +
                 nonce.slice(0, 12) +
                 "' '" +
                 nonce.slice(12) +
                 "'\r",
             }),
           );
+          s.inputFramesSent++;
           ws.send(JSON.stringify({ type: 'ping' }));
         } else if (frame.type === 'output') {
           assert(typeof frame.data === 'string');
           const bytes = Buffer.from(frame.data, 'base64');
+          s.outputBytes += bytes.length;
           for (const proof of [s.t0, s.t1, s.resize, s.noStty]) proof.push(bytes);
           ws.send(JSON.stringify({ type: 'ack', bytes: bytes.length }));
         } else if (frame.type === 'pong') s.lastPong = Date.now();
@@ -610,7 +631,7 @@ async function run(h: Header) {
       shell.resize = new TerminalMarkerProof(prefix + '_RESIZE');
       shell.noStty = new TerminalMarkerProof(prefix + '_NO_STTY');
       const print = (suffix: string) =>
-        "printf 'HOSTED_%s%s_" +
+        "printf '\\nHOSTED_%s%s_" +
         suffix +
         "\\n' '" +
         nonce.slice(0, 12) +
@@ -633,6 +654,7 @@ async function run(h: Header) {
             '; fi\r',
         }),
       );
+      shell.inputFramesSent++;
       shell.ws.send(JSON.stringify({ type: 'ping' }));
     }
     await until(

@@ -1,10 +1,10 @@
 # Four-provider live scale attempt — 2026-10-28
 
-**Result: incomplete.** The first four canaries exposed a Blaxel terminal policy blocker. The remaining 16 allocations were not attempted, and this run does not establish a 15–20 VM scale or terminal pass across all four providers.
+**Result: incomplete.** Two four-canary runs ended before bulk allocation. The first exposed a Blaxel terminal policy blocker; the second followed an approved policy repair but timed out waiting for Blaxel's terminal proof. Neither establishes a 15–20 VM overlap or terminal pass across all four providers.
 
-The live window was **13:26:53–13:30:52 America/Vancouver** (**20:26:53–20:30:52 UTC**). Wick used real managed compute; Muse remained in fixture mode. The Baseten marketplace account used native **Blaxel**, `provider-blaxel`.
+The first live window was **13:26:53–13:30:52 America/Vancouver** (**20:26:53–20:30:52 UTC**). Wick used real managed compute; Muse remained in fixture mode. The Baseten marketplace account used native **Blaxel**, `provider-blaxel`.
 
-## Observed canary results
+## First run: observed canary results
 
 The runner created one finite, 15-minute Micro VM per provider through the hosted Broker's normal 30-second auctions. Native creation and start evidence was confirmed for all four VMs.
 
@@ -19,7 +19,7 @@ Peak Broker-running count was **3**. The aggregate canary gate waited for all fo
 
 Complete production logs showed Blaxel launching in approximately **22.6 seconds**. Its frozen `featureCapabilities` omitted `interactive-terminal`, and Wick returned `terminal: false`. That policy gate prevented readiness; no native Blaxel WebSocket handshake was tested.
 
-## Cleanup
+## First run: cleanup
 
 Cleanup obtained native termination acknowledgments for **all 4 test VMs**. Final reconciliation reported **zero pending or unknown resources**, and Broker provider holds returned to their **zero baseline**. These acknowledgments do not prove asynchronous physical data purge.
 
@@ -27,11 +27,36 @@ Exact receipts remain in the private journal. This report excludes resource iden
 
 ## Follow-up state
 
-Broker now rejects offers whose explicit capability list omits `interactive-terminal`. The two Blaxel listings were temporarily unapproved and remain unavailable for new matches.
+Broker now rejects offers whose explicit capability list omits `interactive-terminal`. The two Blaxel listings were temporarily unapproved during investigation.
 
-The [guard change](https://github.com/wick-cloud/meta-hackathon-wick/commit/b8e7f1d29e2dd3b39127d72428b58f87d7278c1d) is deployed on the [Railway app](https://meta-hackathon-wick-production.up.railway.app/). Health and catalog synchronization succeeded; E2B, Daytona and Modal remain approved. No Wick provider policy was changed.
+The [guard change](https://github.com/wick-cloud/meta-hackathon-wick/commit/b8e7f1d29e2dd3b39127d72428b58f87d7278c1d) is deployed on the [Railway app](https://meta-hackathon-wick-production.up.railway.app/). Health and catalog synchronization succeeded.
 
-The API key's staff inspection returned **403**. Refreshing the existing Google sign-in restored browser staff access. Read-only inspection confirmed that Blaxel revision 5 supports interactive terminals but has them disabled. An unsaved change enables terminals only for Broker's organization, on the configured Micro and Small shapes. Saving immediately replaces the current provider revision with a draft and pauses new Blaxel routing until the revision is enabled again. Production access-policy approval is pending; no Wick configuration has been saved. Existing VM authorization snapshots remain intact. A correction needs fresh canaries before bulk allocation. This live attempt covers Micro only; Small terminal behavior has not been live-verified here.
+The API key's staff inspection returned **403**. Refreshing the existing Google sign-in restored browser staff access. Read-only inspection confirmed that Blaxel revision 5 supports interactive terminals but had them disabled. With user approval, revision **6** was saved and routing re-enabled. The only saved changes were enabling `interactive-terminal` and restricting that feature to Broker's organization. UI round-trip comparison confirmed all other fields unchanged, including profiles, prices, settings and other feature policies. Existing VM authorization snapshots remain intact.
+
+Fresh customer catalog and managed execution previews in Broker's exact organization and group advertised terminals for all four Micro providers at unchanged rates, with no fallback, BYOK or external-compute route. Both Blaxel listings were re-approved.
+
+## Second run: four canaries, no bulk allocation
+
+The retry used an independent cleanup watchdog and made **4 allocation attempts**, counted within its 20-request ceiling. All four native VMs started.
+
+| Provider | Terminal evidence |
+| --- | --- |
+| E2B | T0/T1 PTY, shell state, working-directory persistence and resize proofs succeeded. |
+| Daytona | T0/T1 PTY, shell state, working-directory persistence and resize proofs succeeded. |
+| Baseten / Blaxel | Broker and native VM running; frozen terminal capability was `true`. No T0 proof arrived within 35 seconds. |
+| Modal | Native VM started; no terminal socket opened because its readiness subgroup remained blocked behind Blaxel's proof. |
+
+The retry ended with `BOUNDED_WAIT_TIMEOUT`; the remaining 16 requests were not attempted. Complete scoped production logs showed Blaxel launch in approximately **23 seconds**, session creation returning **HTTP 201 in about 80 ms**, and cleanup in approximately **1.15 seconds**. A successful session response is not an interactive shell proof.
+
+Cleanup obtained native termination acknowledgments for **all 4 retry VMs**, with **zero pending or unknown resources** and provider holds at their **zero baseline**. These acknowledgments do not prove physical purge. The original run's four attempts, zero socket proofs and cleanup above remain separate evidence.
+
+## Current limitation and next diagnostic
+
+An offline fixture using the [terminal proof parser](../scripts/live-scale/terminal-proof.ts) reproduced a false negative when an unterminated prompt prefixes a successfully printed marker. Adding a leading newline frames the marker correctly while still rejecting echoed split `printf` commands. Native protocol source review found no mismatch; the actual live timeout cause remains **unproven**. This evidence does not establish that Blaxel's native terminal is broken.
+
+Both Broker Blaxel listings are paused again pending actual terminal proof. Wick's approved revision 6 policy remains active. Another bounded fresh cohort is being prepared after the revised probe, focused tests and source hashes are ready; no additional live result is claimed here.
+
+The policy covers the configured Micro and Small shapes, but this live exercise tests **Micro only**. Small terminal behavior remains live-unverified.
 
 ## Runner and verification boundary
 

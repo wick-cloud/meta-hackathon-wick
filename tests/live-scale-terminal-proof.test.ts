@@ -14,6 +14,13 @@ describe('bounded real terminal diagnostic proof (offline)', () => {
     expect(proof.matched).toBe(true);
   });
 
+  it('requires a leading output delimiter when an echo-off shell leaves a prompt on the current line', () => {
+    const unframed = new TerminalMarkerProof(marker);
+    expect(unframed.push(bytes(`synthetic-shell$ ${marker}\r\n`))).toBe(false);
+    const framed = new TerminalMarkerProof(marker);
+    expect(framed.push(bytes(`synthetic-shell$ \r\n${marker}\r\n`))).toBe(true);
+  });
+
   it('handles CSI bracketed-paste, OSC BEL/ST, CR and UTF-8 split across every byte', () => {
     const proof = new TerminalMarkerProof(marker);
     const output = bytes(

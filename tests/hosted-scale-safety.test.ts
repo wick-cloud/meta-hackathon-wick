@@ -42,13 +42,17 @@ vi.mock('ws', async () => {
         expect(frame.data).toContain('test -t 0 && test -t 1');
         const matches = [
           ...String(frame.data).matchAll(
-            /printf 'HOSTED_%s%s_(T0|T1|RESIZE)\\n' '([a-f0-9]+)' '([a-f0-9]+)'/g,
+            /printf '\\nHOSTED_%s%s_(T0|T1|RESIZE)\\n' '([a-f0-9]+)' '([a-f0-9]+)'/g,
           ),
         ];
         if (matches.some((match) => match[1] === 'T1')) state.provenShells.add(this.vmId);
-        const output = matches
-          .map((match) => 'HOSTED_' + match[2] + match[3] + '_' + match[1] + '\r\n')
-          .join('');
+        // An echo-off shell need not end its prompt line before command output.
+        // Only the command's own leading newline separates each proof marker.
+        const output =
+          'synthetic-shell$ ' +
+          matches
+            .map((match) => '\r\nHOSTED_' + match[2] + match[3] + '_' + match[1] + '\r\n')
+            .join('');
         queueMicrotask(() =>
           this.emit(
             'message',
@@ -375,6 +379,20 @@ describe('hosted live-run safety with inert settings and zero external calls', (
       .split('\n')
       .map((line) => JSON.parse(line));
     expect(journal.filter((r) => r.kind === 'terminal-proof-confirmed')).toHaveLength(3);
+    const checkpoints = journal.filter((r) => r.kind === 'terminal-checkpoint');
+    expect(checkpoints).toHaveLength(3);
+    expect(checkpoints[0]).toMatchObject({
+      reason: 'bounded-wait-timeout',
+      ready: true,
+      inputSent: true,
+      inputFramesSent: 2,
+      pongReceived: true,
+      t0: true,
+      t1: true,
+      resize: true,
+    });
+    expect(checkpoints[0].outputBytes).toBeGreaterThan(0);
+    expect(checkpoints.every((r) => !('data' in r) && !('state' in r))).toBe(true);
     expect(journal.some((r) => r.kind === 'four-canaries-confirmed')).toBe(false);
     expect(journal.some((r) => r.kind === 'request-intent' && r.item > 4)).toBe(false);
     expect(state.create).not.toHaveBeenCalled();
