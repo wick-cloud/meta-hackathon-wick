@@ -17,12 +17,126 @@ import { isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import WebSocket from 'ws';
+import { Wick } from '@wick-cloud/sdk';
 import { Journal } from './live-scale/safety.js';
 import { TerminalMarkerProof } from './live-scale/terminal-proof.js';
 import { createWickAdapter } from '../src/server/integrations/wick.js';
 import { fixedQuote, managedPricing, requireFreshManagedRate } from '../src/shared/pricing.js';
 
 type Json = Record<string, any>;
+const RECEIPT_WIRE_LIMIT = 8192,
+  RECEIPT_CONTENT_LIMIT = 4096;
+const shellQuote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
+function receiptPath(nonce: string) {
+  assert(/^[a-f0-9]{32}$/.test(nonce), 'RECEIPT_NONCE_INVALID');
+  return '/tmp/wick-broker-probe-' + nonce + '/receipt.log';
+}
+function assertReceiptPath(path: string) {
+  assert(
+    /^\/tmp\/wick-broker-probe-[a-f0-9]{32}\/receipt\.log$/.test(path),
+    'RECEIPT_PATH_INVALID',
+  );
+}
+/** One exact HTTPS SDK operation; arbitrary bodies and large responses never reach its parser. */
+async function receiptOperation(
+  id: string,
+  path: string,
+  setupCommand?: string,
+  beforeFetch?: () => void,
+): Promise<Json> {
+  assertReceiptPath(path);
+  const base = new URL(settings.wick.baseUrl);
+  assert(
+    base.protocol === 'https:' && !base.username && !base.password && !base.search && !base.hash,
+    'RECEIPT_API_ORIGIN',
+  );
+  const expectedPath =
+    base.pathname.replace(/\/$/, '') +
+    '/v1/environments/' +
+    encodeURIComponent(id) +
+    (setupCommand ? '/commands' : '/files');
+  let rejection = 'unavailable';
+  const sdk = new Wick({
+    baseUrl: base.toString().replace(/\/$/, ''),
+    token: settings.wick.token,
+    timeoutMs: 12000,
+    statusRetry: false,
+    fetch: async (input, init) => {
+      const target = new URL(String(input));
+      assert(
+        target.origin === base.origin &&
+          target.pathname === expectedPath &&
+          !target.hash &&
+          !target.username &&
+          !target.password,
+        'RECEIPT_API_SCOPE',
+      );
+      if (setupCommand) {
+        assert(init?.method === 'POST' && target.search === '', 'RECEIPT_SETUP_SCOPE');
+        assert.deepEqual(
+          JSON.parse(String(init.body)),
+          { command: setupCommand, cwd: '/tmp' },
+          'RECEIPT_SETUP_BODY',
+        );
+      } else {
+        assert(
+          init?.method === 'GET' &&
+            target.searchParams.get('path') === path &&
+            target.searchParams.get('content') === 'true' &&
+            [...target.searchParams].length === 2,
+          'RECEIPT_READ_SCOPE',
+        );
+      }
+      beforeFetch?.();
+      const response = await fetch(target, { ...init, redirect: 'error' });
+      if (!response.ok) {
+        rejection = response.status === 404 ? 'missing' : 'unavailable';
+        await response.body?.cancel();
+        throw new Error('RECEIPT_HTTP_REJECTED');
+      }
+      const reader = response.body?.getReader();
+      assert(reader, 'RECEIPT_BODY_MISSING');
+      const chunks: Uint8Array[] = [];
+      let size = 0;
+      try {
+        while (true) {
+          const part = await reader.read();
+          if (part.done) break;
+          size += part.value.byteLength;
+          if (size > RECEIPT_WIRE_LIMIT) {
+            rejection = 'too-large';
+            await reader.cancel();
+            throw new Error('RECEIPT_WIRE_BOUND');
+          }
+          chunks.push(part.value);
+        }
+      } finally {
+        reader.releaseLock();
+      }
+      return new Response(Buffer.concat(chunks).toString('utf8'), {
+        status: response.status,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    },
+  });
+  try {
+    if (setupCommand)
+      return await sdk.environments.runCommand({
+        path: { id },
+        body: { command: setupCommand, cwd: '/tmp' },
+      });
+    const response = await sdk.environments.readFiles({
+      path: { id },
+      query: { path, content: 'true' },
+    });
+    if (!('path' in response) || response.path !== path || typeof response.content !== 'string')
+      return { status: 'path-rejected' };
+    if (Buffer.byteLength(response.content) > RECEIPT_CONTENT_LIMIT) return { status: 'too-large' };
+    return { status: 'verified', content: response.content };
+  } catch {
+    return { status: rejection };
+  }
+}
 const command = process.argv[2];
 assert(['prepare', 'run', 'watchdog', 'cleanup'].includes(command), 'INVALID_COMMAND');
 function flag(name: string) {
@@ -250,30 +364,90 @@ async function run() {
     { marker: string; proof: TerminalMarkerProof; substring: boolean; at?: number }
   >();
   const state = randomBytes(12).toString('hex');
+  const receiptFile = receiptPath(randomBytes(16).toString('hex'));
+  let ownedVm: Json | undefined,
+    receiptPrepared = false;
+  let receiptEvidence: Json = { status: 'not-attempted', evidenceOnly: true, phases: {} };
+  const record = (key: string, value: string) =>
+    `printf '%s=%s\\n' '${key}' ${value} >>"$_broker_rp"`;
+  function phaseStart(phase: string) {
+    // Probe descriptors before redirecting any receipt printf: test -t 1 inside
+    // a redirected group would test the receipt file instead of the PTY.
+    return (
+      `_broker_rp=${shellQuote(receiptFile)}; _broker_in=0; test -t 0 && _broker_in=1; _broker_out=0; test -t 1 && _broker_out=1; _broker_state=0; [ "\${BROKER_DIAG_STATE-}" = '${state}' ] && _broker_state=1; _broker_cwd=0; [ "$PWD" = '/tmp' ] && _broker_cwd=1; _broker_resize=0; if command -v stty >/dev/null 2>&1; then [ "$(stty size 2>/dev/null)" = '37 113' ] && _broker_resize=1; fi; ` +
+      [
+        `${phase}.START`,
+        `${phase}.STDIN_TTY`,
+        `${phase}.STDOUT_TTY`,
+        `${phase}.STATE`,
+        `${phase}.CWD`,
+        `${phase}.RESIZE`,
+      ]
+        .map((key, index) =>
+          record(
+            key,
+            [
+              "'1'",
+              '"$_broker_in"',
+              '"$_broker_out"',
+              '"$_broker_state"',
+              '"$_broker_cwd"',
+              '"$_broker_resize"',
+            ][index]!,
+          ),
+        )
+        .join('; ') +
+      '; '
+    );
+  }
   function probe(name: string) {
     const nonce = randomBytes(12).toString('hex'),
       marker = 'DIAG_' + nonce + '_' + name;
     probes.set(name, { marker, proof: new TerminalMarkerProof(marker), substring: false });
-    return (
-      "printf '\\nDIAG_%s%s_" + name + "\\n' '" + nonce.slice(0, 12) + "' '" + nonce.slice(12) + "'"
-    );
+    const print =
+      "printf '\\nDIAG_%s%s_" +
+      name +
+      "\\n' '" +
+      nonce.slice(0, 12) +
+      "' '" +
+      nonce.slice(12) +
+      "'";
+    return `{ ${print}; _broker_rc=$?; ${record(name[0] + '.PRINT_' + name, '"$_broker_rc"')}; }`;
   }
   const matched = (name: string) => probes.get(name)?.proof.matched === true;
   const tty = (prefix: string) =>
     `if test -t 0; then ${probe(prefix + '_STDIN_TTY')}; else ${probe(prefix + '_STDIN_NOTTY')}; fi; if test -t 1; then ${probe(prefix + '_STDOUT_TTY')}; else ${probe(prefix + '_STDOUT_NOTTY')}; fi`;
-  const initial = probe('A_BEGIN') + '; ' + tty('A') + '; ' + probe('A_END');
+  const initial =
+    phaseStart('A') +
+    probe('A_BEGIN') +
+    '; ' +
+    tty('A') +
+    '; ' +
+    probe('A_END') +
+    '; ' +
+    record('A.END', "'1'");
   const second =
+    phaseStart('B') +
     probe('B_BEGIN') +
     '; ' +
     tty('B') +
-    `; if export BROKER_DIAG_STATE='${state}'; then ${probe('B_EXPORT_OK')}; else ${probe('B_EXPORT_BAD')}; fi; if cd /tmp; then ${probe('B_CWD_OK')}; else ${probe('B_CWD_BAD')}; fi; ` +
-    probe('B_END');
+    `; if export BROKER_DIAG_STATE='${state}'; then ${record('B.EXPORT', "'1'")}; ${probe('B_EXPORT_OK')}; else ${record('B.EXPORT', "'0'")}; ${probe('B_EXPORT_BAD')}; fi; if cd /tmp; then ${record('B.CWD_SET', "'1'")}; ${probe('B_CWD_OK')}; else ${record('B.CWD_SET', "'0'")}; ${probe('B_CWD_BAD')}; fi; ` +
+    probe('B_END') +
+    '; ' +
+    record('B.END', "'1'");
   const final =
+    phaseStart('C') +
     probe('C_BEGIN') +
     `; test -t 0 && test -t 1 && [ "$BROKER_DIAG_STATE" = '${state}' ] && [ "$PWD" = '/tmp' ] && ` +
     probe('C_STATE_CWD_TTY') +
     `; if command -v stty >/dev/null 2>&1; then if [ "$(stty size 2>/dev/null)" = '37 113' ]; then ${probe('C_RESIZE_OK')}; else ${probe('C_RESIZE_BAD')}; fi; else ${probe('C_STTY_UNAVAILABLE')}; fi; ` +
-    probe('C_END');
+    probe('C_END') +
+    '; ' +
+    record('C.END', "'1'");
+  assert(
+    [initial, second, final].every((value) => Buffer.byteLength(value) < 4096),
+    'RECEIPT_PROBE_LINE_BOUND',
+  );
   let secondAt = 0,
     firstCompleteBeforeSecond = false;
   const flushes: string[] = [];
@@ -299,6 +473,126 @@ async function run() {
         },
       ]),
     );
+  function verifyNative(vm: Json, observed: Json) {
+    assert(
+      observed.id === vm.environmentId &&
+        observed.name === 'wick-broker-' + vm.id.slice(0, 8) &&
+        observed.organizationId === settings.wick.organizationId &&
+        observed.groupId === settings.wick.groupId &&
+        observed.provider === provider.provider &&
+        observed.profile === 'micro' &&
+        observed.status === 'running' &&
+        observed.billingMode === 'wick_managed' &&
+        !observed.providerKeyId &&
+        Date.parse(observed.createdAt ?? '') >= started - 5000 &&
+        Date.parse(observed.createdAt ?? '') >= Date.parse(vm.createdAt) - 5000 &&
+        Date.parse(observed.createdAt ?? '') <= Date.now() + 5000 &&
+        Date.parse(vm.createdAt) >= started - 5000 &&
+        Date.parse(vm.createdAt) <= deadline + 120000,
+      'NATIVE_IDENTITY',
+    );
+  }
+  async function collectReceipt() {
+    if (!ownedVm || !receiptPrepared) return;
+    const observationFence = () =>
+      assert(
+        failure !== 'SIGNAL' &&
+          Date.now() + 25000 < deadline &&
+          watchdogReady() &&
+          !journal.read().some((r) => ['stop-requested', 'watchdog-triggered'].includes(r.kind)),
+        'RECEIPT_OBSERVATION_STOPPED',
+      );
+    receiptEvidence = { status: 'unavailable', evidenceOnly: true, phases: {} };
+    try {
+      observationFence();
+      verifyNative(ownedVm, await native.get(ownedVm.environmentId));
+      observationFence();
+      const read = await receiptOperation(
+        ownedVm.environmentId,
+        receiptFile,
+        undefined,
+        observationFence,
+      );
+      receiptEvidence.status = read.status;
+      if (read.status !== 'verified') return;
+      const values = new Map<string, number>();
+      const fields = new Set(
+        ['A', 'B', 'C'].flatMap((p) =>
+          ['START', 'END', 'STDIN_TTY', 'STDOUT_TTY', 'STATE', 'CWD', 'RESIZE'].map(
+            (k) => p + '.' + k,
+          ),
+        ),
+      );
+      fields.add('B.EXPORT');
+      fields.add('B.CWD_SET');
+      for (const name of probes.keys()) fields.add(name[0] + '.PRINT_' + name);
+      assert(
+        typeof read.content === 'string' &&
+          Buffer.byteLength(read.content) <= RECEIPT_CONTENT_LIMIT,
+        'RECEIPT_CONTENT_BOUND',
+      );
+      for (const line of read.content.split('\n').filter(Boolean)) {
+        const match = /^([ABC]\.[A-Z_]+)=([0-9]{1,3})$/.exec(line);
+        assert(match && fields.has(match[1]!) && !values.has(match[1]!), 'RECEIPT_CONTENT_INVALID');
+        const value = Number(match[2]);
+        assert(value <= (match[1]!.includes('.PRINT_') ? 255 : 1), 'RECEIPT_VALUE_INVALID');
+        values.set(match[1]!, value);
+      }
+      const phases = Object.fromEntries(
+        ['A', 'B', 'C'].map((phase) => {
+          const stdoutMissing = [...probes]
+            .filter(
+              ([name, proof]) =>
+                name.startsWith(phase + '_') &&
+                values.get(phase + '.PRINT_' + name) === 0 &&
+                !proof.proof.matched &&
+                !proof.substring,
+            )
+            .map(([name]) => name);
+          return [
+            phase,
+            {
+              started: values.get(phase + '.START') === 1,
+              completed: values.get(phase + '.END') === 1,
+              stdinTty: values.get(phase + '.STDIN_TTY') ?? null,
+              stdoutTty: values.get(phase + '.STDOUT_TTY') ?? null,
+              state: values.get(phase + '.STATE') ?? null,
+              cwd: values.get(phase + '.CWD') ?? null,
+              resize: values.get(phase + '.RESIZE') ?? null,
+              ...(phase === 'B'
+                ? {
+                    exportSet: values.get('B.EXPORT') ?? null,
+                    cwdSet: values.get('B.CWD_SET') ?? null,
+                  }
+                : {}),
+              printfExitCodes: Object.fromEntries(
+                [...probes.keys()]
+                  .filter(
+                    (name) => name.startsWith(phase + '_') && values.has(phase + '.PRINT_' + name),
+                  )
+                  .map((name) => [name, values.get(phase + '.PRINT_' + name)]),
+              ),
+              printfReturnedZeroWithoutStdoutMarker: stdoutMissing,
+            },
+          ];
+        }),
+      );
+      receiptEvidence = {
+        status: 'verified',
+        evidenceOnly: true,
+        bytes: Buffer.byteLength(read.content),
+        phases,
+        executionObservedWithoutStdout: Object.values(phases).some(
+          (p) => p.completed && p.printfReturnedZeroWithoutStdoutMarker.length > 0,
+        ),
+      };
+    } catch (error) {
+      receiptEvidence.status =
+        error instanceof Error && error.message.startsWith('RECEIPT_')
+          ? 'rejected'
+          : 'identity-or-read-unavailable';
+    }
+  }
   let result: Json = {
     validationPassed: false,
     fullPtyProofPassed: false,
@@ -398,24 +692,28 @@ async function run() {
     assert(detail?.vm?.environmentId, 'PROVISION_TIMEOUT');
     const vm = detail.vm,
       observed = await native.get(vm.environmentId);
-    assert(
-      observed.id === vm.environmentId &&
-        observed.name === 'wick-broker-' + vm.id.slice(0, 8) &&
-        observed.organizationId === settings.wick.organizationId &&
-        observed.groupId === settings.wick.groupId &&
-        observed.provider === provider.provider &&
-        observed.profile === 'micro' &&
-        observed.status === 'running' &&
-        observed.billingMode === 'wick_managed' &&
-        !observed.providerKeyId &&
-        Date.parse(observed.createdAt ?? '') >= started - 5000 &&
-        Date.parse(observed.createdAt ?? '') >= Date.parse(vm.createdAt) - 5000 &&
-        Date.parse(observed.createdAt ?? '') <= Date.now() + 5000 &&
-        Date.parse(vm.createdAt) >= started - 5000 &&
-        Date.parse(vm.createdAt) <= deadline + 120000,
-      'NATIVE_IDENTITY',
-    );
+    verifyNative(vm, observed);
+    ownedVm = vm;
     journal.append('diagnostic-native-verified', { vmId: vm.id, provider: provider.provider });
+    const directory = receiptFile.slice(0, receiptFile.lastIndexOf('/'));
+    const setup = `import os,stat\nos.umask(0o077)\nd=${JSON.stringify(directory)}\np=${JSON.stringify(receiptFile)}\nos.mkdir(d,0o700)\nfd=os.open(p,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)\ni=os.fstat(fd)\nassert stat.S_ISREG(i.st_mode) and stat.S_IMODE(i.st_mode)==0o600 and i.st_uid==os.geteuid() and i.st_nlink==1\nos.close(fd)\ni=os.lstat(d)\nassert stat.S_ISDIR(i.st_mode) and stat.S_IMODE(i.st_mode)==0o700 and i.st_uid==os.geteuid()\nprint('RECEIPT_SETUP_OK')`;
+    check();
+    const prepared = await receiptOperation(
+      vm.environmentId,
+      receiptFile,
+      'python3 -I -S -c ' + shellQuote(setup),
+      check,
+    );
+    assert(
+      prepared.exitCode === 0 &&
+        prepared.simulated !== true &&
+        prepared.stdout === 'RECEIPT_SETUP_OK\n' &&
+        prepared.stderr === '',
+      'RECEIPT_SETUP_UNCONFIRMED',
+    );
+    receiptPrepared = true;
+    journal.append('diagnostic-receipt-prepared', { vmId: vm.id, exclusive: true });
+    check();
     const url = new URL('/api/vms/' + vm.id + '/terminal', origin);
     url.protocol = 'wss:';
     ws = new WebSocket(url, {
@@ -527,6 +825,11 @@ async function run() {
         : 'DIAGNOSTIC_FAILED';
     result = { ...result, validationPassed: false, failure };
   } finally {
+    // Read independently before the stop fence lets the watchdog delete the VM.
+    // Keep the shell attached so close's interrupt cannot cut off its final append.
+    // A complete file can corroborate execution, but never replaces stdout gates.
+    await collectReceipt();
+    if (failure) result = { ...result, validationPassed: false, failure };
     intentional = true;
     ws?.close();
     let evidenceWriteFailed = false;
@@ -560,6 +863,7 @@ async function run() {
       tmpUnavailable: matched('B_CWD_BAD'),
       markerFramingObserved: [...probes.values()].some((p) => p.substring && !p.proof.matched),
       proofs: proofSnapshot(),
+      receiptEvidence,
     };
     try {
       journal.append('diagnostic-checkpoint', metadata);

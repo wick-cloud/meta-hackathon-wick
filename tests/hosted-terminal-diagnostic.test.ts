@@ -16,6 +16,17 @@ const fixture = vi.hoisted(() => ({
   childModes: [] as string[],
   posts: [] as unknown[],
   inputs: [] as string[],
+  receiptRows: [] as string[],
+  receiptPath: '',
+  setupCalls: 0,
+  fileReads: [] as string[],
+  readMode: 'ok',
+  dropReceiptInitial: false,
+  identityDrift: false,
+  readCancelled: false,
+  uncertainSetup: false,
+  failDuringReceiptRead: false,
+  terminalFault: undefined as undefined | (() => void),
   get: vi.fn(),
   create: vi.fn(),
   list: vi.fn(),
@@ -108,6 +119,8 @@ vi.mock('ws', async () => {
       constructor(url: URL) {
         super();
         expect(url.hostname).toBe('one-terminal.invalid');
+        fixture.terminalFault = () =>
+          this.emit('message', Buffer.from(JSON.stringify({ type: 'error' })));
         queueMicrotask(() =>
           this.emit('message', Buffer.from(JSON.stringify({ type: 'ready', mode: 'real' }))),
         );
@@ -123,6 +136,24 @@ vi.mock('ws', async () => {
             /printf '\\nDIAG_%s%s_([A-Z_]+)\\n' '([a-f0-9]+)' '([a-f0-9]+)'/g,
           ),
         ];
+        const phase = /_broker_rp='[^']*';/.test(frame.data) ? probes[0]?.[1]?.[0] : undefined;
+        const executed = probes.filter((p) => !/(?:NOTTY|BAD|UNAVAILABLE)$/.test(p[1]));
+        if (phase && !(fixture.dropReceiptInitial && phase === 'A')) {
+          expect(frame.data.indexOf('test -t 1')).toBeLessThan(
+            frame.data.indexOf('>>"$_broker_rp"'),
+          );
+          fixture.receiptRows.push(
+            `${phase}.START=1`,
+            `${phase}.STDIN_TTY=1`,
+            `${phase}.STDOUT_TTY=1`,
+            `${phase}.STATE=${phase === 'C' ? 1 : 0}`,
+            `${phase}.CWD=${phase === 'C' ? 1 : 0}`,
+            `${phase}.RESIZE=${phase === 'C' ? 1 : 0}`,
+            ...(phase === 'B' ? ['B.EXPORT=1', 'B.CWD_SET=1'] : []),
+            ...executed.map((p) => `${phase}.PRINT_${p[1]}=0`),
+            `${phase}.END=1`,
+          );
+        }
         const output =
           'synthetic-shell$ ' +
           probes
@@ -192,6 +223,17 @@ describe('single-provider hosted terminal diagnostic, with zero cloud calls', ()
     fixture.childModes = [];
     fixture.posts = [];
     fixture.inputs = [];
+    fixture.receiptRows = [];
+    fixture.receiptPath = '';
+    fixture.setupCalls = 0;
+    fixture.fileReads = [];
+    fixture.readMode = 'ok';
+    fixture.dropReceiptInitial = false;
+    fixture.identityDrift = false;
+    fixture.readCancelled = false;
+    fixture.uncertainSetup = false;
+    fixture.failDuringReceiptRead = false;
+    fixture.terminalFault = undefined;
     vi.spyOn(Date, 'now').mockImplementation(() => fixture.now);
     const control = resolve(process.cwd(), '../.broker-run/real-wick-20261028');
     mkdirSync(control, { recursive: true, mode: 0o700 });
@@ -254,7 +296,7 @@ describe('single-provider hosted terminal diagnostic, with zero cloud calls', ()
       vmId = randomUUID(),
       createdAt = new Date().toISOString();
     let description = '';
-    fixture.get.mockResolvedValue({
+    const nativeRow = {
       id: 'inert-native',
       name: 'wick-broker-' + vmId.slice(0, 8),
       organizationId: settings.wick.organizationId,
@@ -264,7 +306,12 @@ describe('single-provider hosted terminal diagnostic, with zero cloud calls', ()
       status: 'running',
       billingMode: 'wick_managed',
       createdAt,
-    });
+    };
+    fixture.get.mockImplementation(async () =>
+      fixture.identityDrift && fixture.get.mock.calls.length > 1
+        ? { ...nativeRow, organizationId: 'foreign-inert-org' }
+        : nativeRow,
+    );
     fixture.create.mockImplementation(() => {
       throw new Error('Native create is forbidden');
     });
@@ -274,6 +321,52 @@ describe('single-provider hosted terminal diagnostic, with zero cloud calls', ()
     vi.stubGlobal(
       'fetch',
       vi.fn(async (url: URL, init: RequestInit) => {
+        if (url.hostname === 'wick.invalid') {
+          expect(new Headers(init.headers).get('Authorization')).toBe('Bearer inert-token');
+          if (url.pathname === '/v1/environments/inert-native/commands') {
+            expect(init.method).toBe('POST');
+            fixture.setupCalls++;
+            const command = JSON.parse(String(init.body)).command as string;
+            expect(command).toContain('os.mkdir(d,0o700)');
+            expect(command).toContain('os.O_EXCL|os.O_NOFOLLOW,0o600');
+            fixture.receiptPath =
+              command.match(/\/tmp\/wick-broker-probe-[a-f0-9]{32}\/receipt\.log/)?.[0] ?? '';
+            expect(fixture.receiptPath).toMatch(
+              /^\/tmp\/wick-broker-probe-[a-f0-9]{32}\/receipt\.log$/,
+            );
+            if (fixture.uncertainSetup) throw new Error('Inert setup response lost');
+            return Response.json({ stdout: 'RECEIPT_SETUP_OK\n', stderr: '', exitCode: 0 });
+          }
+          expect(url.pathname).toBe('/v1/environments/inert-native/files');
+          expect(init.method).toBe('GET');
+          expect(url.searchParams.get('content')).toBe('true');
+          expect(url.searchParams.get('path')).toBe(fixture.receiptPath);
+          fixture.fileReads.push(url.searchParams.get('path')!);
+          if (fixture.failDuringReceiptRead) fixture.terminalFault?.();
+          if (fixture.readMode === 'missing')
+            return new Response('private-error-body-never-reported', { status: 404 });
+          if (fixture.readMode === 'oversize')
+            return new Response(
+              new ReadableStream({
+                start(controller) {
+                  controller.enqueue(new Uint8Array(9000));
+                },
+                cancel() {
+                  fixture.readCancelled = true;
+                },
+              }),
+            );
+          return Response.json({
+            path:
+              fixture.readMode === 'unsafe-path' ? '/etc/private-inert-file' : fixture.receiptPath,
+            content:
+              fixture.readMode === 'content-oversize'
+                ? 'x'.repeat(4097)
+                : fixture.readMode === 'malformed'
+                  ? 'private-untrusted-file-content'
+                  : fixture.receiptRows.join('\n') + '\n',
+          });
+        }
         expect(url.hostname).toBe('one-terminal.invalid');
         let body: unknown;
         if (url.pathname === '/health') body = { modes: { wick: 'real', muse: 'fixture' } };
@@ -383,6 +476,26 @@ describe('single-provider hosted terminal diagnostic, with zero cloud calls', ()
     ).toBeLessThanOrEqual(8192);
     expect(fixture.create).not.toHaveBeenCalled();
     expect(fixture.list).not.toHaveBeenCalled();
+    expect(fixture.setupCalls).toBe(1);
+    expect(fixture.fileReads).toEqual([fixture.receiptPath]);
+    expect(fixture.get).toHaveBeenCalledTimes(2);
+    expect(result.receiptEvidence).toMatchObject({
+      status: 'verified',
+      evidenceOnly: true,
+      executionObservedWithoutStdout: false,
+      phases: {
+        B: { exportSet: 1, cwdSet: 1, printfExitCodes: { B_EXPORT_OK: 0, B_CWD_OK: 0 } },
+        C: {
+          started: true,
+          completed: true,
+          stdinTty: 1,
+          stdoutTty: 1,
+          state: 1,
+          cwd: 1,
+          resize: 1,
+        },
+      },
+    });
   });
   it('records a missing immediate probe separately from later full PTY proof', async () => {
     fixture.dropInitial = true;
@@ -397,6 +510,106 @@ describe('single-provider hosted terminal diagnostic, with zero cloud calls', ()
     });
     expect(result.proofs.A_END.exactLine).toBe(false);
     expect(result.proofs.B_END.exactLine).toBe(true);
+    expect(result.receiptEvidence).toMatchObject({
+      status: 'verified',
+      evidenceOnly: true,
+      executionObservedWithoutStdout: true,
+      phases: {
+        A: {
+          started: true,
+          completed: true,
+          printfReturnedZeroWithoutStdoutMarker: [
+            'A_BEGIN',
+            'A_STDIN_TTY',
+            'A_STDOUT_TTY',
+            'A_END',
+          ],
+        },
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain(fixture.receiptPath);
+    expect(fixture.watchdogCleanups).toBe(1);
+  });
+  it('keeps missing execution receipts distinct from completed execution with missing stdout', async () => {
+    fixture.dropInitial = true;
+    fixture.dropReceiptInitial = true;
+    const result = await invoke();
+    expect(result.passed).toBe(false);
+    expect(result.receiptEvidence).toMatchObject({
+      status: 'verified',
+      executionObservedWithoutStdout: false,
+      phases: {
+        A: {
+          started: false,
+          completed: false,
+          stdinTty: null,
+          printfReturnedZeroWithoutStdoutMarker: [],
+        },
+        B: { completed: true },
+      },
+    });
+  });
+  it.each([
+    ['missing', 'missing'],
+    ['unsafe-path', 'path-rejected'],
+    ['oversize', 'too-large'],
+    ['content-oversize', 'too-large'],
+    ['malformed', 'rejected'],
+  ])(
+    'bounds and redacts independent receipt read mode %s without changing failed stdout gates',
+    async (mode, status) => {
+      fixture.dropInitial = true;
+      fixture.readMode = mode;
+      const result = await invoke();
+      expect(result).toMatchObject({
+        passed: false,
+        immediateReadyCorrect: false,
+        receiptEvidence: { status, evidenceOnly: true },
+      });
+      expect(fixture.fileReads).toEqual([fixture.receiptPath]);
+      expect(fixture.posts).toHaveLength(1);
+      expect(fixture.setupCalls).toBe(1);
+      expect(fixture.watchdogCleanups).toBe(1);
+      expect(JSON.stringify(result)).not.toMatch(
+        /private-error-body|private-untrusted-file|\/etc\/private-inert-file/,
+      );
+      if (mode === 'oversize') expect(fixture.readCancelled).toBe(true);
+    },
+  );
+  it('rechecks exact native identity and refuses file access after an ownership mismatch', async () => {
+    fixture.dropInitial = true;
+    fixture.identityDrift = true;
+    const result = await invoke();
+    expect(result).toMatchObject({
+      passed: false,
+      receiptEvidence: { status: 'identity-or-read-unavailable' },
+    });
+    expect(fixture.get).toHaveBeenCalledTimes(2);
+    expect(fixture.fileReads).toHaveLength(0);
+    expect(fixture.watchdogCleanups).toBe(1);
+  });
+  it('does not retry an uncertain exclusive receipt setup and still cleans up the known VM', async () => {
+    fixture.uncertainSetup = true;
+    const result = await invoke();
+    expect(result).toMatchObject({
+      passed: false,
+      failure: 'RECEIPT_SETUP_UNCONFIRMED',
+      cleanup: { confirmed: true },
+    });
+    expect(fixture.setupCalls).toBe(1);
+    expect(fixture.fileReads).toHaveLength(0);
+    expect(fixture.inputs).toHaveLength(0);
+    expect(fixture.posts).toHaveLength(1);
+    expect(fixture.watchdogCleanups).toBe(1);
+  });
+  it('does not retain a pass after a terminal failure during independent receipt collection', async () => {
+    fixture.failDuringReceiptRead = true;
+    const result = await invoke();
+    expect(result).toMatchObject({
+      passed: false,
+      fullPtyProofPassed: true,
+      failure: 'TERMINAL_ERROR',
+    });
     expect(fixture.watchdogCleanups).toBe(1);
   });
   it('fences the only POST after its durable intent and still requests watchdog cleanup', async () => {

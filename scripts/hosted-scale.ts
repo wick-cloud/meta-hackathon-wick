@@ -53,9 +53,16 @@ interface Header {
   baseUrl: string;
   fingerprint: string;
   at: string;
+  terminalPolicy?: 'strict' | 'collect-blaxel-timeouts';
 }
 const IDS = ['e2b', 'daytona', 'modal', 'provider-blaxel'];
 const command = process.argv[2];
+const policyIndex = process.argv.indexOf('--terminal-policy');
+const requestedPolicy = policyIndex < 0 ? undefined : process.argv[policyIndex + 1];
+assert(
+  policyIndex < 0 || ['strict', 'collect-blaxel-timeouts'].includes(requestedPolicy ?? ''),
+  'Use strict or collect-blaxel-timeouts for --terminal-policy.',
+);
 assert(
   ['prepare', 'run', 'watchdog', 'cleanup'].includes(command),
   'Use prepare, run, watchdog, or cleanup.',
@@ -150,6 +157,15 @@ function header(): Header {
       h.fingerprint === fingerprint &&
       h.baseUrl === origin.origin,
     'Settings do not match the prepared run.',
+  );
+  assert(
+    h.terminalPolicy === undefined ||
+      ['strict', 'collect-blaxel-timeouts'].includes(h.terminalPolicy),
+    'Invalid prepared terminal policy.',
+  );
+  assert(
+    requestedPolicy === undefined || requestedPolicy === (h.terminalPolicy ?? 'strict'),
+    'Terminal policy differs from the fresh prepared journal.',
   );
   return h;
 }
@@ -485,6 +501,9 @@ interface Shell {
   outputBytes: number;
   lastPong: number;
   state: string;
+  lastProofAt: number;
+  proofInFlight: boolean;
+  proofFailure?: { phase: string; classification: 'known-blaxel-proof-timeout' };
 }
 async function run(h: Header) {
   exclusive(journalPath + '.run-owner');
@@ -495,12 +514,20 @@ async function run(h: Header) {
   };
   assert(watchdogReady(), 'Independent cleanup watchdog is required.');
   const deadline = Date.now() + h.maximumRunMs;
-  journal.append('runner-start', { pid: process.pid, deadline });
+  journal.append('runner-start', {
+    pid: process.pid,
+    deadline,
+    terminalPolicy: h.terminalPolicy ?? 'strict',
+  });
   const heartbeat = () =>
     atomic(paths.heartbeat, { pid: process.pid, runId: h.runId, at: new Date().toISOString() });
   heartbeat();
   const timer = setInterval(heartbeat, 2000);
   const shells: Shell[] = [];
+  const collectBlaxel = h.terminalPolicy === 'collect-blaxel-timeouts';
+  let refreshing = false;
+  const scheduledProofs = new Set<Shell>();
+  let timeoutReview = Promise.resolve();
   let intentional = false,
     failure = '',
     peakRunning = 0,
@@ -529,6 +556,7 @@ async function run(h: Header) {
     const end = Math.min(deadline, Date.now() + maximum);
     while (Date.now() < end) {
       check();
+      await refreshDue();
       const result = await work();
       if (result !== undefined) return result;
       await delay(1000);
@@ -572,6 +600,8 @@ async function run(h: Header) {
       outputBytes: 0,
       lastPong: 0,
       state: nonce,
+      lastProofAt: 0,
+      proofInFlight: false,
     };
     shells.push(s);
     journal.append('terminal-open-intent', { vmId: vm.id });
@@ -580,7 +610,7 @@ async function run(h: Header) {
       stop(classification === 'protocol-or-proof' ? 'TERMINAL_PROOF' : 'TERMINAL_ENDED');
     };
     ws.on('message', (raw) => {
-      if (intentional) return;
+      if (intentional || s.proofFailure) return;
       try {
         const frame = JSON.parse(raw.toString());
         if (frame.type === 'ready' && !s.ready) {
@@ -615,61 +645,200 @@ async function run(h: Header) {
       }
     });
     ws.on('close', () => {
-      if (!intentional) terminalFailure('close');
+      if (!intentional && !s.proofFailure) terminalFailure('close');
     });
     ws.on('error', () => {
-      if (!intentional) terminalFailure('transport');
+      if (!intentional && !s.proofFailure) terminalFailure('transport');
     });
     return s;
   }
-  async function fullProof(selected: Shell[]) {
-    const pingAt = Date.now();
-    for (const shell of selected) {
-      const nonce = randomBytes(12).toString('hex'),
-        prefix = 'HOSTED_' + nonce;
-      shell.t1 = new TerminalMarkerProof(prefix + '_T1');
-      shell.resize = new TerminalMarkerProof(prefix + '_RESIZE');
-      shell.noStty = new TerminalMarkerProof(prefix + '_NO_STTY');
-      const print = (suffix: string) =>
-        "printf '\\nHOSTED_%s%s_" +
-        suffix +
-        "\\n' '" +
-        nonce.slice(0, 12) +
-        "' '" +
-        nonce.slice(12) +
-        "'";
-      shell.ws.send(JSON.stringify({ type: 'resize', cols: 113, rows: 37 }));
-      shell.ws.send(
-        JSON.stringify({
-          type: 'input',
-          data:
-            'test -t 0 && test -t 1 && [ "$BROKER_PROBE_STATE" = \'' +
-            shell.state +
-            "' ] && [ \"$PWD\" = '/tmp' ] && " +
-            print('T1') +
-            '; if command -v stty >/dev/null 2>&1; then [ "$(stty size 2>/dev/null)" = \'37 113\' ] && ' +
-            print('RESIZE') +
-            '; else ' +
-            print('NO_STTY') +
-            '; fi\r',
+  async function fullProof(selected: Shell[], phase = 'initial') {
+    assert(
+      selected.every((s) => !s.proofInFlight && !s.proofFailure),
+      'TERMINAL_PROOF_OVERLAP',
+    );
+    for (const shell of selected) shell.proofInFlight = true;
+    try {
+      const pingAt = Date.now();
+      for (const shell of selected) {
+        const nonce = randomBytes(12).toString('hex'),
+          prefix = 'HOSTED_' + nonce;
+        shell.t1 = new TerminalMarkerProof(prefix + '_T1');
+        shell.resize = new TerminalMarkerProof(prefix + '_RESIZE');
+        shell.noStty = new TerminalMarkerProof(prefix + '_NO_STTY');
+        const print = (suffix: string) =>
+          "printf '\\nHOSTED_%s%s_" +
+          suffix +
+          "\\n' '" +
+          nonce.slice(0, 12) +
+          "' '" +
+          nonce.slice(12) +
+          "'";
+        shell.ws.send(JSON.stringify({ type: 'resize', cols: 113, rows: 37 }));
+        shell.ws.send(
+          JSON.stringify({
+            type: 'input',
+            data:
+              'test -t 0 && test -t 1 && [ "$BROKER_PROBE_STATE" = \'' +
+              shell.state +
+              "' ] && [ \"$PWD\" = '/tmp' ] && " +
+              print('T1') +
+              '; if command -v stty >/dev/null 2>&1; then [ "$(stty size 2>/dev/null)" = \'37 113\' ] && ' +
+              print('RESIZE') +
+              '; else ' +
+              print('NO_STTY') +
+              '; fi\r',
+          }),
+        );
+        shell.inputFramesSent++;
+        shell.ws.send(JSON.stringify({ type: 'ping' }));
+      }
+      await until(
+        async () =>
+          selected.every(
+            (shell) =>
+              shell.t1.matched &&
+              (shell.resize.matched || shell.noStty.matched) &&
+              shell.lastPong >= pingAt &&
+              shell.ws.readyState === WebSocket.OPEN,
+          )
+            ? true
+            : undefined,
+        35_000,
+      );
+      for (const shell of selected) {
+        shell.lastProofAt = Date.now();
+        if (phase !== 'initial')
+          journal.append('terminal-state-proof-refreshed', { vmId: shell.vmId, phase });
+      }
+    } finally {
+      for (const shell of selected) shell.proofInFlight = false;
+    }
+  }
+  const healthyShells = () => shells.filter((s) => !s.proofFailure);
+  function confirmed(shell: Shell) {
+    const d = observations.get(shell.vmId)!;
+    journal.append('terminal-proof-confirmed', {
+      vmId: shell.vmId,
+      provider: providerFor(d).provider,
+      t0: true,
+      t1: true,
+      pty: true,
+      shellStateAndCwd: true,
+      resize: shell.resize.matched ? 'confirmed' : 'unavailable',
+    });
+  }
+  async function collectionProof(selected: Shell[], phase: 'initial' | 'refresh' | 'final') {
+    assert(
+      selected.every((s) => !scheduledProofs.has(s)),
+      'TERMINAL_PROOF_OVERLAP',
+    );
+    for (const shell of selected) scheduledProofs.add(shell);
+    try {
+      const outcomes = await Promise.allSettled(
+        selected.map(async (s) => {
+          let stage: string = phase;
+          try {
+            if (phase === 'initial') {
+              stage = 't0';
+              await until(
+                async () =>
+                  s.ready && s.t0.matched && s.lastPong > 0 && s.ws.readyState === WebSocket.OPEN
+                    ? true
+                    : undefined,
+                35_000,
+              );
+              stage = 't1';
+            }
+            await fullProof([s], phase);
+            if (phase === 'initial') confirmed(s);
+            return undefined;
+          } catch (error) {
+            const provider = providerFor(observations.get(s.vmId)!).provider;
+            if (!(
+              error instanceof Error &&
+              error.message === 'BOUNDED_WAIT_TIMEOUT' &&
+              provider === 'provider-blaxel' &&
+              s.ready &&
+              s.lastPong > 0 &&
+              s.ws.readyState === WebSocket.OPEN &&
+              !failure
+            )) {
+              stop('UNEXPECTED_TERMINAL_PROOF_FAILURE');
+              throw error;
+            }
+            return { shell: s, phase: stage };
+          }
         }),
       );
-      shell.inputFramesSent++;
-      shell.ws.send(JSON.stringify({ type: 'ping' }));
-    }
-    await until(
-      async () =>
-        selected.every(
-          (shell) =>
-            shell.t1.matched &&
-            (shell.resize.matched || shell.noStty.matched) &&
-            shell.lastPong >= pingAt &&
-            shell.ws.readyState === WebSocket.OPEN,
+      const fatal = outcomes.find((r) => r.status === 'rejected');
+      if (fatal?.status === 'rejected') throw fatal.reason;
+      const timeouts = outcomes
+        .filter(
+          (r): r is PromiseFulfilledResult<{ shell: Shell; phase: string } | undefined> =>
+            r.status === 'fulfilled',
         )
-          ? true
-          : undefined,
-      35_000,
+        .map((r) => r.value)
+        .filter((r): r is { shell: Shell; phase: string } => r !== undefined);
+      if (!timeouts.length) return;
+      // A readiness cohort and disjoint liveness maintenance can finish together.
+      // Serialize their API rechecks so bounded native batches stay at four calls.
+      const previousReview = timeoutReview;
+      let releaseReview!: () => void;
+      timeoutReview = new Promise<void>((resolve) => {
+        releaseReview = resolve;
+      });
+      await previousReview;
+      try {
+        check();
+        await sample(); // A proof timeout must never conceal an ended rental.
+        await bounded(timeouts, async ({ shell, phase }) => {
+          const d = observations.get(shell.vmId)!,
+            p = providerFor(d),
+            observed = await native.get(d.vm.environmentId);
+          assert(
+            ownership(observed, d.vm, p, h) &&
+              observed.status === 'running' &&
+              observed.billingMode === 'wick_managed' &&
+              !observed.providerKeyId,
+            'NATIVE_RUNNING_SCOPE',
+          );
+          check();
+          shell.proofFailure = { phase, classification: 'known-blaxel-proof-timeout' };
+          journal.append('terminal-proof-failed', {
+            vmId: shell.vmId,
+            provider: p.provider,
+            phase,
+            classification: shell.proofFailure.classification,
+            collected: true,
+          });
+          // This close is expected only after the exact timeout and native checks above.
+          shell.ws.close();
+        });
+      } finally {
+        releaseReview();
+      }
+    } finally {
+      for (const shell of selected) scheduledProofs.delete(shell);
+    }
+  }
+  async function refreshDue() {
+    if (refreshing) return;
+    const due = healthyShells().filter(
+      (s) =>
+        s.lastProofAt > 0 &&
+        !s.proofInFlight &&
+        !scheduledProofs.has(s) &&
+        Date.now() - s.lastProofAt > 60_000,
     );
+    if (!due.length) return;
+    refreshing = true;
+    try {
+      if (collectBlaxel) await collectionProof(due, 'refresh');
+      else await fullProof(due, 'refresh');
+    } finally {
+      refreshing = false;
+    }
   }
   async function sample() {
     const all = await list('/api/vms');
@@ -776,31 +945,23 @@ async function run(h: Header) {
         newlyReady.some(({ detail: d }) => d.vm.id === shell.vmId),
       );
       if (newShells.length) {
-        await until(
-          async () =>
-            newShells.every(
-              (shell) =>
-                shell.ready &&
-                shell.t0.matched &&
-                shell.lastPong > 0 &&
-                shell.ws.readyState === WebSocket.OPEN,
-            )
-              ? true
-              : undefined,
-          35_000,
-        );
-        await fullProof(newShells);
-        for (const shell of newShells) {
-          const d = observations.get(shell.vmId)!;
-          journal.append('terminal-proof-confirmed', {
-            vmId: shell.vmId,
-            provider: providerFor(d).provider,
-            t0: true,
-            t1: true,
-            pty: true,
-            shellStateAndCwd: true,
-            resize: shell.resize.matched ? 'confirmed' : 'unavailable',
-          });
+        if (collectBlaxel) await collectionProof(newShells, 'initial');
+        else {
+          await until(
+            async () =>
+              newShells.every(
+                (shell) =>
+                  shell.ready &&
+                  shell.t0.matched &&
+                  shell.lastPong > 0 &&
+                  shell.ws.readyState === WebSocket.OPEN,
+              )
+                ? true
+                : undefined,
+            35_000,
+          );
+          await fullProof(newShells);
+          for (const shell of newShells) confirmed(shell);
         }
       }
       if (
@@ -811,15 +972,41 @@ async function run(h: Header) {
             shells.some(
               (shell) =>
                 shell.vmId === d.vm.id &&
-                shell.t0.matched &&
-                shell.t1.matched &&
-                shell.ws.readyState === WebSocket.OPEN,
+                ((collectBlaxel && shell.proofFailure !== undefined) ||
+                  (shell.t0.matched && shell.t1.matched && shell.ws.readyState === WebSocket.OPEN)),
             ),
         )
       )
         return undefined;
       return details;
     }, 180_000);
+  }
+  function terminalResults() {
+    return Object.fromEntries(
+      settings.providers.map((p) => {
+        const own = shells.filter(
+          (s) => providerFor(observations.get(s.vmId)!).provider === p.provider,
+        );
+        return [
+          p.provider,
+          {
+            attempted: own.length,
+            proven: own.filter(
+              (s) =>
+                !s.proofFailure &&
+                s.lastProofAt > 0 &&
+                s.t0.matched &&
+                s.t1.matched &&
+                s.ws.readyState === WebSocket.OPEN,
+            ).length,
+            failedProofs: own.filter((s) => s.proofFailure).length,
+            closedAfterKnownFailure: own.filter(
+              (s) => s.proofFailure && s.ws.readyState === WebSocket.CLOSED,
+            ).length,
+          },
+        ];
+      }),
+    );
   }
   let result: Json = {};
   try {
@@ -873,10 +1060,21 @@ async function run(h: Header) {
     });
     const canaries = await bounded(settings.providers, (p, index) => request(index + 1, p));
     await ready(canaries, settings.providers);
-    journal.append('four-canaries-confirmed', { realVms: 4, terminalProofs: 4 });
+    if (collectBlaxel) {
+      assert(
+        ['e2b', 'daytona', 'modal'].every((provider) => terminalResults()[provider].proven === 1),
+        'HEALTHY_CANARY_TERMINAL_REQUIRED',
+      );
+      journal.append('four-native-canaries-confirmed', {
+        realVms: 4,
+        terminalProofs: healthyShells().length,
+        knownBlaxelTerminalFailures: shells.filter((s) => s.proofFailure).length,
+      });
+    } else journal.append('four-canaries-confirmed', { realVms: 4, terminalProofs: 4 });
     let next = 5;
     while (next <= 20) {
       check();
+      await refreshDue();
       const state = await bounded(settings.providers, (p) =>
         api(p.cookie, '/api/provider/dashboard'),
       );
@@ -890,6 +1088,7 @@ async function run(h: Header) {
         (item) => request(item),
       );
       await ready(wave);
+      await refreshDue();
       journal.append('wave-confirmed', { requests: count, cumulativeRequests: intents().length });
     }
     const vms = await sample();
@@ -900,16 +1099,20 @@ async function run(h: Header) {
     const holdStart = Date.now();
     while (Date.now() - holdStart < 30_000) {
       check();
+      await refreshDue();
+      const healthy = healthyShells();
       assert(
         shells.length === 20 &&
-          shells.every((s) => s.ws.readyState === WebSocket.OPEN && s.t0.matched),
+          healthy.length >= (collectBlaxel ? 15 : 20) &&
+          healthy.every((s) => s.ws.readyState === WebSocket.OPEN && s.t0.matched && s.t1.matched),
         'SIMULTANEOUS_TERMINAL_COUNT',
       );
-      for (const s of shells) s.ws.send(JSON.stringify({ type: 'ping' }));
+      for (const s of healthy) s.ws.send(JSON.stringify({ type: 'ping' }));
       await sample();
       await delay(1000);
     }
-    await fullProof(shells);
+    if (collectBlaxel) await collectionProof(healthyShells(), 'final');
+    else await fullProof(shells, 'final');
     terminalHoldMs = Date.now() - holdStart;
     await bounded([...observations.values()], async (d) => {
       const p = providerFor(d),
@@ -942,14 +1145,22 @@ async function run(h: Header) {
       Object.values(distribution).every((n) => n === 5),
       'PER_PROVIDER_SIMULTANEOUS_COUNT',
     );
+    const proven = healthyShells();
+    const terminalValidationPassed = proven.length === 20;
+    assert(
+      ['e2b', 'daytona', 'modal'].every((provider) => terminalResults()[provider].proven === 5),
+      'HEALTHY_PROVIDER_TERMINAL_COUNT',
+    );
     result = {
-      validationPassed: true,
+      computeValidationPassed: true,
+      validationPassed: terminalValidationPassed,
+      ...(!terminalValidationPassed ? { validationFailure: 'TERMINAL_PROOFS_INCOMPLETE' } : {}),
       peakRunning,
-      simultaneousTerminals: 20,
+      simultaneousTerminals: proven.length,
       terminalHoldMs,
-      shellStateAndCwdProofs: 20,
-      resizeProofs: shells.filter((s) => s.resize.matched).length,
-      resizeUnavailable: shells.filter((s) => s.noStty.matched).length,
+      shellStateAndCwdProofs: proven.length,
+      resizeProofs: proven.filter((s) => s.resize.matched).length,
+      resizeUnavailable: proven.filter((s) => s.noStty.matched).length,
       distribution,
       invoiceCount: 20,
       invoiceQuoteAndCommissionMatches: true,
@@ -968,6 +1179,7 @@ async function run(h: Header) {
         : 'LIVE_VALIDATION_FAILED',
     );
     result = {
+      computeValidationPassed: false,
       validationPassed: false,
       failure,
       peakRunning,
@@ -975,12 +1187,13 @@ async function run(h: Header) {
       provenT1Terminals: shells.filter((s) => s.t1.matched).length,
     };
   } finally {
+    const terminals = terminalResults();
     intentional = true;
     for (const s of shells) s.ws.close();
     clearInterval(timer);
     process.off('SIGTERM', signals);
     process.off('SIGINT', signals);
-    journal.append('normal-cleanup-start', { validationPassed: !failure });
+    journal.append('normal-cleanup-start', { validationPassed: result.validationPassed === true });
     const cleanupResult = await cleanup(h).catch(() => ({
       confirmed: false,
       unknown: intents().length,
@@ -989,19 +1202,23 @@ async function run(h: Header) {
     }));
     result = {
       ...result,
+      terminalPolicy: h.terminalPolicy ?? 'strict',
+      terminalResults: terminals,
+      knownBlaxelTerminalFailures: shells.filter((s) => s.proofFailure).length,
       runId: h.runId,
       modes: { wick: 'real', muse: 'fixture' },
       attemptedRequests: intents().length,
       cleanup: cleanupResult,
       finishedAt: new Date().toISOString(),
-      passed: !failure && cleanupResult.confirmed,
+      passed: !failure && result.validationPassed === true && cleanupResult.confirmed,
     };
     atomic(paths.report, result);
     journal.append('runner-finished', {
       passed: result.passed,
       cleanupConfirmed: cleanupResult.confirmed,
     });
-    if (cleanupResult.confirmed) journal.append('complete', { validationPassed: !failure });
+    if (cleanupResult.confirmed)
+      journal.append('complete', { validationPassed: result.validationPassed === true });
     console.log(JSON.stringify(result));
     if (!result.passed) process.exitCode = 1;
   }
@@ -1047,6 +1264,7 @@ async function main() {
       maximumRunMs: 12 * 60_000,
       baseUrl: origin.origin,
       fingerprint,
+      terminalPolicy: requestedPolicy ?? 'strict',
     });
     console.log(
       JSON.stringify({
@@ -1054,6 +1272,7 @@ async function main() {
         target: 20,
         allocated: 0,
         controlDirectory: CONTROL_DIRECTORY,
+        terminalPolicy: requestedPolicy ?? 'strict',
       }),
     );
     return;

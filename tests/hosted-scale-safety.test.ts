@@ -385,12 +385,13 @@ describe('hosted live-run safety with inert settings and zero external calls', (
       reason: 'bounded-wait-timeout',
       ready: true,
       inputSent: true,
-      inputFramesSent: 2,
       pongReceived: true,
       t0: true,
       t1: true,
       resize: true,
     });
+    expect(checkpoints[0].inputFramesSent).toBeGreaterThan(2);
+    expect(journal.some((r) => r.kind === 'terminal-state-proof-refreshed')).toBe(true);
     expect(checkpoints[0].outputBytes).toBeGreaterThan(0);
     expect(checkpoints.every((r) => !('data' in r) && !('state' in r))).toBe(true);
     expect(journal.some((r) => r.kind === 'four-canaries-confirmed')).toBe(false);
