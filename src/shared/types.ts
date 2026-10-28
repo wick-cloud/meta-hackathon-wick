@@ -77,10 +77,14 @@ export interface SupplierPolicy {
   basePriceCents: number;
   maxPriceCents?: number;
   allowedCatalogIds?: string[];
+  /** Slots kept unavailable to new bids. Older approved policies default to zero. */
+  reserveSlots?: number;
 }
 export interface OfferingProposal {
   catalogId: string;
   name: string;
   description: string;
   priceCents: number;
+  durationMinutes?: number;
+  priceBasis?: 'server-priced-candidate';
 }

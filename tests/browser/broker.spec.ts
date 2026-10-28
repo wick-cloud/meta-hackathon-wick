@@ -201,7 +201,10 @@ test('provider saves capacity and policy, then publishes a reviewed offering', a
     await expect(page.getByRole('heading', { name, exact: true })).toBeVisible();
   } finally {
     await page.request.put('/api/provider/capacity', { data: { total: original.capacity.total } });
-    await page.request.put('/api/provider/policy', { data: original.policy });
+    const currentPolicy = await (await page.request.get('/api/provider/dashboard')).json();
+    await page.request.put('/api/provider/policy', {
+      data: { ...original.policy, expectedRevision: currentPolicy.policyRevision },
+    });
     if (offeringId)
       await page.request.patch(`/api/provider/offerings/${offeringId}`, {
         data: { active: false },

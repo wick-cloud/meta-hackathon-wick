@@ -564,7 +564,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL marketplace concurrency and invariants
     try {
       expect(
         (await app.inject({ method: 'GET', url: '/api/provider/dashboard' })).json().capacity,
-      ).toEqual({ total: 20, held: 20, available: 0 });
+      ).toEqual({ total: 20, held: 20, free: 0, available: 0 });
       expect(
         (await app.inject({ method: 'PUT', url: '/api/provider/capacity', payload: { total: 21 } }))
           .statusCode,
@@ -575,7 +575,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL marketplace concurrency and invariants
       });
       expect(
         (await app.inject({ method: 'GET', url: '/api/provider/dashboard' })).json().capacity,
-      ).toEqual({ total: 21, held: 21, available: 0 });
+      ).toEqual({ total: 21, held: 21, free: 0, available: 0 });
     } finally {
       await app.close();
     }

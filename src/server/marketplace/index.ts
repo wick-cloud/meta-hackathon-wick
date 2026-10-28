@@ -1,12 +1,13 @@
 import type { FastifyInstance } from 'fastify';
 import type { Pool } from 'pg';
 import { fixedQuote, managedPricing, requireFreshManagedRate } from '../../shared/pricing.js';
-import type { Actor, CatalogItem, SupplierPolicy, Mode } from '../../shared/types.js';
+import type { Actor, CatalogItem, Mode } from '../../shared/types.js';
 import { HttpError, type AppContext } from '../context.js';
 import { transaction, enqueue, activity, QUEUES } from './db.js';
 import { createRequest, submitBid, closeAuction, proposeBid } from './auction.js';
 import { provisionVm, cleanupVm, terminateVm } from './lifecycle.js';
 import { startCatalogRefresh } from './catalog-refresh.js';
+import { availableForBids, normalizedPolicy, validatePolicy } from './policy.js';
 import {
   requestView,
   bidView,
@@ -191,17 +192,41 @@ export async function registerMarketplace(app: FastifyInstance, ctx: AppContext)
     ).rows;
     return {
       provider: { id: p.id, name: p.name, simulated: true },
-      policy: p.policy,
-      capacity: { total: p.total_capacity, held, available: Math.max(0, p.total_capacity - held) },
+      policy: normalizedPolicy(p.policy),
+      policyRevision: p.policy_revision,
+      capacity: {
+        total: p.total_capacity,
+        held,
+        free: Math.max(0, p.total_capacity - held),
+        available: availableForBids(p.total_capacity, held, p.policy),
+      },
       activity: events.map(activityView),
     };
   });
   app.put('/api/provider/capacity', async (request) => {
     const actor = await ctx.requireActor(request, ['provider']);
-    const total = integer((request.body as Row)?.total, 'Total simulated capacity', 0, 10000);
+    const body = request.body as Row;
+    const total = integer(body?.total, 'Total simulated capacity', 0, 10000);
+    const expectedRevision =
+      body?.expectedRevision === undefined
+        ? undefined
+        : integer(body.expectedRevision, 'Expected policy revision', 1);
     return transaction(ctx.pool, async (db) => {
-      const p = await getProvider(db, actor);
-      await db.query('UPDATE broker_providers SET total_capacity=$2 WHERE id=$1', [p.id, total]);
+      const p = (
+        await db.query('SELECT * FROM broker_providers WHERE user_id=$1 FOR UPDATE', [actor.id])
+      ).rows[0];
+      if (!p) throw new HttpError(403, 'Provider access is not configured.');
+      if (expectedRevision !== undefined && expectedRevision !== p.policy_revision)
+        throw new HttpError(
+          409,
+          'Capacity or policy changed. Reload and review the current limits.',
+        );
+      const updated = (
+        await db.query(
+          'UPDATE broker_providers SET total_capacity=$2 WHERE id=$1 RETURNING policy_revision',
+          [p.id, total],
+        )
+      ).rows[0];
       await activity(
         db,
         p.id,
@@ -209,46 +234,94 @@ export async function registerMarketplace(app: FastifyInstance, ctx: AppContext)
         'capacity_changed',
         `Simulated capacity set to ${total}. Existing reservations retained.`,
       );
-      return { total };
+      return { total, policyRevision: updated.policy_revision };
     });
+  });
+  app.post('/api/provider/policy/propose', async (request) => {
+    const actor = await ctx.requireActor(request, ['provider']);
+    const strategy = shortText((request.body as Row)?.strategy, 'Selling strategy', 2000);
+    const now = Date.now();
+    const key = `capacity:${actor.id}`;
+    if (proposalCalls.size > 10000)
+      for (const [entry, budget] of proposalCalls)
+        if (budget.resetsAt <= now) proposalCalls.delete(entry);
+    const budget = proposalCalls.get(key);
+    if (budget && budget.resetsAt > now) {
+      if (budget.count >= 5)
+        throw new HttpError(429, 'Capacity proposal limit reached. Try again in a minute.');
+      budget.count++;
+    } else proposalCalls.set(key, { count: 1, resetsAt: now + 60000 });
+    // One provider-owned snapshot; no model call runs inside a transaction or under a lock.
+    const p = (
+      await ctx.pool.query(
+        `SELECT p.*,(SELECT count(*)::int FROM broker_holds h WHERE h.provider_id=p.id AND h.released_at IS NULL) AS held
+       FROM broker_providers p WHERE p.user_id=$1`,
+        [actor.id],
+      )
+    ).rows[0];
+    if (!p) throw new HttpError(403, 'Provider access is not configured.');
+    const policy = normalizedPolicy(p.policy);
+    const capacity = {
+      total: p.total_capacity,
+      held: p.held,
+      free: Math.max(0, p.total_capacity - p.held),
+      available: availableForBids(p.total_capacity, p.held, policy),
+    };
+    const catalogIds = (
+      await ctx.pool.query(
+        `SELECT id FROM broker_catalog WHERE approved AND source_mode=$1
+       AND ($2::text[] IS NULL OR id=ANY($2))
+       AND ($1 <> 'real' OR COALESCE(item->>'provider','') <> 'boat') ORDER BY id LIMIT 100`,
+        [ctx.wick.mode, policy.allowedCatalogIds ?? null],
+      )
+    ).rows.map((row) => row.id as string);
+    const proposal = await ctx.muse.proposeCapacityPolicy({
+      strategy,
+      policy,
+      capacity,
+      catalogIds,
+    });
+    const proposed = validatePolicy(proposal.policy, policy);
+    if ((proposed.reserveSlots ?? 0) > capacity.total)
+      throw new HttpError(422, 'The proposal reserves more slots than the reviewed capacity.');
+    if (proposed.allowedCatalogIds?.some((id) => !catalogIds.includes(id)))
+      throw new HttpError(
+        422,
+        'The proposal selected a configuration outside your approved allowlist.',
+      );
+    return { ...proposal, policy: proposed, baseRevision: p.policy_revision, capacity };
   });
   app.put('/api/provider/policy', async (request) => {
     const actor = await ctx.requireActor(request, ['provider']);
     const body = request.body as Row;
-    if (typeof body?.autoBid !== 'boolean')
-      throw new HttpError(400, 'Auto bid must be true or false.');
-    const policy: SupplierPolicy = {
-      autoBid: body.autoBid,
-      minimumPriceCents: integer(body.minimumPriceCents, 'Minimum total price'),
-      basePriceCents: integer(body.basePriceCents, 'Base total price'),
-    };
-    if (policy.basePriceCents < policy.minimumPriceCents)
-      throw new HttpError(400, 'Base price must be at least the minimum price.');
-    if (body.maxPriceCents !== undefined && body.maxPriceCents !== null) {
-      policy.maxPriceCents = integer(body.maxPriceCents, 'Maximum total price');
-      if (policy.maxPriceCents < policy.basePriceCents)
-        throw new HttpError(400, 'Maximum price must be at least the base price.');
-    }
-    if (body.allowedCatalogIds !== undefined) {
-      if (
-        !Array.isArray(body.allowedCatalogIds) ||
-        body.allowedCatalogIds.length > 100 ||
-        body.allowedCatalogIds.some((id: unknown) => typeof id !== 'string')
-      )
-        throw new HttpError(400, 'Allowed configurations must be a list of catalog IDs.');
-      policy.allowedCatalogIds = body.allowedCatalogIds;
-    }
+    const expectedRevision = integer(body?.expectedRevision, 'Expected policy revision', 1);
     return transaction(ctx.pool, async (db) => {
-      const p = await getProvider(db, actor);
-      await db.query('UPDATE broker_providers SET policy=$2 WHERE id=$1', [p.id, policy]);
+      const p = (
+        await db.query('SELECT * FROM broker_providers WHERE user_id=$1 FOR UPDATE', [actor.id])
+      ).rows[0];
+      if (!p) throw new HttpError(403, 'Provider access is not configured.');
+      if (expectedRevision !== p.policy_revision)
+        throw new HttpError(
+          409,
+          'Capacity or policy changed. Reload and review the current limits before applying.',
+        );
+      const policy = validatePolicy(body, p.policy);
+      if ((policy.reserveSlots ?? 0) > p.total_capacity)
+        throw new HttpError(400, 'Reserved spare slots cannot exceed your current total capacity.');
+      const updated = (
+        await db.query(
+          'UPDATE broker_providers SET policy=$2 WHERE id=$1 RETURNING policy_revision',
+          [p.id, policy],
+        )
+      ).rows[0];
       await activity(
         db,
         p.id,
         null,
         'policy_changed',
-        'Pricing policy updated. Previously accepted bids and reservations remain binding.',
+        'Reviewed pricing and reserve limits applied. Previously accepted bids and reservations remain binding.',
       );
-      return policy;
+      return { policy, policyRevision: updated.policy_revision };
     });
   });
   app.get('/api/provider/requests', async (request) => {
@@ -312,8 +385,15 @@ export async function registerMarketplace(app: FastifyInstance, ctx: AppContext)
       description = shortText(b?.description, 'Offering description', 2000);
     const fixturePrice =
       ctx.wick.mode === 'fixture' ? integer(b?.priceCents, 'Total price') : undefined;
+    if (b.durationMinutes !== undefined && b.durationMinutes !== 30)
+      throw new HttpError(400, 'Published offering prices use a reviewed 30-minute baseline.');
     return transaction(ctx.pool, async (db) => {
-      const p = await getProvider(db, actor);
+      const owned = await getProvider(db, actor);
+      const p = (
+        await db.query('SELECT * FROM broker_providers WHERE id=$1 FOR UPDATE', [owned.id])
+      ).rows[0];
+      if (p.policy.allowedCatalogIds && !p.policy.allowedCatalogIds.includes(catalogId))
+        throw new HttpError(400, 'Provider policy excludes this configuration.');
       const c = (
         await db.query(
           'SELECT approved,item FROM broker_catalog WHERE id=$1 AND source_mode=$2 FOR SHARE',
@@ -334,7 +414,14 @@ export async function registerMarketplace(app: FastifyInstance, ctx: AppContext)
           throw new HttpError(400, (error as Error).message);
         }
       }
-      const price = pricing ? fixedQuote(pricing, 30).totalPriceCents : fixturePrice!;
+      const price = pricing
+        ? Math.max(p.policy.minimumPriceCents, fixedQuote(pricing, 30).totalPriceCents)
+        : fixturePrice!;
+      if (pricing && b.priceBasis === 'server-priced-candidate' && b.priceCents !== price)
+        throw new HttpError(
+          409,
+          'The reviewed offering price changed. Generate and review a fresh suggestion.',
+        );
       if (
         price < p.policy.minimumPriceCents ||
         (p.policy.maxPriceCents !== undefined && price > p.policy.maxPriceCents)

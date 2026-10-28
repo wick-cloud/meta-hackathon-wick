@@ -654,7 +654,9 @@ async function main() {
         approved: true,
       });
       await api('provider', '/api/provider/policy', 'PUT', {
+        expectedRevision: (await api('provider', '/api/provider/dashboard')).policyRevision,
         autoBid: false,
+        reserveSlots: 0,
         minimumPriceCents: 1,
         basePriceCents: 1,
         allowedCatalogIds: [catalog.id],
