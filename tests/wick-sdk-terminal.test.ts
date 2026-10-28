@@ -146,7 +146,9 @@ describe('published Wick SDK terminal wire contract (offline)', () => {
     for (const frame of frames) {
       const value = frame.data as string;
       expect(value.length).toBeLessThanOrEqual(16_384);
-      expect(value.isWellFormed()).toBe(true);
+      // Under Unicode matching a paired surrogate is one astral code point; this
+      // range therefore finds only isolated UTF-16 halves in a frame.
+      expect(value).not.toMatch(/[\uD800-\uDFFF]/u);
     }
     terminal.close();
     await iterator.return?.();
