@@ -6,6 +6,7 @@ import { HttpError, type AppContext } from '../context.js';
 import { transaction, enqueue, activity, QUEUES } from './db.js';
 import { createRequest, submitBid, closeAuction, proposeBid } from './auction.js';
 import { provisionVm, cleanupVm, terminateVm } from './lifecycle.js';
+import { startCatalogRefresh } from './catalog-refresh.js';
 import {
   requestView,
   bidView,
@@ -625,6 +626,7 @@ export async function startMarketplaceWorkers(ctx: AppContext) {
       for (const job of jobs) await cleanupVm(ctx, job.data.vmId);
     },
   );
+  await startCatalogRefresh(ctx);
 }
 
 export async function seedMarketplace(

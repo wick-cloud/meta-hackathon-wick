@@ -7,9 +7,18 @@ import { loadConfig } from '../src/server/config.js';
 import type { AppContext } from '../src/server/context.js';
 import type { Actor, CatalogItem } from '../src/shared/types.js';
 import { configureRealMarketplace } from '../src/server/marketplace/configure-real.js';
-import { createRequest, submitBid, proposeBid } from '../src/server/marketplace/auction.js';
+import {
+  createRequest,
+  submitBid,
+  proposeBid,
+  closeAuction,
+} from '../src/server/marketplace/auction.js';
 import { createMuseAdapter } from '../src/server/integrations/muse.js';
 import { syncCatalog } from '../src/server/marketplace/data.js';
+import {
+  refreshRealCatalog,
+  type CatalogRefreshJob,
+} from '../src/server/marketplace/catalog-refresh.js';
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const schema = `broker_prices_${randomUUID().replaceAll('-', '')}`;
@@ -302,5 +311,203 @@ describe.skipIf(!databaseUrl)('real pricing database contracts with zero network
     ).rejects.toThrow(/existing|invited/);
     expect((await pool.query('SELECT count(*)::int AS n FROM broker_catalog')).rows[0].n).toBe(0);
     expect((await pool.query('SELECT count(*)::int AS n FROM "user"')).rows[0].n).toBe(1);
+  });
+
+  it('refreshes stale approved rates without changing accepted prices or approving new routes', async () => {
+    const approved = {
+      ...item,
+      id: 'refresh-e2b',
+      provider: 'e2b',
+      organizationId: 'test-org',
+      groupId: 'test-group',
+    };
+    const refreshOptions = { ...options, catalogIds: [approved.id] };
+    await configureRealMarketplace(pool, [approved], refreshOptions);
+    const legacy = { ...item, id: 'legacy-refresh-fixture', approved: true };
+    await pool.query('INSERT INTO broker_catalog(id,item,approved) VALUES($1,$2,true)', [
+      legacy.id,
+      legacy,
+    ]);
+    const scoped = {
+      ...ctx,
+      config: { ...ctx.config, wickOrganizationId: 'test-org', wickGroupId: 'test-group' },
+    };
+    const requestBody = {
+      description: 'Catalog refresh preserves the accepted rental',
+      catalogId: approved.id,
+      region: approved.region,
+      durationMinutes: 30,
+      maxPriceCents: 100,
+      requirements: { cpu: 1, memoryGb: 1 },
+    };
+    // Shorten only this isolated test schema's default; request deadlines stay immutable.
+    await pool.query(
+      "ALTER TABLE broker_requests ALTER COLUMN closes_at SET DEFAULT now()+interval '2 seconds'",
+    );
+    let request: Awaited<ReturnType<typeof createRequest>>;
+    try {
+      request = await createRequest(scoped, buyer, requestBody);
+    } finally {
+      await pool.query(
+        "ALTER TABLE broker_requests ALTER COLUMN closes_at SET DEFAULT now()+interval '30 seconds'",
+      );
+    }
+    const bid = await submitBid(scoped, supplier, request.id, { totalPriceCents: 1 });
+    await new Promise((resolve) =>
+      setTimeout(resolve, Math.max(0, Date.parse(request.closesAt!) - Date.now()) + 25),
+    );
+    await closeAuction(scoped, request.id);
+    const frozen = (
+      await pool.query(
+        'SELECT catalog_snapshot,quote_snapshot FROM broker_vms WHERE request_id=$1',
+        [request.id],
+      )
+    ).rows[0];
+    expect(frozen.quote_snapshot.totalPriceCents).toBe(1);
+    expect(
+      (await pool.query('SELECT status FROM broker_bids WHERE id=$1', [bid.id])).rows[0].status,
+    ).toBe('won');
+
+    await pool.query('UPDATE broker_catalog SET item=$1 WHERE id=$2', [
+      { ...approved, rateRetrievedAt: new Date(Date.now() - 16 * 60 * 1000).toISOString() },
+      approved.id,
+    ]);
+    await expect(createRequest(scoped, buyer, requestBody)).rejects.toThrow(/stale/);
+    const latest = {
+      ...approved,
+      rateMicrosPerSecond: 10,
+      rateRetrievedAt: new Date().toISOString(),
+    };
+    const discovered = { ...latest, id: 'new-unapproved-e2b' };
+    const fetchCatalog = vi.fn(async () => [latest, discovered]);
+    await refreshRealCatalog(
+      { ...scoped, wick: { ...ctx.wick, catalog: fetchCatalog } },
+      { mode: 'real', organizationId: 'test-org', groupId: 'test-group' },
+    );
+    expect(fetchCatalog).toHaveBeenCalledTimes(1);
+    expect(
+      (
+        await pool.query(
+          'SELECT id,approved FROM broker_catalog WHERE source_mode=$1 ORDER BY id',
+          ['real'],
+        )
+      ).rows,
+    ).toEqual([
+      { id: discovered.id, approved: false },
+      { id: approved.id, approved: true },
+    ]);
+    expect(
+      (
+        await pool.query('SELECT item,approved,source_mode FROM broker_catalog WHERE id=$1', [
+          legacy.id,
+        ])
+      ).rows[0],
+    ).toEqual({
+      item: legacy,
+      approved: true,
+      source_mode: 'fixture',
+    });
+    expect(
+      (
+        await pool.query(
+          'SELECT catalog_snapshot,quote_snapshot FROM broker_vms WHERE request_id=$1',
+          [request.id],
+        )
+      ).rows[0],
+    ).toEqual(frozen);
+    expect((await createRequest(scoped, buyer, requestBody)).pricing?.rateMicrosPerSecond).toBe(10);
+    expect(ctx.wick.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects overlapping refreshes before their SDK read and releases the lock after failure', async () => {
+    let release!: () => void;
+    let signalStarted!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const started = new Promise<void>((resolve) => {
+      signalStarted = resolve;
+    });
+    const firstRead = vi.fn(async () => {
+      signalStarted();
+      await gate;
+      return [{ ...item, provider: 'e2b' }];
+    });
+    const secondRead = vi.fn(async () => [{ ...item, provider: 'e2b', rateMicrosPerSecond: 10 }]);
+    const pending = syncCatalog({ ...ctx, wick: { ...ctx.wick, catalog: firstRead } });
+    await started;
+    try {
+      await expect(
+        syncCatalog({ ...ctx, wick: { ...ctx.wick, catalog: secondRead } }),
+      ).rejects.toMatchObject({ statusCode: 409 });
+      expect(secondRead).not.toHaveBeenCalled();
+    } finally {
+      release();
+      await pending;
+    }
+    const beforeFailure = (
+      await pool.query('SELECT item,approved,updated_at FROM broker_catalog WHERE id=$1', [item.id])
+    ).rows[0];
+    await expect(
+      syncCatalog({
+        ...ctx,
+        wick: {
+          ...ctx.wick,
+          catalog: async () => {
+            throw new Error('Offline catalog failure');
+          },
+        },
+      }),
+    ).rejects.toThrow('Offline catalog failure');
+    expect(
+      (
+        await pool.query('SELECT item,approved,updated_at FROM broker_catalog WHERE id=$1', [
+          item.id,
+        ])
+      ).rows[0],
+    ).toEqual(beforeFailure);
+    await syncCatalog({ ...ctx, wick: { ...ctx.wick, catalog: secondRead } });
+    expect(secondRead).toHaveBeenCalledTimes(1);
+    expect(
+      (await pool.query('SELECT item FROM broker_catalog WHERE id=$1', [item.id])).rows[0].item
+        .rateMicrosPerSecond,
+    ).toBe(10);
+    expect(ctx.wick.create).not.toHaveBeenCalled();
+  });
+
+  it('skips fixture, mismatched-scope and recently refreshed startup jobs', async () => {
+    const approved = {
+      ...item,
+      id: 'startup-e2b',
+      provider: 'e2b',
+      rateRetrievedAt: new Date().toISOString(),
+    };
+    await configureRealMarketplace(pool, [approved], { ...options, catalogIds: [approved.id] });
+    const fetchCatalog = vi.fn(async () => [
+      { ...approved, rateRetrievedAt: new Date().toISOString() },
+    ]);
+    const scoped = {
+      ...ctx,
+      config: { ...ctx.config, wickOrganizationId: 'test-org', wickGroupId: 'test-group' },
+      wick: { ...ctx.wick, catalog: fetchCatalog },
+    };
+    const job: CatalogRefreshJob = {
+      mode: 'real',
+      organizationId: 'test-org',
+      groupId: 'test-group',
+      startup: true,
+    };
+    await refreshRealCatalog({ ...scoped, wick: { ...scoped.wick, mode: 'fixture' } }, job);
+    await refreshRealCatalog(scoped, { ...job, organizationId: 'old-org' });
+    await refreshRealCatalog(scoped, { ...job, groupId: 'old-group' });
+    await refreshRealCatalog(scoped, job);
+    expect(fetchCatalog).not.toHaveBeenCalled();
+    await pool.query('UPDATE broker_catalog SET item=$1 WHERE id=$2', [
+      { ...approved, rateRetrievedAt: new Date(Date.now() - 6 * 60 * 1000).toISOString() },
+      approved.id,
+    ]);
+    await refreshRealCatalog(scoped, job);
+    expect(fetchCatalog).toHaveBeenCalledTimes(1);
+    expect(ctx.wick.create).not.toHaveBeenCalled();
   });
 });

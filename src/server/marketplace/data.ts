@@ -1,7 +1,6 @@
 import type { Pool, PoolClient } from 'pg';
 import type { Actor, CatalogItem } from '../../shared/types.js';
 import { HttpError, type AppContext } from '../context.js';
-import { transaction } from './db.js';
 import { fixedQuote } from '../../shared/pricing.js';
 export type Row = Record<string, any>;
 export const iso = (value: unknown): string | null =>
@@ -77,8 +76,21 @@ export async function getCatalog(ctx: Pick<AppContext, 'pool' | 'wick'>): Promis
   return result.rows.map((r) => ({ ...r.item, id: r.id, approved: r.approved }));
 }
 export async function syncCatalog(ctx: AppContext) {
-  const items = await ctx.wick.catalog();
-  await transaction(ctx.pool, async (db) => {
+  const db = await ctx.pool.connect();
+  let locked = false;
+  let transactionOpen = false;
+  try {
+    const lock = await db.query(
+      "SELECT pg_try_advisory_lock(hashtext(current_schema()),hashtext('broker-catalog-sync')) AS acquired",
+    );
+    locked = lock.rows[0]?.acquired === true;
+    if (!locked)
+      throw new HttpError(409, 'A catalog refresh is already in progress. Try again shortly.');
+
+    // Share the lock with manual syncs, but never hold a SQL transaction across the SDK call.
+    const items = await ctx.wick.catalog();
+    await db.query('BEGIN');
+    transactionOpen = true;
     await db.query(
       'UPDATE broker_catalog SET approved=false,updated_at=now() WHERE source_mode=$2 AND NOT(id=ANY($1::text[]))',
       [items.map((item) => item.id), ctx.wick.mode],
@@ -88,7 +100,24 @@ export async function syncCatalog(ctx: AppContext) {
         'INSERT INTO broker_catalog(id,item,approved,source_mode) VALUES($1,$2,$3,$4) ON CONFLICT(id) DO UPDATE SET item=excluded.item,updated_at=now() WHERE broker_catalog.source_mode=excluded.source_mode',
         [item.id, item, item.approved, ctx.wick.mode],
       );
-  });
+    await db.query('COMMIT');
+    transactionOpen = false;
+  } catch (error) {
+    if (transactionOpen) await db.query('ROLLBACK');
+    throw error;
+  } finally {
+    try {
+      if (locked)
+        await db.query(
+          "SELECT pg_advisory_unlock(hashtext(current_schema()),hashtext('broker-catalog-sync'))",
+        );
+    } catch (error) {
+      // Never return a connection that might still own the session lock to the pool.
+      db.release(true);
+      throw error;
+    }
+    db.release();
+  }
   return getCatalog(ctx);
 }
 export async function getProvider(db: Pool | PoolClient, actor: Actor): Promise<Row> {
