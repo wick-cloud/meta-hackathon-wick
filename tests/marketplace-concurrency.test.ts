@@ -2,6 +2,7 @@ import 'dotenv/config';
 import { randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
 import { PgBoss } from 'pg-boss';
+import Fastify from 'fastify';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { migrate } from '../src/server/db.js';
 import { loadConfig } from '../src/server/config.js';
@@ -11,6 +12,7 @@ import { QUEUES } from '../src/server/marketplace/db.js';
 import { closeAuction, createRequest, submitBid } from '../src/server/marketplace/auction.js';
 import { cleanupVm, markReady, provisionVm, terminateVm } from '../src/server/marketplace/lifecycle.js';
 import type { WickAdapter, WickEnvironment } from '../src/server/integrations/types.js';
+import { registerMarketplace } from '../src/server/marketplace/index.js';
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const schema = `broker_test_${randomUUID().replaceAll('-', '')}`;
@@ -80,11 +82,11 @@ describe.skipIf(!databaseUrl)('PostgreSQL marketplace concurrency and invariants
     return { actor, providerId, offeringId };
   }
 
-  async function request(closed = false, buyerId = randomUUID()) {
+  async function request(closed = false, buyerId: string = randomUUID(), closingInterval = '60 seconds') {
     const id = randomUUID();
     await pool.query(`INSERT INTO broker_requests(id,buyer_id,description,catalog_id,catalog_snapshot,region,duration_minutes,max_price_cents,requirements,closes_at)
       VALUES($1,$2,'Test interactive environment',$3,$4,$5,30,1000,$6,clock_timestamp()+$7::interval)`,
-    [id, buyerId, catalog.id, catalog, catalog.region, { cpu: 2, memoryGb: 4 }, closed ? '-1 second' : '60 seconds']);
+    [id, buyerId, catalog.id, catalog, catalog.region, { cpu: 2, memoryGb: 4 }, closed ? '-1 second' : closingInterval]);
     return id;
   }
 
@@ -351,5 +353,70 @@ describe.skipIf(!databaseUrl)('PostgreSQL marketplace concurrency and invariants
     await expect(createRequest(ctx, buyer, { ...body, maxPriceCents: 2.5 })).rejects.toThrow(/integer/i);
     await expect(createRequest(ctx, buyer, { ...body, command: 'run arbitrary customer workload' })).rejects.toThrow(/execution fields/i);
     expect(Number((await pool.query('SELECT count(*) FROM broker_requests')).rows[0].count)).toBe(0);
+  });
+
+  it('rejects bids whose deadline passes while waiting for the supplier capacity lock', async () => {
+    const supplier = await provider();
+    const id = await request(false, randomUUID(), '1 second');
+    const lock = await pool.connect();
+    await lock.query('BEGIN');
+    await lock.query('SELECT id FROM broker_providers WHERE id=$1 FOR UPDATE', [supplier.providerId]);
+    const submission = Promise.allSettled([submitBid(ctx, supplier.actor, id, { totalPriceCents: 200 })]);
+    try {
+      await new Promise(resolve => setTimeout(resolve, 1100));
+      await lock.query('COMMIT');
+    } finally {
+      await lock.query('ROLLBACK');
+      lock.release();
+    }
+    const outcomes = await submission;
+    expect(outcomes[0]?.status).toBe('rejected');
+    expect(Number((await pool.query('SELECT count(*) FROM broker_holds')).rows[0].count)).toBe(0);
+  });
+
+  it('scopes request, VM, invoice, cancellation and retry HTTP queries to their buyer owner', async () => {
+    const { vm, requestId } = await awardedVm();
+    const otherBuyer: Actor = { id: randomUUID(), email: 'other-buyer@test.invalid', name: 'Other buyer', role: 'buyer' };
+    const app = Fastify();
+    await registerMarketplace(app, { ...ctx, requireActor: async () => otherBuyer });
+    try {
+      for (const url of [`/api/requests/${requestId}`, `/api/vms/${vm.id}`]) expect((await app.inject({ method: 'GET', url })).statusCode).toBe(404);
+      for (const url of [`/api/requests/${requestId}/cancel`, `/api/requests/${requestId}/retry`, `/api/vms/${vm.id}/terminate`]) expect((await app.inject({ method: 'POST', url })).statusCode).toBe(404);
+      for (const url of ['/api/requests', '/api/vms', '/api/invoices']) expect((await app.inject({ method: 'GET', url })).json().items).toEqual([]);
+      expect((await pool.query('SELECT status FROM broker_vms WHERE id=$1', [vm.id])).rows[0].status).toBe('provisioning');
+    } finally { await app.close(); }
+  });
+
+  it('paginates records with identical timestamps without dropping or repeating them', async () => {
+    const buyer: Actor = { id: randomUUID(), email: 'page-buyer@test.invalid', name: 'Pagination buyer', role: 'buyer' };
+    const inserted = await pool.query(`INSERT INTO broker_requests(buyer_id,description,catalog_id,catalog_snapshot,region,duration_minutes,max_price_cents,requirements)
+      SELECT $1,'Same-time request',$2,$3,$4,30,1000,$5 FROM generate_series(1,5) RETURNING id`,
+    [buyer.id, catalog.id, catalog, catalog.region, { cpu: 2, memoryGb: 4 }]);
+    const app = Fastify();
+    await registerMarketplace(app, { ...ctx, requireActor: async () => buyer });
+    try {
+      const ids: string[] = [];
+      let cursor: string | undefined;
+      for (let page = 0; page < 3; page++) {
+        const response = await app.inject({ method: 'GET', url: `/api/requests?limit=2${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}` });
+        expect(response.statusCode).toBe(200);
+        const result = response.json();
+        ids.push(...result.items.map((item: { id: string }) => item.id));
+        cursor = result.nextCursor;
+      }
+      expect(cursor).toBeUndefined();
+      expect(ids.sort()).toEqual(inserted.rows.map(row => row.id).sort());
+    } finally { await app.close(); }
+  });
+
+  it('cancellation before the first provisioning attempt releases the slot without creating an environment', async () => {
+    const { vm, buyerId, bidId } = await awardedVm();
+    const { lifecycle, wick } = lifecycleContext({ id: 'must-not-be-created', status: 'running', expiresAt: null });
+    await terminateVm(lifecycle, buyerId, vm.id);
+    await cleanupVm(lifecycle, vm.id);
+    expect(wick.create).not.toHaveBeenCalled();
+    expect(wick.terminate).not.toHaveBeenCalled();
+    expect((await pool.query('SELECT released_at FROM broker_holds WHERE bid_id=$1', [bidId])).rows[0].released_at).not.toBeNull();
+    expect(Number((await pool.query('SELECT count(*) FROM broker_invoices')).rows[0].count)).toBe(0);
   });
 });

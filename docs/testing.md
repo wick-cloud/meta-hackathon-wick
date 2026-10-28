@@ -29,7 +29,7 @@ npm run test:browser
 
 Playwright loads the ignored local `.env`. `E2E_BASE_URL` defaults to `APP_URL`, then `http://localhost:3000`. The URL must match the application's allowed origin. Buyer credentials use `SEED_BUYER_EMAIL` / `SEED_BUYER_PASSWORD`; provider credentials use `SEED_SUPPLIER_A_EMAIL` / `SEED_SUPPLIER_A_PASSWORD`. The default emails match the explicit seed command. `E2E_BUYER_EMAIL` and `E2E_PROVIDER_EMAIL` can override the seeded emails. No password is committed or provided by the tests.
 
-The application must already be running; the suite does not create additional app processes, VMs, or Wick tasks. Missing credential variables cause the relevant authenticated tests to skip. The buyer test creates one real database request, waits for the actual 30-second auction and durable-job consumers, opens the fixture terminal UI, checks that reconnect does not reset expiry, checks exactly one invoice, and requests termination in a `finally` block. It never runs a customer workload. Traces and screenshots on failure remain in ignored Playwright artifact directories.
+The application must already be running; the suite does not create additional app processes, VMs, or Wick tasks. Missing credential variables cause the relevant authenticated tests to skip. The buyer test creates one real database request, waits for the actual 30-second auction and durable-job consumers, connects through the fixture terminal WebSocket bridge, reconnects to the same environment without resetting expiry, checks exactly one invoice, and requests termination in a `finally` block. It never runs a customer workload. Additional browser cases exercise the Muse fixture review, provider capacity/policy/offering controls, and administrator catalog approval/VM limit controls. Provider and administrator settings are restored in `finally` blocks; the test offering is unpublished. Admin credentials use `SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD`. Traces and screenshots on failure remain in ignored Playwright artifact directories.
 
 ## Marketplace invariants verified against PostgreSQL
 
@@ -47,7 +47,11 @@ The application must already be running; the suite does not create additional ap
 - A non-owner cannot terminate a VM. Owner cancellation racing create remains cancelled.
 - Early termination after readiness keeps the full fixed charge.
 - No-offer attempts end without a VM or automatic new auction. Exact catalog duration and integer-cent pricing are enforced; customer execution fields are rejected.
+- A bid waiting for a provider lock cannot be accepted after its auction deadline.
+- Owner-scoped HTTP reads, lists, cancellation, and retry prevent another buyer accessing a rental.
+- Tuple pagination retains records sharing the same exact PostgreSQL timestamp.
+- Cancellation before any create attempt releases capacity without allocating an environment.
 
 ## Evidence from this build
 
-At 2026-10-28 06:24 UTC, `npm run test:db` passed all **19** marketplace tests against local PostgreSQL 16 with Node 24.22.1 and Vitest 5.0.5. This is local fixture/domain evidence, not verification of Wick's production API or the real Meta service. Final project-wide checks and browser results are recorded in `HANDOFF.md`.
+At 2026-10-28 06:28 UTC, `npm run test:db` passed all **23** marketplace tests against local PostgreSQL 16 with Node 24.22.1 and Vitest 5.0.5. This is local fixture/domain evidence, not verification of Wick's production API or the real Meta service. Final project-wide checks and browser results are recorded in `HANDOFF.md`.
