@@ -31,7 +31,7 @@ Broker now rejects offers whose explicit capability list omits `interactive-term
 
 The [guard change](https://github.com/wick-cloud/meta-hackathon-wick/commit/b8e7f1d29e2dd3b39127d72428b58f87d7278c1d) is deployed on the [Railway app](https://meta-hackathon-wick-production.up.railway.app/). Health and catalog synchronization succeeded; E2B, Daytona and Modal remain approved. No Wick provider policy was changed.
 
-Staff API inspection returned **403**. The operator page requires a fresh staff sign-in; policy inspection and repair remain pending that user step. Existing VM authorization snapshots must remain intact. A correction needs a fresh canary before bulk allocation.
+The API key's staff inspection returned **403**. Refreshing the existing Google sign-in restored browser staff access. Read-only inspection confirmed that Blaxel revision 5 supports interactive terminals but has them disabled. An unsaved change enables terminals only for Broker's organization, on the configured Micro and Small shapes. Saving immediately replaces the current provider revision with a draft and pauses new Blaxel routing until the revision is enabled again. Production access-policy approval is pending; no Wick configuration has been saved. Existing VM authorization snapshots remain intact. A correction needs fresh canaries before bulk allocation. This live attempt covers Micro only; Small terminal behavior has not been live-verified here.
 
 ## Runner and verification boundary
 
