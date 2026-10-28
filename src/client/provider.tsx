@@ -326,7 +326,7 @@ export function ProviderPolicy() {
                     <div>
                       <strong>{item.name}</strong>
                       <span>
-                        {item.cpu} vCPU · {item.memoryGb} GB · {item.region}
+                        {item.cpu} vCPU · {item.memoryGb} GiB · {item.region}
                       </span>
                     </div>
                   </label>
@@ -463,7 +463,7 @@ function ProviderRequestCard({
         </span>
         <span>
           <Layers3 size={13} />
-          {request.requirements.memoryGb} GB RAM
+          {request.requirements.memoryGb} GiB RAM
         </span>
         <span>
           <Globe2 size={13} />
@@ -834,8 +834,9 @@ export function ProviderOfferings() {
                 />
               ) : (
                 <p className="field-hint">
-                  Managed rate pricing: the server freezes the published Wick rate and configured
-                  markup. Each 15, 30 or 60 minute quote is calculated from that rate.
+                  The published Wick rate and target markup suggest a price for each duration. Your
+                  binding bid can differ within your policy and the buyer’s budget, at or above the
+                  rounded upstream compute cost.
                 </p>
               )}
               <div className="field">
@@ -892,7 +893,7 @@ export function ProviderOfferings() {
                 <p>{item.description}</p>
                 <div className="request-spec-tags">
                   <span>{config?.cpu ?? '—'} vCPU</span>
-                  <span>{config?.memoryGb ?? '—'} GB RAM</span>
+                  <span>{config?.memoryGb ?? '—'} GiB RAM</span>
                   <span>{config?.region || 'Approved configuration'}</span>
                 </div>
                 <div className="offering-price">
@@ -1137,7 +1138,7 @@ export function AdminConfig({ onUpdated }: { onUpdated: () => void }) {
                     </span>
                   </td>
                   <td>
-                    {item.cpu} vCPU · {item.memoryGb} GB
+                    {item.cpu} vCPU · {item.memoryGb} GiB
                     {item.gpu && <span className="table-subtitle">{item.gpu}</span>}
                   </td>
                   <td>{item.region}</td>

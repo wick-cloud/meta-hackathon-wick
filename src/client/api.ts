@@ -42,6 +42,7 @@ export interface VM {
   id: string;
   requestId: string;
   buyerId: string;
+  sourceMode: Mode;
   status: 'provisioning' | 'running' | 'terminating' | 'terminated' | 'failed' | 'expired';
   environmentId?: string | null;
   expiresAt?: string | null;
@@ -172,6 +173,8 @@ export const statusLabel = (status: string) =>
     won: 'Awarded',
     lost: 'Released',
   })[status] || status.replaceAll('_', ' ');
+export const rentalSourceLabel = (mode: Mode | undefined) =>
+  mode === 'real' ? 'Real Wick VM' : 'Fixture simulation';
 export const loadDraft = (): Draft | null => {
   try {
     return JSON.parse(sessionStorage.getItem('wick-draft') || 'null') as Draft | null;

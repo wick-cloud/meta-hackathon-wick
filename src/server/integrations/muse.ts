@@ -56,9 +56,16 @@ function integer(value: unknown, label: string, min = 0, max = 100_000_000): num
 function requirements(value: unknown): Requirements {
   const row = object(value, 'Resource requirements');
   onlyKeys(row, ['cpu', 'memoryGb', 'gpu'], 'Resource requirements');
+  if (
+    typeof row.memoryGb !== 'number' ||
+    !Number.isFinite(row.memoryGb) ||
+    row.memoryGb <= 0 ||
+    row.memoryGb > 16384
+  )
+    fail('Memory must be a finite positive GiB value no greater than 16384.');
   const result: Requirements = {
     cpu: integer(row.cpu, 'CPU count', 1, 1024),
-    memoryGb: integer(row.memoryGb, 'Memory', 1, 16384),
+    memoryGb: row.memoryGb,
   };
   if (row.gpu !== undefined && row.gpu !== null && row.gpu !== '')
     result.gpu = string(row.gpu, 'GPU', 120);
@@ -175,7 +182,9 @@ function receipt(
 }
 function parseExplicitRequirements(description: string): Partial<Requirements> {
   const cpu = description.match(/\b(\d{1,4})\s*(?:v?cpus?|cores?)\b/i);
-  const memory = description.match(/\b(\d{1,5})\s*(?:gb|gib)\s*(?:of\s+)?(?:ram|memory)?\b/i);
+  const memory = description.match(
+    /\b(\d{1,5}(?:\.\d+)?)\s*(?:gb|gib)\s*(?:of\s+)?(?:ram|memory)?\b/i,
+  );
   const gpu = description.match(/\b(?:nvidia\s+)?(a100|h100|a10g?|t4|l4|v100|rtx\s*\d{4})\b/i);
   return {
     ...(cpu ? { cpu: Number(cpu[1]) } : {}),
@@ -247,7 +256,7 @@ const requirementsSchema = {
   additionalProperties: false,
   properties: {
     cpu: { type: 'integer', minimum: 1, maximum: 1024 },
-    memoryGb: { type: 'integer', minimum: 1, maximum: 16384 },
+    memoryGb: { type: 'number', exclusiveMinimum: 0, maximum: 16384 },
     gpu: { type: ['string', 'null'], maxLength: 120 },
   },
   required: ['cpu', 'memoryGb', 'gpu'],

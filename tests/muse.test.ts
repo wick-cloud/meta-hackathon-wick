@@ -200,6 +200,22 @@ describe('explicit Muse fixture mode', () => {
 });
 
 describe('real Meta structured-output contract', () => {
+  it('validates fractional GiB model output and declares numeric memory in the offline schema contract', async () => {
+    const memoryGb = 3814 / 1024;
+    const boat = { ...catalog[0]!, memoryGb };
+    const { fetcher, adapter } = realAdapter({
+      ...translateOutput,
+      requirements: { cpu: 2, memoryGb, gpu: null },
+    });
+    const result = await adapter.translate('2 CPU and 3.724609375 GiB RAM', [boat]);
+    expect(result.proposal.requirements.memoryGb).toBe(memoryGb);
+    const sent = JSON.parse(fetcher.mock.calls[0]![1]!.body as string);
+    expect(
+      sent.response_format.json_schema.schema.properties.requirements.properties.memoryGb,
+    ).toEqual({ type: 'number', exclusiveMinimum: 0, maximum: 16384 });
+    const tooLarge = realAdapter(translateOutput).adapter;
+    await expect(tooLarge.translate('4 GiB RAM', [boat])).rejects.toThrow('cannot satisfy');
+  });
   it('uses the documented endpoint, exact model and strict JSON schema', async () => {
     const { fetcher, adapter } = realAdapter(translateOutput);
     const result = await adapter.translate('2 CPUs with 4 GB RAM', catalog);

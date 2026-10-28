@@ -52,6 +52,7 @@ export const vmView = (r: Row) => ({
   id: r.id,
   requestId: r.request_id,
   buyerId: r.buyer_id,
+  sourceMode: r.catalog_snapshot?.sourceMode === 'real' ? ('real' as const) : ('fixture' as const),
   status: r.status,
   environmentId: r.environment_id,
   expiresAt: iso(r.expires_at),
@@ -97,6 +98,11 @@ export async function getProvider(db: Pool | PoolClient, actor: Actor): Promise<
 export function integer(value: unknown, label: string, min = 0, max = 100000000) {
   if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < min || value > max)
     throw new HttpError(400, `${label} must be an integer between ${min} and ${max}.`);
+  return value;
+}
+export function positiveNumber(value: unknown, label: string, max: number) {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0 || value > max)
+    throw new HttpError(400, `${label} must be a finite positive number no greater than ${max}.`);
   return value;
 }
 export function shortText(value: unknown, label: string, max = 2000) {

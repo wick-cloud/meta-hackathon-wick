@@ -30,6 +30,7 @@ import {
   loadDraft,
   money,
   post,
+  rentalSourceLabel,
   saveDraft,
   shortDate,
   type Bid,
@@ -402,7 +403,7 @@ export function RequestReview() {
               >
                 {approved.map((item) => (
                   <option value={item.id} key={item.id}>
-                    {item.name} · {item.cpu} vCPU · {item.memoryGb} GB RAM
+                    {item.name} · {item.cpu} vCPU · {item.memoryGb} GiB RAM
                   </option>
                 ))}
               </select>
@@ -453,13 +454,13 @@ export function RequestReview() {
                 />
               </label>
               <label className="field" htmlFor="memory">
-                <span>Minimum memory (GB)</span>
+                <span>Minimum memory (GiB)</span>
                 <input
                   id="memory"
                   type="number"
-                  min={1}
+                  min={Number.MIN_VALUE}
                   max={selected?.memoryGb || 2048}
-                  step={1}
+                  step="any"
                   value={draft.requirements.memoryGb}
                   onChange={(e) =>
                     update({
@@ -491,7 +492,7 @@ export function RequestReview() {
               <h2>Your environment, at a glance</h2>
               <p>{selected?.name || 'Select a configuration'}</p>
               <DetailRow label="Resources">
-                {draft.requirements.cpu} vCPU · {draft.requirements.memoryGb} GB
+                {draft.requirements.cpu} vCPU · {draft.requirements.memoryGb} GiB
               </DetailRow>
               <DetailRow label="Region">{draft.region}</DetailRow>
               <DetailRow label="Rental">{draft.durationMinutes} minutes</DetailRow>
@@ -502,15 +503,15 @@ export function RequestReview() {
                     <DetailRow label="Managed rate">
                       {selected.rateMicrosPerSecond} µUSD / second
                     </DetailRow>
-                    <DetailRow label="Rate-based quote">
+                    <DetailRow label="Suggested target quote">
                       {money(
                         fixedQuote(managedPricing(selected, targetMarkupBps), draft.durationMinutes)
                           .totalPriceCents,
                       )}
                     </DetailRow>
                     <p className="field-hint">
-                      Published rate × duration, plus {(targetMarkupBps ?? 2000) / 100}% markup;
-                      rounded up once to cents. The accepted offer freezes your total.
+                      Published rate × duration, plus {(targetMarkupBps ?? 2000) / 100}% target
+                      markup; rounded up once to cents. The accepted offer freezes your total.
                     </p>
                   </>
                 )}
@@ -796,7 +797,7 @@ export function AuctionPage({ id }: { id: string }) {
             <h2>Your request</h2>
             <p className="request-description">{request.description}</p>
             <DetailRow label="Resources">
-              {request.requirements.cpu} vCPU · {request.requirements.memoryGb} GB
+              {request.requirements.cpu} vCPU · {request.requirements.memoryGb} GiB
             </DetailRow>
             <DetailRow label="Region">{request.region}</DetailRow>
             <DetailRow label="Rental">{request.durationMinutes} minutes</DetailRow>
@@ -938,6 +939,7 @@ export function MyVMs() {
                   <StatusPill status={vm.status} />
                 </div>
                 <h3>{vm.catalogName || 'Environment'}</h3>
+                <span className="small-muted">{rentalSourceLabel(vm.sourceMode)}</span>
                 <span className="small-muted vm-card-id">{vm.id.slice(0, 8)}</span>
                 <div className="vm-card-spec">
                   <span>
@@ -1003,7 +1005,6 @@ export function VMDetail({ id }: { id: string }) {
       loading,
       reload,
     } = useResource<VM>(`/api/vms/${encodeURIComponent(id)}`, 3000),
-    { modes } = useSession(),
     now = useNow();
   const [confirm, setConfirm] = useState(false),
     [busy, setBusy] = useState(false),
@@ -1100,12 +1101,13 @@ export function VMDetail({ id }: { id: string }) {
           vmId={vm.id}
           enabled={vm.status === 'running' && !isExpired}
           status={vm.status}
-          mode={modes.wick}
+          mode={vm.sourceMode ?? 'fixture'}
         />
       </Suspense>
       <div className="vm-detail-bottom">
         <section className="card">
           <h2>Rental details</h2>
+          <DetailRow label="Environment source">{rentalSourceLabel(vm.sourceMode)}</DetailRow>
           <DetailRow label="Created">{dateTime(vm.createdAt)}</DetailRow>
           <DetailRow label="Ready confirmed">
             {vm.readyAt ? dateTime(vm.readyAt) : 'Not yet confirmed'}
@@ -1125,7 +1127,9 @@ export function VMDetail({ id }: { id: string }) {
               </DetailRow>
               <p className="field-hint">
                 The estimate uses the frozen published rate and is not settled usage. Customer fixed
-                quote includes {vm.pricing.markupBps / 100}% markup. No payment due.
+                quote is the accepted provider bid. The {vm.pricing.markupBps / 100}% target markup
+                suggests {money(vm.pricing.targetTotalPriceCents ?? vm.pricing.totalPriceCents)}{' '}
+                USD, rounded up once to cents (minimum one cent). No payment due.
               </p>
             </>
           )}
