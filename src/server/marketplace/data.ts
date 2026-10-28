@@ -33,6 +33,7 @@ export const bidView = (r: Row) => ({
   createdAt: iso(r.created_at),
   simulated: true,
   ...(r.offering_snapshot?.pricing ? { pricing: r.offering_snapshot.pricing } : {}),
+  ...(r.offering_snapshot?.revenueShare ? { revenueShare: r.offering_snapshot.revenueShare } : {}),
 });
 export const offeringView = (r: Row) => ({
   id: r.id,
@@ -63,6 +64,7 @@ export const vmView = (r: Row) => ({
   durationMinutes: r.create_input?.ttlSeconds / 60,
   priceCents: r.quote_snapshot?.totalPriceCents,
   ...(r.quote_snapshot?.pricing ? { pricing: r.quote_snapshot.pricing } : {}),
+  ...(r.quote_snapshot?.revenueShare ? { revenueShare: r.quote_snapshot.revenueShare } : {}),
   failureReason: r.failure_reason,
   cleanupPending:
     !r.cleanup_confirmed_at && ['terminating', 'failed', 'expired'].includes(r.status),

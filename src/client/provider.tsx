@@ -5,6 +5,7 @@ import {
   Check,
   CheckCircle2,
   Clock3,
+  CircleDollarSign,
   Cpu,
   Eye,
   Globe2,
@@ -27,12 +28,13 @@ import type {
   Receipt,
   SupplierPolicy,
 } from '../shared/types';
-import { fixedQuote, managedPricing } from '../shared/pricing';
+import { fixedQuote, managedPricing, revenueShare } from '../shared/pricing';
 import {
   ApiError,
   api,
   dateTime,
   money,
+  moneyMicros,
   post,
   put,
   shortDate,
@@ -41,6 +43,7 @@ import {
   type EnvironmentRequest,
   type Offering,
   type PolicyProposal,
+  type ProviderEarning,
   type VM,
 } from './api';
 import {
@@ -62,6 +65,21 @@ import {
   useResource,
   useSession,
 } from './components';
+
+function ProviderRevenueSplit({ grossCents }: { grossCents: number }) {
+  if (!Number.isSafeInteger(grossCents) || grossCents < 1 || grossCents > 100000000) return null;
+  const split = revenueShare(grossCents);
+  return (
+    <div className="provider-revenue-split" aria-label="Rental revenue breakdown">
+      <DetailRow label="Buyer pays · your gross">{money(grossCents)}</DetailRow>
+      <DetailRow label="Broker commission · 15%">{moneyMicros(split.brokerFeeMicros)}</DetailRow>
+      <DetailRow label="You keep · 85%">{moneyMicros(split.providerNetMicros)}</DetailRow>
+      <p className="field-hint">
+        Your share is before compute costs. No fee is added to the buyer’s price.
+      </p>
+    </div>
+  );
+}
 
 export function ProviderCapacity() {
   const { data, error, loading, reload } = useResource<Dashboard>('/api/provider/dashboard', 5000);
@@ -105,6 +123,13 @@ export function ProviderCapacity() {
       >
         <span className="quiet-badge">Simulated demo supply</span>
       </PageHeader>
+      <div className="info-note">
+        <CircleDollarSign size={18} />
+        <p>
+          You keep 85% of each new rental. Broker takes 15% from your gross rental revenue; no extra
+          fee is added for buyers. <Link href="/provider/earnings">View earnings</Link>
+        </p>
+      </div>
       <div className="stats-grid">
         <StatCard
           label="Total capacity"
@@ -359,7 +384,7 @@ export function ProviderPolicy() {
       <PageHeader
         eyebrow="YOUR PRICING, YOUR RULES"
         title="Muse Capacity Manager"
-        description="Describe your selling strategy, review explicit limits, then choose whether to apply them."
+        description="Set your selling strategy and keep 85% of rental revenue. Review your limits before applying them."
       >
         <span className="quiet-badge">
           {modes.muse === 'fixture' ? 'Fixture Muse · no model calls' : 'Muse · reviewed proposals'}
@@ -527,10 +552,11 @@ export function ProviderPolicy() {
                 onChange={(maxPriceCents) => update({ maxPriceCents })}
               />
               <p className="field-hint">
-                Fixed totals for the selected rental, in integer USD cents. The customer’s maximum
-                price also applies. For real Wick rentals, the rounded upstream compute cost is an
-                additional minimum.
+                These limits are the gross total the buyer pays, before Broker’s 15% commission. You
+                keep 85% before compute costs. The buyer’s budget also applies; real Wick bids must
+                leave enough after commission to cover the estimated compute cost.
               </p>
+              <ProviderRevenueSplit grossCents={policy.basePriceCents} />
               <div className="form-divider" />
               <h3>Eligible configurations</h3>
               <p className="muted-text">
@@ -619,6 +645,8 @@ export function ProviderPolicy() {
               </div>
               <div className="card policy-notes">
                 <h3>What your policy changes</h3>
+                <DetailRow label="Broker commission">15% of your gross rental revenue</DetailRow>
+                <DetailRow label="Added buyer fee">$0.00</DetailRow>
                 <DetailRow label="Future bids">Use your saved policy</DetailRow>
                 <DetailRow label="Existing reservations">Remain in place</DetailRow>
                 <DetailRow label="Awarded quotes">Stay fixed</DetailRow>
@@ -761,6 +789,7 @@ function ProviderRequestCard({
             min={1}
             disabled={ended}
           />
+          <ProviderRevenueSplit grossCents={price} />
           <div className="provider-request-actions">
             <button
               type="button"
@@ -896,7 +925,7 @@ export function ProviderRequests() {
 export function ProviderOfferings() {
   const { data, error, loading, reload, nextCursor, loadingMore, loadMore, moreError } =
       usePagedResource<Offering>('/api/provider/offerings'),
-    { catalog, modes, targetMarkupBps } = useSession(),
+    { catalog, modes } = useSession(),
     dashboard = useResource<Dashboard>('/api/provider/dashboard'),
     approved = catalog.filter(
       (item) =>
@@ -928,7 +957,7 @@ export function ProviderOfferings() {
       if (!selected || !dashboard.data)
         throw new Error('Loading your approved configuration and current pricing policy.');
       publishPrice = Math.max(
-        fixedQuote(managedPricing(selected, targetMarkupBps), 30).totalPriceCents,
+        fixedQuote(managedPricing(selected), 30).totalPriceCents,
         dashboard.data.policy.minimumPriceCents,
       );
     } catch (error) {
@@ -1158,7 +1187,8 @@ export function ProviderOfferings() {
                   <p className="field-hint">
                     Publishing stores this example total. A changed rate or policy is rejected for a
                     fresh review. Each rental gets a duration-specific fixed quote. Binding bids may
-                    differ within your policy, the buyer’s budget, and the upstream compute floor.
+                    differ within your policy and the buyer’s budget. Your 85% share must cover the
+                    estimated upstream compute cost.
                   </p>
                   <ErrorBox error={quoteError} />
                 </div>
@@ -1176,6 +1206,7 @@ export function ProviderOfferings() {
                 </div>
               </div>
             </div>
+            {publishPrice !== undefined && <ProviderRevenueSplit grossCents={publishPrice} />}
             <div className="form-actions">
               <button
                 className="button primary"
@@ -1227,10 +1258,13 @@ export function ProviderOfferings() {
                   <strong>{money(item.priceCents)}</strong>
                   <span>
                     {item.pricing
-                      ? '30 minute example · duration-based fixed quote'
+                      ? 'Published 30 minute baseline · review current quote before bidding'
                       : 'fixed rental total'}
                   </span>
                 </div>
+                <p className="field-hint">
+                  New rentals: you keep 85%; Broker receives 15% of the accepted total.
+                </p>
                 <div className="offering-card-footer">
                   <span>
                     Revision {item.revision}
@@ -1275,6 +1309,140 @@ export function ProviderOfferings() {
           future bids only.
         </p>
       </div>
+    </>
+  );
+}
+
+export function ProviderEarnings() {
+  const { data, error, loading, reload, nextCursor, loadingMore, loadMore, moreError } =
+    usePagedResource<ProviderEarning>('/api/provider/earnings');
+  const items = data?.items ?? [];
+  const assessed = items.filter((item) => !!item.revenueShare);
+  const gross = assessed.reduce(
+    (sum, item) => sum + BigInt(item.revenueShare!.grossCents) * 10000n,
+    0n,
+  );
+  const fee = assessed.reduce((sum, item) => sum + BigInt(item.revenueShare!.brokerFeeMicros), 0n);
+  const net = assessed.reduce(
+    (sum, item) => sum + BigInt(item.revenueShare!.providerNetMicros),
+    0n,
+  );
+  return (
+    <>
+      <PageHeader
+        eyebrow="PROVIDER EARNINGS"
+        title="Your share, clearly."
+        description="You keep 85% of each new rental. Broker receives 15% from your gross revenue, with no added buyer fee."
+      >
+        <button className="button secondary" onClick={reload}>
+          <RefreshCw size={15} />
+          Refresh
+        </button>
+      </PageHeader>
+      <div className="invoice-banner">
+        <span className="icon-tile emerald">
+          <CircleDollarSign size={23} />
+        </span>
+        <div>
+          <h3>Demo earnings · no payouts</h3>
+          <p>
+            Each split is fixed with the accepted offer and recorded once the VM is ready. Your
+            share is before compute costs, so it is not profit. No payments or payouts are
+            collected.
+          </p>
+        </div>
+        <span className="quiet-badge">85% you · 15% Broker</span>
+      </div>
+      <div className="stats-grid">
+        <StatCard
+          label="Assessed rental gross"
+          value={moneyMicros(gross)}
+          note="Loaded records with a frozen split"
+          icon={<CircleDollarSign size={18} />}
+        />
+        <StatCard
+          label="Broker commission"
+          value={moneyMicros(fee)}
+          note="15% of the assessed gross"
+          icon={<Layers3 size={18} />}
+        />
+        <StatCard
+          label="Your net revenue"
+          value={moneyMicros(net)}
+          note="85%, before your compute costs"
+          icon={<CheckCircle2 size={18} />}
+        />
+      </div>
+      <ErrorBox error={error} retry={reload} />
+      <section className="card">
+        <div className="section-heading">
+          <h2>Rental revenue</h2>
+          <span>
+            {items.length} loaded{nextCursor ? ' · more available' : ''}
+          </span>
+        </div>
+        <p className="field-hint">
+          Totals cover only loaded records with an assessed split. Historical rentals without a
+          frozen commission are unchanged and excluded. Fractions of a cent are preserved so Broker
+          receives exactly 15%.
+        </p>
+        {loading ? (
+          <Spinner label="Loading provider earnings" />
+        ) : items.length ? (
+          <div className="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Invoice</th>
+                  <th>Environment</th>
+                  <th>Created</th>
+                  <th>Rental gross</th>
+                  <th>Broker fee · 15%</th>
+                  <th>You keep · 85%</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((item) => (
+                  <tr key={item.id} data-invoice-id={item.id}>
+                    <td>{item.id.slice(0, 8)}</td>
+                    <td>{item.catalogName || item.vmId.slice(0, 8)}</td>
+                    <td>{shortDate(item.createdAt)}</td>
+                    <td className="money-cell">{money(item.totalCents)}</td>
+                    <td className="money-cell">
+                      {item.revenueShare
+                        ? moneyMicros(item.revenueShare.brokerFeeMicros)
+                        : 'Not assessed'}
+                    </td>
+                    <td className="money-cell">
+                      {item.revenueShare
+                        ? moneyMicros(item.revenueShare.providerNetMicros)
+                        : 'Not assessed'}
+                    </td>
+                    <td>
+                      <span className="quiet-badge">
+                        {item.revenueShare ? 'Demo · no payout' : 'Historical · unchanged'}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <EmptyState
+            icon={<CircleDollarSign size={27} />}
+            title="Your first rental starts the record"
+            description="A revenue split appears after a rental becomes ready. Failed or cancelled attempts before readiness create no earnings."
+          />
+        )}
+        <LoadMore
+          available={!!nextCursor}
+          loading={loadingMore}
+          onLoad={() => void loadMore()}
+          error={moreError}
+        />
+      </section>
     </>
   );
 }

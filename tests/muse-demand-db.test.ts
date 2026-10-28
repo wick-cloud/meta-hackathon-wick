@@ -133,7 +133,7 @@ describe.skipIf(!databaseUrl)('bounded unresolved Muse demand using isolated Pos
     );
     await registerMarketplace(app, {
       pool,
-      config: { targetMarkupBps: 2000 },
+      config: {},
       wick: { mode: 'real' },
       requireActor: async () => ({ id: userId, role: 'provider' }),
     } as unknown as AppContext);
@@ -201,28 +201,24 @@ describe('server-priced offering duration candidates', () => {
       rateSource: 'wick-customer-catalog',
       rateRetrievedAt: new Date().toISOString(),
     };
-    expect(
-      offeringPriceCandidates([real], { ...policy, minimumPriceCents: 7 }, 'real', 2000),
-    ).toEqual([
+    expect(offeringPriceCandidates([real], { ...policy, minimumPriceCents: 7 }, 'real')).toEqual([
       { id: `${item.id}:30`, catalogId: item.id, durationMinutes: 30, totalPriceCents: 7 },
     ]);
-    expect(
-      offeringPriceCandidates([real], { ...policy, allowedCatalogIds: [] }, 'real', 2000),
-    ).toEqual([]);
-    expect(
-      offeringPriceCandidates([{ ...real, rateRetrievedAt: '2020-01-01' }], policy, 'real', 2000),
-    ).toEqual([]);
-    expect(offeringPriceCandidates([real], { ...policy, maxPriceCents: 4 }, 'real', 2000)).toEqual(
+    expect(offeringPriceCandidates([real], { ...policy, allowedCatalogIds: [] }, 'real')).toEqual(
       [],
     );
+    expect(
+      offeringPriceCandidates([{ ...real, rateRetrievedAt: '2020-01-01' }], policy, 'real'),
+    ).toEqual([]);
+    expect(offeringPriceCandidates([real], { ...policy, maxPriceCents: 4 }, 'real')).toEqual([]);
   });
   it('keeps fixture prices deterministic and does not invent unsupported publish durations', () => {
-    expect(offeringPriceCandidates([item], policy, 'fixture', 2000)[0]).toMatchObject({
+    expect(offeringPriceCandidates([item], policy, 'fixture')[0]).toMatchObject({
       durationMinutes: 30,
       totalPriceCents: 5,
     });
     expect(
-      offeringPriceCandidates([{ ...item, durationMinutes: [15] }], policy, 'fixture', 2000),
+      offeringPriceCandidates([{ ...item, durationMinutes: [15] }], policy, 'fixture'),
     ).toEqual([]);
   });
 });

@@ -26,6 +26,7 @@ import {
   ProviderRequests,
   ProviderOfferings,
   ProviderActivity,
+  ProviderEarnings,
   AdminConfig,
 } from './provider';
 
@@ -40,6 +41,7 @@ const providerNavigation = [
   { path: '/provider/policy', label: 'Policy', icon: Settings2 },
   { path: '/provider/requests', label: 'Requests', icon: Box },
   { path: '/provider/offerings', label: 'Offerings', icon: LayoutGrid },
+  { path: '/provider/earnings', label: 'Earnings', icon: CircleDollarSign },
   { path: '/provider/activity', label: 'Activity', icon: Activity },
 ];
 
@@ -306,6 +308,7 @@ export default function App() {
     if (path === '/provider/policy') content = <ProviderPolicy />;
     else if (path === '/provider/requests') content = <ProviderRequests />;
     else if (path === '/provider/offerings') content = <ProviderOfferings />;
+    else if (path === '/provider/earnings') content = <ProviderEarnings />;
     else if (path === '/provider/activity') content = <ProviderActivity />;
     else content = <ProviderCapacity />;
   } else content = <AdminConfig onUpdated={() => void refreshSession()} />;

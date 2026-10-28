@@ -7,7 +7,6 @@ export interface RealSetupOptions {
   catalogIds: string[];
   supplierEmails: string[];
   capacity: number;
-  markupBps: number;
   autoBid: boolean;
 }
 
@@ -33,7 +32,7 @@ export async function configureRealMarketplace(
     const item = catalog.find((entry) => entry.id === id);
     if (!item) throw new Error('A chosen real catalog configuration is no longer available.');
     requireFreshManagedRate(item);
-    const pricing = managedPricing(item, options.markupBps);
+    const pricing = managedPricing(item);
     return { item, pricing, price: fixedQuote(pricing, 30).totalPriceCents };
   });
   return transaction(pool, async (db) => {
@@ -90,7 +89,7 @@ export async function configureRealMarketplace(
           [
             provider.id,
             item.id,
-            'Demo supplier allocation backed by Wick. Published managed rate plus explicit markup; fixed quote by rental duration. No payment due.',
+            'Demo supplier allocation backed by Wick. Fixed gross rental quote; provider keeps 85% before compute costs and Broker receives 15%. No payment due.',
             price,
             pricing,
           ],

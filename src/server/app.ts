@@ -118,7 +118,7 @@ export async function buildApp(
       return {
         user,
         modes: { wick: config.wickMode, muse: config.museMode },
-        targetMarkupBps: config.targetMarkupBps,
+        commissionBps: 1500,
         catalog: await getCatalog(ctx),
       };
     } catch (error) {

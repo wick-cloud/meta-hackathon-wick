@@ -8,8 +8,14 @@ import { migrate } from '../src/server/db.js';
 import { loadConfig } from '../src/server/config.js';
 import type { AppContext } from '../src/server/context.js';
 import type { Actor, CatalogItem } from '../src/shared/types.js';
-import { QUEUES } from '../src/server/marketplace/db.js';
-import { closeAuction, createRequest, submitBid } from '../src/server/marketplace/auction.js';
+import { QUEUES, transaction } from '../src/server/marketplace/db.js';
+import { revenueShare } from '../src/shared/pricing.js';
+import {
+  awardHeldBid,
+  closeAuction,
+  createRequest,
+  submitBid,
+} from '../src/server/marketplace/auction.js';
 import {
   cleanupVm,
   markReady,
@@ -612,9 +618,53 @@ describe.skipIf(!databaseUrl)('PostgreSQL marketplace concurrency and invariants
     expect(invoices[0].total_cents).toBe(200);
     expect(invoices[0].fee_cents).toBe(0);
     expect(invoices[0].status).toBe('demo');
+    expect(invoices[0].revenue_share).toBeNull(); // A pre-commission binding bid stays historical.
+    expect(vm.quote_snapshot).not.toHaveProperty('revenueShare');
     expect(
       (await pool.query('SELECT status FROM broker_vms WHERE id=$1', [vm.id])).rows[0].status,
     ).toBe('running');
+  });
+
+  it('freezes the exact provider share at binding bid and copies it once at concurrent readiness', async () => {
+    const supplier = await provider();
+    const requestId = await request();
+    const accepted = await submitBid(ctx, supplier.actor, requestId, { totalPriceCents: 200 });
+    const split = revenueShare(200);
+    expect(accepted.revenueShare).toEqual(split);
+    const { vmId } = await transaction(pool, async (db) => {
+      const r = (
+        await db.query('SELECT * FROM broker_requests WHERE id=$1 FOR UPDATE', [requestId])
+      ).rows[0];
+      await db.query('SELECT id FROM broker_providers WHERE id=$1 FOR UPDATE', [
+        supplier.providerId,
+      ]);
+      const b = (await db.query('SELECT * FROM broker_bids WHERE id=$1', [accepted.id])).rows[0];
+      return awardHeldBid(ctx, db, r, b);
+    });
+    const frozen = (await pool.query('SELECT quote_snapshot FROM broker_vms WHERE id=$1', [vmId]))
+      .rows[0].quote_snapshot;
+    expect(frozen.revenueShare).toEqual(split);
+    const { lifecycle } = lifecycleContext({
+      id: 'test-commission-environment',
+      status: 'running',
+      expiresAt: new Date(Date.now() + 1800000).toISOString(),
+    });
+    await Promise.all(Array.from({ length: 4 }, () => provisionVm(lifecycle, vmId)));
+    await Promise.all(Array.from({ length: 4 }, () => markReady(lifecycle, vmId)));
+    const invoices = (await pool.query('SELECT * FROM broker_invoices WHERE vm_id=$1', [vmId]))
+      .rows;
+    expect(invoices).toHaveLength(1);
+    expect(invoices[0]).toMatchObject({
+      subtotal_cents: 200,
+      fee_cents: 0,
+      total_cents: 200,
+      revenue_share: split,
+      status: 'demo',
+    });
+    expect(
+      (await pool.query('SELECT quote_snapshot FROM broker_vms WHERE id=$1', [vmId])).rows[0]
+        .quote_snapshot,
+    ).toEqual(frozen);
   });
 
   it('does not charge for running without terminal capability and never extends observed admission expiry', async () => {

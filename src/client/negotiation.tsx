@@ -762,6 +762,7 @@ export function AlternativeDetail({ id }: { id: string }) {
           <DetailRow label="Fixed full rental total">
             {money(selected.totalPriceCents)} · No payment due
           </DetailRow>
+          <DetailRow label="Added buyer fee">$0.00 · Provider pays Broker’s 15%</DetailRow>
           <DetailRow label="Offer expires">{dateTime(selected.expiresAt)}</DetailRow>
           <ul>
             {selected.tradeoffs.map((tradeoff, index) => (

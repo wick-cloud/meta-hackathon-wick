@@ -4,7 +4,7 @@ This runner allocates paid real Wick VMs only after the parent authorizes execut
 
 The runner starts exactly one Broker process itself. Use a **fresh local PostgreSQL database** named, for example, `broker_scale_<unique_suffix>`. The selected database must have no existing users or requests and must differ from the private preview `DATABASE_URL`. A runner advisory lock and a peer-connection check reject competing applications. Never launch another Broker against this database: normal worker startup clears leases.
 
-The parent must supply a reviewed managed configuration. Defaults pin E2B / micro / us and `e2b:micro:us`; the runner will fail rather than choose a fallback. Boat customer allocations are excluded; the existing Boat development VM remains only the application host. The real catalog is read dynamically, explicitly approved through the admin HTTP API, and a demo supplier allocation is created. This account does not represent an independent real provider. The fixed 15-minute quote uses the offering's frozen rate and configured markup. Invoices are unique, quote-matching records labeled **No payment due**; they do not assert settled Wick usage.
+The parent must supply a reviewed managed configuration. Defaults pin E2B / micro / us and `e2b:micro:us`; the runner will fail rather than choose a fallback. Boat customer allocations are excluded; the existing Boat development VM remains only the application host. The real catalog is read dynamically, explicitly approved through the admin HTTP API, and a demo supplier allocation is created. This account does not represent an independent real provider. New fixed 15-minute quotes use the offering's frozen rate and the 15% provider commission model. Historical scale reports retain the pricing model actually tested. Invoices are unique, quote-matching records labeled **No payment due**; they do not assert settled Wick usage.
 
 Prerequisites: Node 24, installed dependencies, local PostgreSQL, and the Linux `flock` executable (util-linux). Do not invoke `db:seed` or `seed:production`. Build output for review is `.verify-dist`, preserving the preview's existing `dist` files.
 
@@ -20,7 +20,6 @@ Supply values privately; never paste credentials into commands, reports, Git, or
 - `SCALE_APP_URL` (a loopback HTTP origin on an unused port other than 3000)
 - `SCALE_JOURNAL` (a new absolute JSONL path inside `/home/user/wick-workspace/.broker-run/real-wick-20261028`)
 - `SCALE_APPROVED_PROVIDER`, `SCALE_APPROVED_PROFILE`, `SCALE_APPROVED_REGION`, `SCALE_APPROVED_CATALOG_ID` (optional reviewed overrides)
-- `BROKER_TARGET_MARKUP_BPS` (optional; application default 2000 means 20%)
 - `SCALE_LIVE_APPROVED` (required **only** for `run`, literal `20-real-vms-15-minutes`)
 
 `DATABASE_URL` may remain the private preview value; the runner compares it against `TEST_DATABASE_URL` and passes only the test URL into its app. Test passwords are generated in memory, hashed into the fresh test database, and never written to the journal. The watchdog requires the same scoped Wick credential and approval metadata, but it needs no buyer cookie or password.

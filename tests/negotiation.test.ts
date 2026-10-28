@@ -18,7 +18,7 @@ import {
 import { createMuseAdapter } from '../src/server/integrations/muse.js';
 import { cleanupVm, provisionVm, terminateVm } from '../src/server/marketplace/lifecycle.js';
 import { requestView } from '../src/server/marketplace/data.js';
-import { managedPricing } from '../src/shared/pricing.js';
+import { managedPricing, revenueShare } from '../src/shared/pricing.js';
 import Fastify from 'fastify';
 import { registerNegotiation } from '../src/server/marketplace/negotiation.js';
 import { createWickAdapter } from '../src/server/integrations/wick.js';
@@ -521,6 +521,18 @@ describe.skipIf(!databaseUrl)('buyer-reviewed nonbinding negotiation', () => {
     expect(spy).toHaveBeenCalledTimes(1);
     await app.close();
   });
+  it('requires renewed review for a pre-commission alternative even when its buyer total is unchanged', async () => {
+    const p = await proposed();
+    await pool.query(
+      "UPDATE broker_counteroffers SET snapshot=snapshot-'revenueShare' WHERE id=$1",
+      [p.offers[0].id],
+    );
+    await expect(
+      acceptCounteroffer(ctx, buyer, p.intent.id, p.offers[0].id, { operationKey: randomUUID() }),
+    ).rejects.toThrow(/commission changed/);
+    expect(await counts()).toEqual({ requests: 0, holds: 0, vms: 0 });
+  });
+
   it('uses current real rates and deterministic supplier floor, then rejects stale source rates', async () => {
     const real = {
       ...item,
@@ -559,6 +571,47 @@ describe.skipIf(!databaseUrl)('buyer-reviewed nonbinding negotiation', () => {
     ).rejects.toThrow(/stale/);
     expect(await counts()).toEqual({ requests: 0, holds: 0, vms: 0 });
   });
+  it('binds a real-rate counteroffer with the exact 15% split without contacting Wick', async () => {
+    const real = {
+      ...item,
+      organizationId: 'test-org',
+      groupId: 'test-group',
+      rateMicrosPerSecond: 23,
+      rateRetrievedAt: new Date().toISOString(),
+      rateSource: 'wick-customer-catalog' as const,
+      pricingMode: 'managed' as const,
+      managedRouteVerification: 'execution-preview-managed' as const,
+    };
+    ctx.wick = { ...ctx.wick, mode: 'real' };
+    await pool.query("UPDATE broker_catalog SET source_mode='real',item=$1 WHERE id=$2", [
+      real,
+      item.id,
+    ]);
+    await pool.query('UPDATE broker_offerings SET pricing=$1 WHERE id=$2', [
+      managedPricing(real),
+      offeringId,
+    ]);
+    const p = await proposed();
+    const offer = p.offers[0];
+    const key = randomUUID();
+    const accepted = await acceptCounteroffer(ctx, buyer, p.intent.id, offer.id, {
+      operationKey: key,
+    });
+    expect(
+      await acceptCounteroffer(ctx, buyer, p.intent.id, offer.id, { operationKey: key }),
+    ).toEqual(accepted);
+    const snap = (
+      await pool.query('SELECT quote_snapshot FROM broker_vms WHERE id=$1', [accepted.vmId])
+    ).rows[0].quote_snapshot;
+    expect(snap.totalPriceCents).toBe(offer.totalPriceCents);
+    expect(snap.revenueShare).toEqual(revenueShare(offer.totalPriceCents));
+    expect(BigInt(snap.revenueShare.providerNetMicros)).toBeGreaterThanOrEqual(
+      BigInt(snap.pricing.upstreamEstimatedComputeMicros),
+    );
+    expect(await counts()).toEqual({ requests: 1, holds: 1, vms: 1 });
+    expect((await pool.query('SELECT count(*)::int AS n FROM broker_invoices')).rows[0].n).toBe(0);
+  });
+
   it('shares capacity with manual binding bids and keeps reserved slots spare', async () => {
     const p = await proposed();
     const request = await createRequest(ctx, buyer, {
@@ -591,6 +644,12 @@ describe.skipIf(!databaseUrl)('buyer-reviewed nonbinding negotiation', () => {
     ).rows;
     expect(invoices).toHaveLength(1);
     expect(invoices[0].total_cents).toBe(p.offers[0].totalPriceCents);
+    expect(invoices[0].fee_cents).toBe(0);
+    expect(invoices[0].revenue_share).toEqual(revenueShare(p.offers[0].totalPriceCents));
+    expect(
+      (await pool.query('SELECT quote_snapshot FROM broker_vms WHERE id=$1', [accepted.vmId]))
+        .rows[0].quote_snapshot.revenueShare,
+    ).toEqual(invoices[0].revenue_share);
     await terminateVm(ctx, buyer.id, accepted.vmId);
     await cleanupVm(ctx, accepted.vmId);
     expect((await counts()).holds).toBe(1);

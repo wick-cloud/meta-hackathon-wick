@@ -169,8 +169,35 @@ export async function registerMarketplace(app: FastifyInstance, ctx: AppContext)
       createdAt: iso(r.created_at),
       catalogName: r.catalog_snapshot.name,
       label: 'No payment due',
+      ...(r.revenue_share ? { revenueShare: r.revenue_share } : {}),
       ...(r.quote_snapshot.pricing ? { pricing: r.quote_snapshot.pricing } : {}),
       simulated: true,
+    }));
+  });
+
+  app.get('/api/provider/earnings', async (request) => {
+    const provider = await getProvider(ctx.pool, await ctx.requireActor(request, ['provider']));
+    const { limit, cursor, cursorId } = pagination(request.query);
+    const rows = (
+      await ctx.pool.query(
+        `SELECT i.*,i.created_at::text AS cursor_created_at,v.catalog_snapshot->>'name' AS catalog_name
+         FROM broker_invoices i JOIN broker_vms v ON v.id=i.vm_id
+         WHERE i.provider_id=$1 AND ($2::timestamptz IS NULL OR (i.created_at,i.id)<($2,$3::uuid))
+         ORDER BY i.created_at DESC,i.id DESC LIMIT $4`,
+        [provider.id, cursor, cursorId, limit + 1],
+      )
+    ).rows;
+    return page(rows, limit, (r) => ({
+      id: r.id,
+      vmId: r.vm_id,
+      catalogName: r.catalog_name,
+      createdAt: iso(r.created_at),
+      totalCents: r.total_cents,
+      currency: r.currency,
+      status: r.status,
+      label: 'No payment due',
+      legacy: !r.revenue_share,
+      ...(r.revenue_share ? { revenueShare: r.revenue_share } : {}),
     }));
   });
 
@@ -443,7 +470,7 @@ export async function registerMarketplace(app: FastifyInstance, ctx: AppContext)
       if (ctx.wick.mode === 'real') {
         try {
           requireFreshManagedRate(c.item);
-          pricing = managedPricing(c.item, ctx.config.targetMarkupBps);
+          pricing = managedPricing(c.item);
         } catch (error) {
           throw new HttpError(400, (error as Error).message);
         }
@@ -565,7 +592,7 @@ export async function registerMarketplace(app: FastifyInstance, ctx: AppContext)
       if (!row) throw new HttpError(404, 'Configuration not found.');
       try {
         requireFreshManagedRate(row.item);
-        managedPricing(row.item, ctx.config.targetMarkupBps);
+        managedPricing(row.item);
       } catch (error) {
         throw new HttpError(400, (error as Error).message);
       }

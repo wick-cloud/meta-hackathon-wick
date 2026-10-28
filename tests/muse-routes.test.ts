@@ -60,7 +60,7 @@ async function harness(role: Role | 'anonymous' = 'buyer', wickMode: Mode = 'fix
     return { id: 'actor-owned-id', email: 'test@example.invalid', name: 'Test', role };
   });
   const ctx = {
-    config: { targetMarkupBps: 2000 },
+    config: {},
     pool: { query },
     wick: { mode: wickMode },
     muse: { translate, proposeOfferings },

@@ -15,21 +15,23 @@ npx tsx scripts/configure-real.ts --apply
 
 Required environment names: `DATABASE_URL`, `BETTER_AUTH_SECRET`, `WICK_MODE`, `MUSE_MODE`, `WICK_API_KEY`, `WICK_ORGANIZATION_ID`, `WICK_GROUP_ID`. Use the appropriate `APP_URL` and `NODE_ENV` for the existing preview. `WICK_API_BASE` defaults to the public Wick API.
 
-`--apply` also requires comma-separated `REAL_CATALOG_IDS` and `REAL_SUPPLIER_EMAILS`, identifying explicitly approved managed catalog configurations and existing provider accounts. Optional `REAL_SUPPLIER_CAPACITY` defaults to 1 per selected demo supplier, `REAL_SUPPLIER_AUTO_BID` defaults to true, and `BROKER_TARGET_MARKUP_BPS` defaults to 2000 (20%). The command updates only selected catalog configurations and demo supplier allocations/offerings. Repeated application is idempotent. It preserves users, passwords, sessions, existing reservations, invoices, fixture prices, and accepted quote snapshots. Applying configuration does not restart or publish the app.
+`--apply` also requires comma-separated `REAL_CATALOG_IDS` and `REAL_SUPPLIER_EMAILS`, identifying explicitly approved managed catalog configurations and existing provider accounts. Optional `REAL_SUPPLIER_CAPACITY` defaults to 1 per selected demo supplier, `REAL_SUPPLIER_AUTO_BID` defaults to true. Broker commission is fixed at 15% of the provider's gross rental total; there is no configurable target markup. The command updates only selected catalog configurations and demo supplier allocations/offerings. Repeated application is idempotent. It preserves users, passwords, sessions, existing reservations, invoices, fixture prices, and accepted quote snapshots. Applying configuration does not restart or publish the app.
 
 ## Price semantics
 
-The selected offering freezes `rateMicrosPerSecond`, provenance, retrieval time, and markup. Compute sizes use the offer's exact metadata. Optional catalog version, provider revision, currency, money unit, and mode are not required or invented.
+The selected offering freezes `rateMicrosPerSecond`, provenance and retrieval time. Compute sizes use the offer's exact metadata. Optional catalog version, provider revision, currency, money unit and mode are not required or invented.
 
-For a finite 15, 30, or 60 minute rental, the default target quote in USD cents is:
+The buyer's accepted total is the provider's gross rental revenue. Broker deducts 15% from that revenue, leaving 85% to the provider before compute costs. Broker adds no customer fee. For finite 15, 30 or 60 minute rentals, the suggested managed gross and minimum bid in USD cents are:
 
 ```text
-max(1, ceil(rateMicrosPerSecond × durationSeconds × (10000 + markupBps) / 100000000))
+max(1, ceil(rateMicrosPerSecond × durationSeconds / 8500))
 ```
 
-The target markup is a suggestion, not a mandatory bid price. Manual and Muse bids may differ, subject to supplier policy, buyer budget, and the upward-rounded upstream compute cost floor (minimum one cent). The actual accepted bid, target quote, and upstream estimate are frozen separately.
+One gross cent leaves 8,500 micro-USD to the provider. This floor covers the raw upstream estimate after commission; rounding the upstream estimate to cents first would overstate the floor. Manual and Muse bids may exceed the suggestion within supplier policy and buyer budget. The previous 20% target markup is not stacked onto the commission.
 
-All arithmetic is integral (`BigInt`), with one upward rounding after markup. The raw upstream full-term compute estimate stays in micro-USD and is explicitly an estimate. Customer fixed quote/invoice is separate from actual Wick internal usage; no invoice represents settled usage and no payment is due. Managed rates already include Wick's pricing, so no BYOK fee is added. Accepted quotes do not change when rates change. New bids reject changed rate snapshots, and preview/create carry the frozen `maximumPriceMicrosPerSecond`.
+For a gross price of `g` cents, the frozen Broker commission is `g × 1500` micro-USD and the provider's share is `g × 8500` micro-USD. Integer arithmetic preserves exactly 15% and 85%, including small rentals: a $0.03 total has a $0.0045 Broker share and a $0.0255 provider share. This accounting precision does not introduce a payment processor or settlement policy. Buyer invoice fees stay zero; invoices say **No payment due**.
+
+New binding bids and accepted counteroffers freeze their revenue split, which is copied into the invoice only on readiness. Historical accepted bids, VM quotes and invoices retain their original economics. Existing records without a commission snapshot display as legacy; they are not assigned a new fee retroactively. New business uses the commission model, including bids against older active offerings. Published rates remain subject to freshness and change checks. Preview/create carry the frozen `maximumPriceMicrosPerSecond`. Managed rates already include Wick pricing; BYOK remains unsupported.
 
 New requests, approvals, offerings, and bids require catalog retrieval within 15 minutes, allowing at most 60 seconds of future clock skew. Historical quotes remain readable unchanged. Refresh the catalog when stale. Boat customer allocations are excluded by explicit user choice. The live test selects `e2b:micro:us`; setup still requires explicit catalog IDs. E2B advertises BYOK capability, so capability alone cannot prove the selected billing route. For each E2B candidate, the official SDK performs a bounded, read-only execution preview in the configured organization/group and requires exact provider/profile/region, `billingMode=wick_managed`, no provider key, `externalCompute=false`, and no fallback offers. Unsupported, BYOK, or ambiguous selected routes remain unavailable. A bounded read-only E2B Micro/us preview passed with these checks; it did not allocate an environment. Catalog rates remain dynamic. Actual create has no extra asynchronous preflight between the safety gate and SDK transport; the catalog proof is frozen alongside its retrieval time, and the actual environment must pass the independent billing check. Actual environment ownership and `billingMode=wick_managed` with no provider key must be verified before invoicing; unexpected owned BYOK resources are quarantined for cleanup without a charge.
 
@@ -47,7 +49,7 @@ npx tsc -p tsconfig.server.json --outDir .verify-dist
 npx tsx scripts/verify-fixture-browser.ts
 ```
 
-The browser harness creates fresh test identities, starts one fixture app on loopback port 3301, runs the six existing browsers, and closes its process. `FIXTURE_BROWSER_PORT` can choose another port except 3000; `FIXTURE_BROWSER_ARTIFACTS` should point into the private control directory. It never resets existing account passwords or uses the preview process. `.verify-dist` is ignored so building does not replace assets served by a live preview.
+The browser harness creates fresh test identities, starts one fixture app on loopback port 3301, runs the browser scenarios, and closes its process. `FIXTURE_BROWSER_PORT` can choose another port except 3000; `FIXTURE_BROWSER_ARTIFACTS` should point into the private control directory. It never resets existing account passwords or uses the preview process. `.verify-dist` is ignored so building does not replace assets served by a live preview.
 
 ## Separately authorized live scale run
 
