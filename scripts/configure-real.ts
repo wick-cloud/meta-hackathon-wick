@@ -32,7 +32,7 @@ async function main() {
               rateMicrosPerSecond: item.rateMicrosPerSecond,
               rateRetrievedAt: item.rateRetrievedAt,
               quoteCents: Object.fromEntries(
-                [15, 30, 60].map((duration) => [
+                item.durationMinutes.map((duration) => [
                   duration,
                   fixedQuote(managedPricing(item, config.targetMarkupBps), duration)
                     .totalPriceCents,
