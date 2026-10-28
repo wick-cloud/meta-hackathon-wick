@@ -15,6 +15,7 @@ export interface CreateEnvironmentInput {
   region?: string;
   providerKeyId?: string;
   ttlSeconds: number;
+  maximumPriceMicrosPerSecond?: number;
   visibility: 'private';
 }
 export interface WickEnvironment {
@@ -37,6 +38,22 @@ export interface WickSession {
   terminalWebsocketUrl: string;
   expiresAt: string;
 }
+export type WickTerminalEvent =
+  | { type: 'ready' }
+  | { type: 'output'; data: Uint8Array }
+  | { type: 'exit'; exitCode: number }
+  | { type: 'pong' };
+export interface WickTerminal extends AsyncIterable<WickTerminalEvent> {
+  input(data: string): void;
+  resize(cols: number, rows: number): void;
+  ack(bytes: number): void;
+  close(): void;
+}
+export interface WickTerminalOptions {
+  cols?: number;
+  rows?: number;
+  signal?: AbortSignal;
+}
 export interface WickAdapter {
   mode: 'fixture' | 'real';
   catalog(): Promise<CatalogItem[]>;
@@ -45,6 +62,7 @@ export interface WickAdapter {
   get(id: string): Promise<WickEnvironment>;
   connections(id: string): Promise<WickConnections>;
   session(id: string): Promise<WickSession>;
+  terminal(id: string, options?: WickTerminalOptions): Promise<WickTerminal>;
   terminate(id: string): Promise<void>;
 }
 export interface MuseAdapter {

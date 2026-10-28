@@ -1,4 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { Wick, WickError, WickTimeoutError } from '@wick-cloud/sdk';
+import WebSocket from 'ws';
+import { fixtureTerminal } from './terminal-fixture.js';
 import type { Pool } from 'pg';
 import type { CatalogItem } from '../../shared/types.js';
 import type {
@@ -8,6 +11,7 @@ import type {
   WickCreateResult,
   WickEnvironment,
   WickSession,
+  WickTerminal,
 } from './types.js';
 
 export interface WickConfig {
@@ -98,7 +102,7 @@ export function parseSession(value: unknown, environmentId: string): WickSession
   const token = string(raw.token, 'session token');
   const terminalWebsocketUrl = string(raw.terminalWebsocketUrl, 'terminalWebsocketUrl');
   const url = new URL(terminalWebsocketUrl);
-  if (url.protocol !== 'wss:' || url.username || url.password)
+  if (url.protocol !== 'wss:' || url.username || url.password || url.search || url.hash)
     throw new WickApiError('Wick terminal URL must use secure WebSocket transport');
   const expiresAt = timestamp(session.expiresAt, 'session.expiresAt');
   if (Date.parse(expiresAt) <= Date.now() + 5000)
@@ -121,9 +125,16 @@ export function parseCatalog(
     }),
   );
   const result: CatalogItem[] = [];
+  const rateRetrievedAt = new Date().toISOString();
   for (const value of raw.offers) {
     const offer = object(value, 'offer');
     if (offer.available !== true) continue;
+    // Connection-specific BYOK offers have no approved complete cost semantics.
+    if (offer.providerKeyId != null || offer.mode === 'byok' || offer.scope === 'organization')
+      continue;
+    const rate = offer.rateMicrosPerSecond;
+    if (!Number.isSafeInteger(rate) || (rate as number) < 0)
+      throw new WickApiError('Wick offer has invalid rateMicrosPerSecond');
     const profileId = string(offer.profile, 'offer.profile');
     const profile = profiles.get(profileId);
     if (!profile) throw new WickApiError('Wick offer refers to an unknown resource profile');
@@ -147,6 +158,17 @@ export function parseCatalog(
       provider,
       profile: profileId,
       region,
+      rateMicrosPerSecond: rate as number,
+      rateRetrievedAt,
+      rateSource: 'wick-customer-catalog',
+      pricingMode: 'managed',
+      resources: {
+        cpu: finitePositive(resources.cpu, 'resources.cpu'),
+        memoryGb: finitePositive(resources.memoryMiB, 'resources.memoryMiB') / 1024,
+        ...(typeof resources.diskMiB === 'number'
+          ? { diskGb: finitePositive(resources.diskMiB, 'resources.diskMiB') / 1024 }
+          : {}),
+      },
       cpu: finitePositive(resources.cpu, 'resources.cpu'),
       memoryGb: finitePositive(resources.memoryMiB, 'resources.memoryMiB') / 1024,
       durationMinutes,
@@ -158,7 +180,9 @@ export function parseCatalog(
   return result;
 }
 
-function createBody(input: CreateEnvironmentInput): CreateEnvironmentInput {
+function createBody(
+  input: CreateEnvironmentInput,
+): CreateEnvironmentInput & { profile: 'micro' | 'small' | 'medium' | 'large' } {
   if (!RENTAL_SECONDS.includes(input.ttlSeconds) || input.visibility !== 'private') {
     throw new WickApiError(
       'Only private, finite 15, 30, or 60 minute rentals are supported',
@@ -171,17 +195,28 @@ function createBody(input: CreateEnvironmentInput): CreateEnvironmentInput {
       throw new WickApiError(`Invalid Wick create ${field}`, 400, true);
     }
   }
+  if (!['micro', 'small', 'medium', 'large'].includes(input.profile))
+    throw new WickApiError('Unsupported Wick resource profile', 400, true);
+  if (
+    input.maximumPriceMicrosPerSecond !== undefined &&
+    (!Number.isSafeInteger(input.maximumPriceMicrosPerSecond) ||
+      input.maximumPriceMicrosPerSecond < 0)
+  )
+    throw new WickApiError('Invalid frozen Wick price limit', 400, true);
   // Deliberately enumerate fields: no repository, agent, setup, task, secret or arbitrary execution input.
   return {
     organizationId: input.organizationId,
     groupId: input.groupId,
     name: input.name,
     provider: input.provider,
-    profile: input.profile,
+    profile: input.profile as 'micro' | 'small' | 'medium' | 'large',
     ttlSeconds: input.ttlSeconds,
     visibility: 'private',
     ...(input.region ? { region: input.region } : {}),
     ...(input.providerKeyId ? { providerKeyId: input.providerKeyId } : {}),
+    ...(input.maximumPriceMicrosPerSecond === undefined
+      ? {}
+      : { maximumPriceMicrosPerSecond: input.maximumPriceMicrosPerSecond }),
   };
 }
 
@@ -213,127 +248,173 @@ async function readJson(response: Response): Promise<unknown> {
 function realAdapter(config: WickConfig): WickAdapter {
   if (!config.wickApiKey) throw new Error('WICK_API_KEY is required when WICK_MODE=real');
   const base = new URL(config.wickApiBase.replace(/\/$/, '') + '/');
-  if (base.protocol !== 'https:' || base.username || base.password)
+  if (base.protocol !== 'https:' || base.username || base.password || base.search || base.hash)
     throw new Error('WICK_API_BASE must be a credential-free HTTPS URL');
-  const request = async (
-    path: string,
-    options: { method?: string; body?: unknown; key?: string } = {},
-  ): Promise<unknown> => {
-    const controller = new AbortController();
-    const deadline = setTimeout(() => controller.abort(), 12_000);
-    try {
-      const response = await fetch(new URL(path.replace(/^\//, ''), base), {
-        method: options.method ?? 'GET',
-        redirect: 'error',
-        signal: controller.signal,
-        headers: {
-          Authorization: `Bearer ${config.wickApiKey}`,
-          Accept: 'application/json',
-          'x-wick-vocabulary': 'snapshots',
-          ...(options.body === undefined ? {} : { 'Content-Type': 'application/json' }),
-          ...(options.key ? { 'Idempotency-Key': options.key } : {}),
-        },
-        ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
+
+  // The SDK owns request framing, idempotency, scoped terminal authentication and renewal.
+  // This transport boundary adds response limits and validates every session, including renewals.
+  const boundedFetch: typeof fetch = async (input, options) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    if (url.origin !== base.origin || !url.pathname.startsWith(base.pathname))
+      throw new WickApiError('Wick request origin is outside the configured API');
+    const headers = new Headers(options?.headers);
+    headers.set('Accept', 'application/json');
+    headers.set('x-wick-vocabulary', 'snapshots');
+    const response = await fetch(url, { ...options, headers, redirect: 'error' });
+    if (
+      (response.url && new URL(response.url).origin !== base.origin) ||
+      (response.status >= 300 && response.status < 400)
+    ) {
+      await response.body?.cancel();
+      throw new WickApiError('Wick redirects are not allowed');
+    }
+    if (!response.ok) {
+      await response.body?.cancel();
+      // Do not let the SDK parse, retain or expose the service's arbitrary error body.
+      return new Response(JSON.stringify({ error: { code: 'HTTP_REJECTED' } }), {
+        status: response.status,
       });
-      if (!response.ok) {
-        await response.body?.cancel();
-        const rejected = path === '/v1/environments' && [400, 422].includes(response.status);
-        throw new WickApiError(
-          `Wick API rejected the request (HTTP ${response.status})`,
-          response.status,
-          rejected,
-        );
-      }
-      return await readJson(response);
+    }
+    if (response.status === 204) return response;
+    const body = await readJson(response);
+    const sessionMatch = url.pathname.match(/\/environments\/([^/]+)\/sessions$/);
+    if (sessionMatch) {
+      const session = parseSession(body, decodeURIComponent(sessionMatch[1]!));
+      if (session.token === config.wickApiKey)
+        throw new WickApiError('Wick session did not provide a scoped token');
+    }
+    return new Response(JSON.stringify(body), {
+      status: response.status,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  };
+  const sdk = new Wick({
+    baseUrl: base.toString().replace(/\/$/, ''),
+    token: config.wickApiKey,
+    timeoutMs: 12_000,
+    fetch: boundedFetch,
+    statusRetry: false,
+    webSocket: (endpoint) => {
+      const url = new URL(endpoint);
+      if (url.protocol !== 'wss:' || url.username || url.password || url.search || url.hash)
+        throw new WickApiError('Wick terminal URL must use secure WebSocket transport');
+      // There are deliberately no Authorization headers here. SDK sends only the scoped token.
+      const socket = new WebSocket(url, {
+        maxPayload: 256 * 1024,
+        perMessageDeflate: false,
+        followRedirects: false,
+        handshakeTimeout: 12_000,
+      });
+      socket.on('error', () => undefined);
+      socket.on('close', () => clearTimeout(forcedClose));
+      let forcedClose: ReturnType<typeof setTimeout> | undefined;
+      const originalClose = socket.close.bind(socket);
+      socket.close = (...args) => {
+        originalClose(...args);
+        forcedClose ??= setTimeout(() => socket.terminate(), 2000);
+        forcedClose.unref();
+      };
+      return socket as unknown as globalThis.WebSocket;
+    },
+  });
+  async function invoke<T>(work: () => Promise<T>, admission = false): Promise<T> {
+    try {
+      return await work();
     } catch (error) {
       if (error instanceof WickApiError) throw error;
+      if (error instanceof WickError)
+        throw new WickApiError(
+          `Wick API rejected the request (HTTP ${error.status})`,
+          error.status,
+          admission && [400, 422].includes(error.status),
+        );
       throw new WickApiError(
-        controller.signal.aborted
+        error instanceof WickTimeoutError
           ? 'Wick API deadline exceeded; outcome requires reconciliation'
           : 'Wick API could not be reached; outcome requires reconciliation',
       );
-    } finally {
-      clearTimeout(deadline);
     }
-  };
-  const envPath = (id: string) => `/v1/environments/${encodeURIComponent(id)}`;
+  }
+  function approvedBody(input: CreateEnvironmentInput) {
+    const body = createBody(input);
+    if (body.organizationId !== config.wickOrganizationId || body.groupId !== config.wickGroupId)
+      throw new WickApiError('Wick create target is outside the configured scope', 400, true);
+    if (body.providerKeyId) throw new WickApiError('BYOK pricing is unsupported', 400, true);
+    if (body.maximumPriceMicrosPerSecond === undefined)
+      throw new WickApiError('Real Wick creation requires a frozen maximum price', 400, true);
+    return body;
+  }
   return {
     mode: 'real',
     async catalog() {
-      const catalog = object(
-        await request(
-          `/v1/catalog?organizationId=${encodeURIComponent(config.wickOrganizationId)}`,
+      return parseCatalog(
+        await invoke(() =>
+          sdk.catalog.get({ query: { organizationId: config.wickOrganizationId } }),
         ),
-        'catalog',
+        config,
       );
-      // Organization provider metadata identifies pinned BYOK connections. Read only public metadata;
-      // no provider diagnostics or connection/account mutation is performed.
-      const result: CatalogItem[] = [];
-      let cursor: string | undefined;
-      for (let page = 0; page < 5; page++) {
-        const suffix = cursor ? `&cursor=${encodeURIComponent(cursor)}` : '';
-        const response = object(
-          await request(
-            `/v1/organizations/${encodeURIComponent(config.wickOrganizationId)}/providers?limit=200${suffix}`,
-          ),
-          'providers',
-        );
-        if (!Array.isArray(response.data))
-          throw new WickApiError('Wick providers response must contain data');
-        for (const value of response.data) {
-          const provider = object(value, 'provider');
-          if (provider.available !== true || provider.revokedAt != null) continue;
-          if (!Array.isArray(provider.offers))
-            throw new WickApiError('Wick provider has no offer list');
-          const items = parseCatalog(
-            { profiles: catalog.profiles, offers: provider.offers },
-            config,
-          );
-          const providerKeyId =
-            provider.providerKeyId == null
-              ? undefined
-              : string(provider.providerKeyId, 'provider.providerKeyId');
-          for (const item of items) {
-            if (provider.scope === 'organization' && !providerKeyId) continue; // No provable exact connection pin.
-            result.push(
-              providerKeyId
-                ? { ...item, id: `${providerKeyId}:${item.profile}:${item.region}`, providerKeyId }
-                : item,
-            );
-          }
-        }
-        if (response.nextCursor == null)
-          return [...new Map(result.map((item) => [item.id, item])).values()];
-        cursor = string(response.nextCursor, 'providers.nextCursor');
-      }
-      throw new WickApiError('Wick provider catalog exceeded the bounded pagination limit');
     },
     async preview(input) {
-      return request('/v1/environments/preview', { method: 'POST', body: createBody(input) });
+      const body = approvedBody(input);
+      return invoke(() => sdk.environments.preview({ body }), true);
     },
     async create(input, key) {
+      const body = approvedBody(input);
       if (key.length < 8 || key.length > 200)
         throw new WickApiError('Invalid persisted idempotency key', 400, true);
       return parseCreateResult(
-        await request('/v1/environments', { method: 'POST', body: createBody(input), key }),
+        await invoke(() => sdk.environments.create({ body, idempotencyKey: key }), true),
       );
     },
     async get(id) {
-      const environment = parseEnvironment(await request(envPath(id)));
+      const environment = parseEnvironment(
+        await invoke(() => sdk.environments.get({ path: { id } })),
+      );
       if (environment.id !== id)
         throw new WickApiError('Wick returned an environment outside the requested scope');
       return environment;
     },
     async connections(id) {
-      return parseConnections(await request(`${envPath(id)}/connections`));
+      return parseConnections(
+        await invoke(() => sdk.environments.getConnections({ path: { id } })),
+      );
     },
     async session(id) {
-      return parseSession(await request(`${envPath(id)}/sessions`, { method: 'POST' }), id);
+      return parseSession(await invoke(() => sdk.environments.createSession({ path: { id } })), id);
+    },
+    async terminal(id, options = {}): Promise<WickTerminal> {
+      const terminal = await invoke(() =>
+        sdk.environments.terminal(id, { ...options, timeoutMs: 12_000 }),
+      );
+      return {
+        input: (data) => terminal.input(data),
+        resize: (cols, rows) => terminal.resize(cols, rows),
+        ack: (bytes) => terminal.ack(bytes),
+        close: () => terminal.close(),
+        async *[Symbol.asyncIterator]() {
+          try {
+            for await (const event of terminal) {
+              if (event.type === 'ready') {
+                if (event.environmentId !== id)
+                  throw new WickApiError('Wick terminal scope does not match environment');
+                yield { type: 'ready' as const };
+              } else if (event.type === 'output' || event.type === 'exit' || event.type === 'pong')
+                yield event;
+              else if (event.type !== 'renewed')
+                throw new WickApiError('Unsupported Wick terminal event');
+            }
+          } catch {
+            throw new WickApiError('Wick terminal connection failed');
+          } finally {
+            terminal.close();
+          }
+        },
+      };
     },
     async terminate(id) {
-      // Acceptance is not cleanup. Callers must poll get() until a confirmed terminal lifecycle state.
+      // Acceptance is not cleanup: callers poll get() for confirmed termination.
       const result = parseCreateResult(
-        await request(`${envPath(id)}/terminate`, { method: 'POST' }),
+        await invoke(() => sdk.environments.terminate({ path: { id } })),
       );
       if (result.environment.id !== id)
         throw new WickApiError(
@@ -475,6 +556,12 @@ function fixtureAdapter(config: WickConfig, pool: Pool): WickAdapter {
           Math.min(Date.now() + 240_000, Date.parse(environment.expiresAt!)),
         ).toISOString(),
       };
+    },
+    async terminal(id, options) {
+      const environment = await get(id);
+      if (environment.status !== 'running')
+        throw new WickApiError('Simulated terminal is unavailable', 409);
+      return fixtureTerminal(options);
     },
     async terminate(id) {
       const result = await pool.query(

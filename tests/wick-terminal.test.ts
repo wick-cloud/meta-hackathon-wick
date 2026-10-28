@@ -1,8 +1,10 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
 import websocket from '@fastify/websocket';
 import WebSocket from 'ws';
 import { parseTerminalInput, registerTerminal } from '../src/server/integrations/terminal.js';
+import type { WickTerminal, WickTerminalOptions } from '../src/server/integrations/types.js';
+import { fixtureTerminal } from '../src/server/integrations/terminal-fixture.js';
 import { HttpError, type AppContext } from '../src/server/context.js';
 
 const vmId = '00000000-0000-4000-8000-000000000001';
@@ -13,13 +15,16 @@ afterEach(async () => {
   await Promise.all(instances.splice(0).map((app) => app.close()));
 });
 
-async function harness() {
+async function harness(
+  mode: 'fixture' | 'real' = 'fixture',
+  terminal: (options?: WickTerminalOptions) => WickTerminal = fixtureTerminal,
+) {
   const state = {
     authenticated: true,
     owner: 'buyer-one',
     status: 'running',
     expiresAt: new Date(Date.now() + 60_000),
-    sourceMode: 'fixture',
+    sourceMode: mode as string,
   };
   const app = Fastify({ logger: false });
   app.setErrorHandler((error, _request, reply) =>
@@ -30,7 +35,10 @@ async function harness() {
   await app.register(websocket, { options: { maxPayload: 33792 } });
   await registerTerminal(app, {
     config: { appUrl: 'http://localhost:3000' },
-    wick: { mode: 'fixture' },
+    wick: {
+      mode,
+      terminal: async (_id: string, options: WickTerminalOptions) => terminal(options),
+    },
     requireActor: async () => {
       if (!state.authenticated) throw new HttpError(401, 'Sign in required');
       return { id: 'buyer-one', role: 'buyer' };
@@ -158,6 +166,54 @@ describe('same-origin terminal bridge', () => {
       .join('');
     expect(output).toContain('simulated demo terminal');
     expect(output).not.toContain('root:x:');
+  });
+  it('bridges decoded real output exactly, waits for ready, returns pong, and acknowledges only consumed bytes', async () => {
+    const bytes = Buffer.from([0, 255, 195, 169, 13, 10]);
+    let finish!: () => void;
+    const ended = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const input = vi.fn(),
+      resize = vi.fn(),
+      ack = vi.fn();
+    const { connect } = await harness('real', () => ({
+      input,
+      resize,
+      ack,
+      close: finish,
+      async *[Symbol.asyncIterator]() {
+        yield { type: 'output' as const, data: bytes };
+        yield { type: 'ready' as const };
+        await ended;
+      },
+    }));
+    const socket = connect();
+    const frames: Record<string, unknown>[] = [];
+    const ready = new Promise<void>((resolve) =>
+      socket.on('message', (raw) => {
+        const frame = JSON.parse(raw.toString()) as Record<string, unknown>;
+        frames.push(frame);
+        if (frame.type === 'ready') resolve();
+      }),
+    );
+    await opened(socket);
+    await ready;
+    expect(frames).toContainEqual({ type: 'ready', mode: 'real' });
+    expect(frames).toContainEqual({ type: 'output', data: bytes.toString('base64') });
+    const pong = new Promise<void>((resolve) =>
+      socket.on('message', (raw) => {
+        if ((JSON.parse(raw.toString()) as { type: string }).type === 'pong') resolve();
+      }),
+    );
+    socket.send(JSON.stringify({ type: 'ack', bytes: bytes.length }));
+    socket.send(JSON.stringify({ type: 'input', data: 'user-command\r' }));
+    socket.send(JSON.stringify({ type: 'resize', cols: 90, rows: 25 }));
+    socket.send(JSON.stringify({ type: 'ping' }));
+    await pong;
+    expect(ack).toHaveBeenCalledExactlyOnceWith(bytes.length);
+    expect(input).toHaveBeenCalledExactlyOnceWith('user-command\r');
+    expect(resize).toHaveBeenCalledExactlyOnceWith(90, 25);
+    expect(JSON.stringify(frames)).not.toContain('token');
   });
   it('closes an established session when authentication is revoked', async () => {
     const { connect, state } = await harness();

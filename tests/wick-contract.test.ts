@@ -25,6 +25,7 @@ const create: CreateEnvironmentInput = {
   profile: 'small',
   region: 'us-east',
   ttlSeconds: 1800,
+  maximumPriceMicrosPerSecond: 5,
   visibility: 'private',
 };
 // Synthetic values shaped against the public OpenAPI, not captured customer data.
@@ -72,7 +73,7 @@ describe('public Wick REST contract', () => {
     const response = {
       session: { id: 'session_test', environmentId: 'env_test', expiresAt },
       token: 'scoped-token',
-      terminalWebsocketUrl: 'wss://wick.example/terminal?token=scoped-token',
+      terminalWebsocketUrl: 'wss://wick.example/terminal',
     };
     expect(parseSession(response, 'env_test')).toEqual({
       token: response.token,
@@ -103,6 +104,7 @@ describe('public Wick REST contract', () => {
       region: 'us-east',
       maxTtlSeconds: 1800,
       available: true,
+      rateMicrosPerSecond: 5,
     };
     const catalog = parseCatalog(
       {
@@ -118,7 +120,7 @@ describe('public Wick REST contract', () => {
       config,
     );
     expect(catalog).toEqual([
-      {
+      expect.objectContaining({
         id: 'boat:small:us-east',
         name: 'Small · boat',
         description: 'Small machine',
@@ -131,7 +133,11 @@ describe('public Wick REST contract', () => {
         approved: false,
         organizationId: 'org_test',
         groupId: 'grp_test',
-      },
+        rateMicrosPerSecond: 5,
+        rateSource: 'wick-customer-catalog',
+        rateRetrievedAt: expect.any(String),
+        pricingMode: 'managed',
+      }),
     ]);
     expect(() => parseCatalog({ items: [] }, config)).toThrow('profiles and offers');
   });
@@ -145,6 +151,7 @@ describe('public Wick REST contract', () => {
         agent: 'codex',
         repository: { url: 'https://example.invalid/private' },
         setup: 'run something',
+        environmentDefinition: { schemaVersion: 1, setup: [{ command: 'not authorized' }] },
       } as CreateEnvironmentInput,
       'persisted-key-123',
     );
@@ -152,75 +159,74 @@ describe('public Wick REST contract', () => {
     const [url, options] = fetcher.mock.calls[0]! as unknown as [URL, RequestInit];
     expect(url.toString()).toBe('https://wick.example/api/v1/environments');
     expect(options.redirect).toBe('error');
-    expect(options.headers).toMatchObject({
-      Authorization: 'Bearer test-service-key',
-      'Idempotency-Key': 'persisted-key-123',
+    expect(Object.fromEntries(new Headers(options.headers))).toMatchObject({
+      authorization: 'Bearer test-service-key',
+      'idempotency-key': 'persisted-key-123',
     });
     expect(JSON.parse(String(options.body))).toEqual(create);
   });
-  it('pins organization provider keys and bounds catalog pagination without inventing GPU metadata', async () => {
+  it('uses the filtered customer SDK catalog without requiring omitted schema metadata or BYOK provider reads', async () => {
     const offer = {
       provider: 'boat',
       profile: 'small',
-      region: 'us-east',
+      region: 'auto',
       maxTtlSeconds: 3600,
       available: true,
+      rateMicrosPerSecond: 5,
+      resources: { cpu: 1, memoryMiB: 2048, diskMiB: 4096 },
     };
-    const responses = [
-      { profiles: [{ id: 'small', name: 'Small', cpu: 2, memoryMiB: 4096 }], offers: [offer] },
-      {
-        data: [
-          {
-            id: 'private-connection',
-            scope: 'organization',
-            available: true,
-            providerKeyId: 'key_exact_target',
-            offers: [offer],
-          },
-        ],
-        nextCursor: 'next',
-      },
-      {
-        data: [
-          {
-            id: 'unproven-private-target',
-            scope: 'organization',
-            available: true,
-            offers: [offer],
-          },
-        ],
-        nextCursor: null,
-      },
-    ];
     const fetcher = vi.fn(
-      async () => new Response(JSON.stringify(responses.shift()), { status: 200 }),
+      async () =>
+        new Response(
+          JSON.stringify({
+            profiles: [{ id: 'small', name: 'Small', cpu: 2, memoryMiB: 4096 }],
+            offers: [offer, { ...offer, providerKeyId: 'byok-unapproved' }],
+          }),
+          { status: 200 },
+        ),
     );
     vi.stubGlobal('fetch', fetcher);
     const items = await createWickAdapter(config).catalog();
+    expect(fetcher).toHaveBeenCalledOnce();
     expect(items).toHaveLength(1);
     expect(items[0]).toMatchObject({
-      id: 'key_exact_target:small:us-east',
-      provider: 'boat',
-      providerKeyId: 'key_exact_target',
-      durationMinutes: [15, 30, 60],
+      id: 'boat:small:auto',
+      cpu: 1,
+      memoryGb: 2,
+      resources: { cpu: 1, memoryGb: 2, diskGb: 4 },
+      rateMicrosPerSecond: 5,
+      pricingMode: 'managed',
       approved: false,
     });
     expect(items[0]).not.toHaveProperty('gpu');
-    const thirdUrl = (fetcher.mock.calls[2]! as unknown as [URL])[0];
-    expect(thirdUrl.searchParams.get('cursor')).toBe('next');
+    expect(items[0]).not.toHaveProperty('providerKeyId');
+    expect(Number.isFinite(Date.parse(items[0]!.rateRetrievedAt!))).toBe(true);
   });
-  it('includes an administrator-approved provider key in the narrow ordinary-create body', async () => {
+  it('rejects unsupported BYOK before making a request', async () => {
+    const fetcher = vi.fn();
+    vi.stubGlobal('fetch', fetcher);
+    await expect(
+      createWickAdapter(config).create(
+        { ...create, providerKeyId: 'unapproved-target' },
+        'stable-key-123',
+      ),
+    ).rejects.toThrow('BYOK');
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+  it('sends the exact frozen price maximum through official SDK preview and create', async () => {
     const fetcher = vi.fn(async () => new Response(JSON.stringify(mutation), { status: 202 }));
     vi.stubGlobal('fetch', fetcher);
-    await createWickAdapter(config).create(
-      { ...create, providerKeyId: 'approved-target' },
-      'stable-key-123',
-    );
-    const options = (fetcher.mock.calls[0]! as unknown as [URL, RequestInit])[1];
-    expect(JSON.parse(String(options.body))).toEqual({
-      ...create,
-      providerKeyId: 'approved-target',
-    });
+    const adapter = createWickAdapter(config);
+    await adapter.preview(create);
+    await adapter.create(create, 'frozen-key-123');
+    expect(fetcher.mock.calls).toHaveLength(2);
+    for (const call of fetcher.mock.calls) {
+      const options = (call as unknown as [URL, RequestInit])[1];
+      expect(JSON.parse(String(options.body))).toEqual(create);
+    }
+    const { maximumPriceMicrosPerSecond: _rate, ...unpriced } = create;
+    await expect(adapter.create(unpriced, 'unpriced-key-123')).rejects.toThrow('frozen maximum');
+    expect(fetcher.mock.calls).toHaveLength(2);
   });
   it('replays the same key without generating a replacement and preserves upstream replay flag', async () => {
     const fetcher = vi.fn(
@@ -235,10 +241,8 @@ describe('public Wick REST contract', () => {
     expect(
       fetcher.mock.calls.every(
         (call) =>
-          (call as unknown as [URL, RequestInit])[1].headers &&
-          ((call as unknown as [URL, RequestInit])[1].headers as Record<string, string>)[
-            'Idempotency-Key'
-          ] === 'stable-key-123',
+          new Headers((call as unknown as [URL, RequestInit])[1].headers).get('Idempotency-Key') ===
+          'stable-key-123',
       ),
     ).toBe(true);
   });
@@ -294,6 +298,41 @@ describe('public Wick REST contract', () => {
     await expect(createWickAdapter(config).terminate('different-environment')).rejects.toThrow(
       'does not match',
     );
+  });
+  it('rejects redirected service-key requests and oversized responses without exposing upstream detail', async () => {
+    const fetcher = vi.fn(
+      async () =>
+        new Response('do not follow', {
+          status: 302,
+          headers: { Location: 'https://attacker.invalid/' },
+        }),
+    );
+    vi.stubGlobal('fetch', fetcher);
+    await expect(createWickAdapter(config).catalog()).rejects.toThrow('reconciliation');
+    expect(fetcher).toHaveBeenCalledOnce();
+    expect((fetcher.mock.calls[0] as unknown as [URL, RequestInit])[1].redirect).toBe('error');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response('x'.repeat(1024 * 1024 + 1))),
+    );
+    await expect(createWickAdapter(config).catalog()).rejects.toThrow('reconciliation');
+  });
+  it('rejects credential-bearing API bases and wrong organization/group before issuing calls', async () => {
+    const fetcher = vi.fn();
+    vi.stubGlobal('fetch', fetcher);
+    expect(() =>
+      createWickAdapter({ ...config, wickApiBase: 'https://secret@wick.example/api' }),
+    ).toThrow('credential-free');
+    await expect(
+      createWickAdapter(config).create(
+        { ...create, organizationId: 'different-org' },
+        'scope-key-123',
+      ),
+    ).rejects.toThrow('scope');
+    await expect(
+      createWickAdapter(config).create({ ...create, groupId: 'different-group' }, 'scope-key-123'),
+    ).rejects.toThrow('scope');
+    expect(fetcher).not.toHaveBeenCalled();
   });
   it('requires an explicit adapter mode and never replaces real errors with fixtures', async () => {
     expect(() => createWickAdapter({ ...config, wickMode: 'fixture' })).toThrow('PostgreSQL');
