@@ -179,7 +179,7 @@ function Login({ session, onSignedIn }: { session: Session; onSignedIn: () => Pr
                     ? 'Muse responses are fixtures, not model calls. '
                     : ''}
                   {session.modes.wick === 'real'
-                    ? 'Demo supplier allocations use Wick managed rates. No payment due.'
+                    ? 'VMs use the configured Wick account’s credits. Customer invoices are demo records; no payment is collected.'
                     : 'Supply and customer pricing are simulated.'}
                 </p>
               </div>
@@ -447,7 +447,7 @@ export default function App() {
                   <span className="demo-dot" />
                   {session.modes.wick === 'fixture'
                     ? 'Fixture environments & terminal'
-                    : 'Real Wick integration'}
+                    : 'Real Wick VMs · uses Wick credits'}
                 </span>
                 <span className="mode-banner-detail">
                   {session.modes.muse === 'fixture'

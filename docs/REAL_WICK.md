@@ -54,3 +54,11 @@ The browser harness creates fresh test identities, starts one fixture app on loo
 See [the live runner procedure](live-scale.md) for the private journal, isolated test database, detached watchdog, approval gate, runner, cleanup modes, and exact environment names. The runner uses one canary then nineteen additional 15-minute VMs. It measures actual simultaneous running state and twenty authenticated Broker terminal connections, uses unchanged 30-second auctions, exercises provider/global 21st-request rejection, and verifies fixed invoices and confirmed cleanup.
 
 Offline checks do not demonstrate live capacity, pricing availability, SDK interoperability with the deployed service, or live scale performance. No paid allocation or real Meta call is part of the offline verification phase.
+
+## Ongoing catalog freshness
+
+Real mode refreshes the live Wick catalog every five minutes using the existing in-process pg-boss scheduler. Startup queues a refresh when approved prices are older than five minutes. The refresh queue has one worker and bounded retries; a shared advisory lock prevents simultaneous manual and automatic refreshes. SDK reads occur outside SQL transactions.
+
+A successful refresh preserves approval flags and all frozen request, accepted-bid, VM, and invoice prices. Newly discovered configurations require approval. Failed refreshes preserve the previous successful timestamp, and the 15-minute admission freshness check remains enforced. If an upstream rate changes, providers must update their offering before new bids can use it.
+
+See [the observed 20-VM validation](live-scale-results.md) for live results and its exact scope.
