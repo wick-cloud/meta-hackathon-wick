@@ -21,7 +21,7 @@ const create: CreateEnvironmentInput = {
   organizationId: 'org_test',
   groupId: 'grp_test',
   name: 'broker-test',
-  provider: 'boat',
+  provider: 'e2b',
   profile: 'small',
   region: 'us-east',
   ttlSeconds: 1800,
@@ -34,7 +34,7 @@ const environment = {
   status: 'provisioning',
   createdAt: '2026-10-28T06:00:00.000Z',
   expiresAt: '2026-10-28T06:30:00.000Z',
-  provider: 'boat',
+  provider: 'e2b',
   profile: 'small',
   requiresReconciliation: false,
 };
@@ -64,7 +64,7 @@ describe('public Wick REST contract', () => {
     expect(() => parseEnvironment({ ...environment, status: 'paused' })).toThrow('unsupported');
     expect(() => parseEnvironment({ ...environment, expiresAt: 'tomorrow' })).toThrow('expiresAt');
     expect(() => parseConnections({ terminalWebsocketUrl: 'wss://wick.example' })).toThrow();
-    expect(parseConnections({ provider: 'boat', terminal: false, ssh: true })).toEqual({
+    expect(parseConnections({ provider: 'e2b', terminal: false, ssh: true })).toEqual({
       terminal: false,
     });
   });
@@ -99,7 +99,7 @@ describe('public Wick REST contract', () => {
   });
   it('maps only available offers and exact supported finite TTLs; starts real choices unapproved', () => {
     const offer = {
-      provider: 'boat',
+      provider: 'e2b',
       byok: { enabled: false },
       profile: 'small',
       region: 'us-east',
@@ -122,10 +122,10 @@ describe('public Wick REST contract', () => {
     );
     expect(catalog).toEqual([
       expect.objectContaining({
-        id: 'boat:small:us-east',
-        name: 'Small · boat',
+        id: 'e2b:small:us-east',
+        name: 'Small · e2b',
         description: 'Small machine',
-        provider: 'boat',
+        provider: 'e2b',
         profile: 'small',
         region: 'us-east',
         cpu: 2,
@@ -166,9 +166,9 @@ describe('public Wick REST contract', () => {
     });
     expect(JSON.parse(String(options.body))).toEqual(create);
   });
-  it('uses the filtered customer SDK catalog without requiring omitted schema metadata or BYOK provider reads', async () => {
+  it('uses the filtered customer SDK catalog and verifies selected managed billing without inventing scope', async () => {
     const offer = {
-      provider: 'boat',
+      provider: 'e2b',
       byok: { enabled: false },
       profile: 'small',
       region: 'auto',
@@ -178,21 +178,35 @@ describe('public Wick REST contract', () => {
       resources: { cpu: 1, memoryMiB: 2048, diskMiB: 4096 },
     };
     const fetcher = vi.fn(
-      async () =>
+      async (url: URL) =>
         new Response(
-          JSON.stringify({
-            profiles: [{ id: 'small', name: 'Small', cpu: 2, memoryMiB: 4096 }],
-            offers: [offer, { ...offer, providerKeyId: 'byok-unapproved' }],
-          }),
-          { status: 200 },
+          JSON.stringify(
+            String(url).endsWith('/execution-preview')
+              ? {
+                  kind: 'environment',
+                  eligible: true,
+                  selectedOffer: {
+                    provider: 'e2b',
+                    profile: 'small',
+                    region: 'auto',
+                    billingMode: 'wick_managed',
+                    externalCompute: false,
+                  },
+                  fallbackOffers: [],
+                }
+              : {
+                  profiles: [{ id: 'small', name: 'Small', cpu: 2, memoryMiB: 4096 }],
+                  offers: [offer, { ...offer, providerKeyId: 'byok-unapproved' }],
+                },
+          ),
         ),
     );
     vi.stubGlobal('fetch', fetcher);
     const items = await createWickAdapter(config).catalog();
-    expect(fetcher).toHaveBeenCalledOnce();
+    expect(fetcher).toHaveBeenCalledTimes(2);
     expect(items).toHaveLength(1);
     expect(items[0]).toMatchObject({
-      id: 'boat:small:auto',
+      id: 'e2b:small:auto',
       cpu: 1,
       memoryGb: 2,
       resources: { cpu: 1, memoryGb: 2, diskGb: 4 },
@@ -216,19 +230,41 @@ describe('public Wick REST contract', () => {
     expect(fetcher).not.toHaveBeenCalled();
   });
   it('sends the exact frozen price maximum through official SDK preview and create', async () => {
-    const fetcher = vi.fn(async () => new Response(JSON.stringify(mutation), { status: 202 }));
+    const fetcher = vi.fn(
+      async (url: URL) =>
+        new Response(
+          JSON.stringify(
+            String(url).endsWith('/execution-preview')
+              ? {
+                  kind: 'environment',
+                  eligible: true,
+                  selectedOffer: {
+                    provider: create.provider,
+                    profile: create.profile,
+                    region: create.region,
+                    billingMode: 'wick_managed',
+                    externalCompute: false,
+                  },
+                  fallbackOffers: [],
+                }
+              : mutation,
+          ),
+          { status: 202 },
+        ),
+    );
     vi.stubGlobal('fetch', fetcher);
     const adapter = createWickAdapter(config);
     await adapter.preview(create);
     await adapter.create(create, 'frozen-key-123');
-    expect(fetcher.mock.calls).toHaveLength(2);
+    expect(fetcher.mock.calls).toHaveLength(3);
     for (const call of fetcher.mock.calls) {
       const options = (call as unknown as [URL, RequestInit])[1];
-      expect(JSON.parse(String(options.body))).toEqual(create);
+      const body = JSON.parse(String(options.body));
+      expect(body.kind === 'environment' ? body.input : body).toEqual(create);
     }
     const { maximumPriceMicrosPerSecond: _rate, ...unpriced } = create;
     await expect(adapter.create(unpriced, 'unpriced-key-123')).rejects.toThrow('frozen maximum');
-    expect(fetcher.mock.calls).toHaveLength(2);
+    expect(fetcher.mock.calls).toHaveLength(3);
   });
   it('replays the same key without generating a replacement and preserves upstream replay flag', async () => {
     const fetcher = vi.fn(

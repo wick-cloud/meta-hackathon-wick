@@ -21,13 +21,19 @@ Required environment names: `DATABASE_URL`, `BETTER_AUTH_SECRET`, `WICK_MODE`, `
 
 The selected offering freezes `rateMicrosPerSecond`, provenance, retrieval time, and markup. Compute sizes use the offer's exact metadata. Optional catalog version, provider revision, currency, money unit, and mode are not required or invented.
 
-For a finite 15, 30, or 60 minute rental, the quote in USD cents is:
+For a finite 15, 30, or 60 minute rental, the default target quote in USD cents is:
 
 ```text
 max(1, ceil(rateMicrosPerSecond × durationSeconds × (10000 + markupBps) / 100000000))
 ```
 
+The target markup is a suggestion, not a mandatory bid price. Manual and Muse bids may differ, subject to supplier policy, buyer budget, and the upward-rounded upstream compute cost floor (minimum one cent). The actual accepted bid, target quote, and upstream estimate are frozen separately.
+
 All arithmetic is integral (`BigInt`), with one upward rounding after markup. The raw upstream full-term compute estimate stays in micro-USD and is explicitly an estimate. Customer fixed quote/invoice is separate from actual Wick internal usage; no invoice represents settled usage and no payment is due. Managed rates already include Wick's pricing, so no BYOK fee is added. Accepted quotes do not change when rates change. New bids reject changed rate snapshots, and preview/create carry the frozen `maximumPriceMicrosPerSecond`.
+
+New requests, approvals, offerings, and bids require catalog retrieval within 15 minutes, allowing at most 60 seconds of future clock skew. Historical quotes remain readable unchanged. Refresh the catalog when stale. Boat customer allocations are excluded by explicit user choice. The live test selects `e2b:micro:us`; setup still requires explicit catalog IDs. E2B advertises BYOK capability, so capability alone cannot prove the selected billing route. For each E2B candidate, the official SDK performs a bounded, read-only execution preview in the configured organization/group and requires exact provider/profile/region, `billingMode=wick_managed`, no provider key, `externalCompute=false`, and no fallback offers. Unsupported, BYOK, or ambiguous selected routes remain unavailable. A bounded read-only E2B Micro/us preview passed with these checks; it did not allocate an environment. Catalog rates remain dynamic. Actual create has no extra asynchronous preflight between the safety gate and SDK transport; the catalog proof is frozen alongside its retrieval time, and the actual environment must pass the independent billing check. Actual environment ownership and `billingMode=wick_managed` with no provider key must be verified before invoicing; unexpected owned BYOK resources are quarantined for cleanup without a charge.
+
+Cleanup never calls create, even with the original key. Uncertain admission is discovered through bounded exact-name/scope/time environment listings. Absence remains UNKNOWN; native TTL is only a backstop, and holds are not falsely released.
 
 ## Offline checks while preserving a preview
 

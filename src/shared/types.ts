@@ -27,7 +27,7 @@ export interface CatalogItem {
   rateRetrievedAt?: string;
   rateSource?: 'wick-customer-catalog';
   pricingMode?: 'managed' | 'byok';
-  managedRouteVerification?: 'organization-catalog-byok-disabled';
+  managedRouteVerification?: 'organization-catalog-byok-disabled' | 'execution-preview-managed';
   resources?: { cpu: number; memoryGb: number; diskGb?: number; gpu?: string };
 }
 export interface ManagedPricing {

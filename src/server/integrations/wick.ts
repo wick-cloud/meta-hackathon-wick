@@ -73,6 +73,15 @@ export function parseEnvironment(value: unknown): WickEnvironment {
     ...(raw.createdAt == null
       ? {}
       : { createdAt: timestamp(raw.createdAt, 'environment.createdAt') }),
+    ...Object.fromEntries(
+      ['name', 'organizationId', 'groupId', 'provider', 'profile', 'providerKeyId'].flatMap(
+        (field) =>
+          raw[field] == null ? [] : [[field, string(raw[field], `environment.${field}`)]],
+      ),
+    ),
+    ...(raw.billingMode === 'wick_managed' || raw.billingMode === 'byok'
+      ? { billingMode: raw.billingMode }
+      : {}),
     raw,
   };
 }
@@ -114,6 +123,7 @@ export function parseSession(value: unknown, environmentId: string): WickSession
 export function parseCatalog(
   value: unknown,
   config: Pick<WickConfig, 'wickOrganizationId' | 'wickGroupId'>,
+  verifiedManagedRoutes: ReadonlySet<string> = new Set(),
 ): CatalogItem[] {
   const raw = object(value, 'catalog');
   if (!Array.isArray(raw.profiles) || !Array.isArray(raw.offers))
@@ -130,7 +140,11 @@ export function parseCatalog(
     const offer = object(value, 'offer');
     if (offer.available !== true) continue;
     // Connection-specific BYOK offers have no approved complete cost semantics.
-    if (offer.providerKeyId != null || offer.mode === 'byok' || offer.scope === 'organization')
+    if (
+      offer.providerKeyId != null ||
+      offer.mode === 'byok' ||
+      (offer.scope != null && offer.scope !== 'global')
+    )
       continue;
     const rate = offer.rateMicrosPerSecond;
     if (!Number.isSafeInteger(rate) || (rate as number) < 0)
@@ -139,7 +153,13 @@ export function parseCatalog(
     const profile = profiles.get(profileId);
     if (!profile) throw new WickApiError('Wick offer refers to an unknown resource profile');
     const provider = string(offer.provider, 'offer.provider');
+    // Boat customer allocations are excluded by user choice. E2B's BYOK capability
+    // is not its selected billing route; execution preview must prove managed routing.
+    if (provider !== 'e2b' || !offer.byok) continue;
     const region = string(offer.region, 'offer.region');
+    const route = `${provider}:${profileId}:${region}`;
+    const byokDisabled = object(offer.byok, 'offer.byok').enabled === false;
+    if (!byokDisabled && !verifiedManagedRoutes.has(route)) continue;
     const maximum = finitePositive(offer.maxTtlSeconds, 'offer.maxTtlSeconds');
     const durationMinutes = RENTAL_SECONDS.filter((seconds) => seconds <= maximum).map(
       (seconds) => seconds / 60,
@@ -162,6 +182,9 @@ export function parseCatalog(
       rateRetrievedAt,
       rateSource: 'wick-customer-catalog',
       pricingMode: 'managed',
+      managedRouteVerification: verifiedManagedRoutes.has(route)
+        ? 'execution-preview-managed'
+        : 'organization-catalog-byok-disabled',
       resources: {
         cpu: finitePositive(resources.cpu, 'resources.cpu'),
         memoryGb: finitePositive(resources.memoryMiB, 'resources.memoryMiB') / 1024,
@@ -178,6 +201,27 @@ export function parseCatalog(
     });
   }
   return result;
+}
+
+function managedPreviewMatches(value: unknown, input: CreateEnvironmentInput): boolean {
+  const preview = object(value, 'execution preview');
+  if (
+    preview.kind !== 'environment' ||
+    preview.eligible !== true ||
+    !preview.selectedOffer ||
+    !Array.isArray(preview.fallbackOffers) ||
+    preview.fallbackOffers.length !== 0
+  )
+    return false;
+  const selected = object(preview.selectedOffer, 'selected managed offer');
+  return (
+    selected.provider === input.provider &&
+    selected.profile === input.profile &&
+    selected.region === input.region &&
+    selected.billingMode === 'wick_managed' &&
+    selected.providerKeyId == null &&
+    selected.externalCompute === false
+  );
 }
 
 function createBody(
@@ -222,7 +266,10 @@ function createBody(
 
 async function readJson(response: Response): Promise<unknown> {
   const declared = Number(response.headers.get('content-length') ?? 0);
-  if (declared > MAX_RESPONSE_BYTES) throw new WickApiError('Wick response exceeds the size limit');
+  if (declared > MAX_RESPONSE_BYTES) {
+    await response.body?.cancel().catch(() => undefined);
+    throw new WickApiError('Wick response exceeds the size limit');
+  }
   const reader = response.body?.getReader();
   if (!reader) throw new WickApiError('Wick returned an empty response');
   const chunks: Uint8Array[] = [];
@@ -340,6 +387,12 @@ function realAdapter(config: WickConfig): WickAdapter {
     if (body.organizationId !== config.wickOrganizationId || body.groupId !== config.wickGroupId)
       throw new WickApiError('Wick create target is outside the configured scope', 400, true);
     if (body.providerKeyId) throw new WickApiError('BYOK pricing is unsupported', 400, true);
+    if (body.provider !== 'e2b')
+      throw new WickApiError(
+        'Only the explicitly enabled E2B customer route is supported',
+        400,
+        true,
+      );
     if (body.maximumPriceMicrosPerSecond === undefined)
       throw new WickApiError('Real Wick creation requires a frozen maximum price', 400, true);
     return body;
@@ -347,15 +400,46 @@ function realAdapter(config: WickConfig): WickAdapter {
   return {
     mode: 'real',
     async catalog() {
-      return parseCatalog(
-        await invoke(() =>
-          sdk.catalog.get({ query: { organizationId: config.wickOrganizationId } }),
-        ),
-        config,
+      const raw = await invoke(() =>
+        sdk.catalog.get({ query: { organizationId: config.wickOrganizationId } }),
       );
+      // Bounded, read-only previews establish the selected route in this exact org/group.
+      // Merely advertising BYOK support does not establish managed billing.
+      const potential = new Set(
+        raw.offers
+          .filter((offer) => offer.provider === 'e2b')
+          .map((offer) => `${offer.provider}:${offer.profile}:${offer.region}`),
+      );
+      const candidates = parseCatalog(raw, config, potential);
+      if (candidates.length > 8)
+        throw new WickApiError('Too many managed routes for bounded verification');
+      const verified: CatalogItem[] = [];
+      for (const item of candidates) {
+        const body = approvedBody({
+          organizationId: config.wickOrganizationId,
+          groupId: config.wickGroupId,
+          name: 'wick-broker-route-preview',
+          provider: item.provider,
+          profile: item.profile,
+          region: item.region,
+          ttlSeconds: 900,
+          visibility: 'private',
+          maximumPriceMicrosPerSecond: item.rateMicrosPerSecond,
+        });
+        const preview = await invoke(() =>
+          sdk.executionPreview.create({ body: { kind: 'environment', input: body } }),
+        );
+        if (managedPreviewMatches(preview, body)) verified.push(item);
+      }
+      return verified;
     },
     async preview(input) {
       const body = approvedBody(input);
+      const route = await invoke(() =>
+        sdk.executionPreview.create({ body: { kind: 'environment', input: body } }),
+      );
+      if (!managedPreviewMatches(route, body))
+        throw new WickApiError('Wick managed billing route could not be confirmed', 400, true);
       return invoke(() => sdk.environments.preview({ body }), true);
     },
     async create(input, key) {
@@ -374,6 +458,43 @@ function realAdapter(config: WickConfig): WickAdapter {
         throw new WickApiError('Wick returned an environment outside the requested scope');
       return environment;
     },
+    async list(input) {
+      if (
+        input.organizationId !== config.wickOrganizationId ||
+        input.groupId !== config.wickGroupId ||
+        input.limit !== 50 ||
+        !input.newest ||
+        !input.search ||
+        input.search.length > 150 ||
+        (input.cursor && input.cursor.length > 2048)
+      )
+        throw new WickApiError('Invalid bounded environment discovery scope');
+      const page = object(
+        await invoke(() =>
+          sdk.environments.list({
+            path: { id: input.organizationId },
+            query: {
+              groupId: input.groupId,
+              search: input.search,
+              provider: input.provider,
+              limit: 50,
+              newest: 'true',
+              archived: input.archived ? 'true' : 'false',
+              ...(input.cursor ? { cursor: input.cursor } : {}),
+            },
+          }),
+        ),
+        'environment page',
+      );
+      if (!Array.isArray(page.data) || page.data.length > 50)
+        throw new WickApiError('Invalid bounded environment page');
+      return {
+        items: page.data.map(parseEnvironment),
+        ...(page.nextCursor == null
+          ? {}
+          : { nextCursor: string(page.nextCursor, 'environment cursor') }),
+      };
+    },
     async connections(id) {
       return parseConnections(
         await invoke(() => sdk.environments.getConnections({ path: { id } })),
@@ -387,7 +508,24 @@ function realAdapter(config: WickConfig): WickAdapter {
         sdk.environments.terminal(id, { ...options, timeoutMs: 12_000 }),
       );
       return {
-        input: (data) => terminal.input(data),
+        input: (data) => {
+          // Wick limits each input frame to 16,384 characters, while Broker accepts 32 KiB
+          // pastes. Keep sends synchronous and never split a UTF-16 surrogate pair.
+          if (data.length === 0) terminal.input(data);
+          for (let start = 0; start < data.length;) {
+            let end = Math.min(start + 16_384, data.length);
+            if (
+              end < data.length &&
+              data.charCodeAt(end - 1) >= 0xd800 &&
+              data.charCodeAt(end - 1) <= 0xdbff &&
+              data.charCodeAt(end) >= 0xdc00 &&
+              data.charCodeAt(end) <= 0xdfff
+            )
+              end--;
+            terminal.input(data.slice(start, end));
+            start = end;
+          }
+        },
         resize: (cols, rows) => terminal.resize(cols, rows),
         ack: (bytes) => terminal.ack(bytes),
         close: () => terminal.close(),
@@ -473,6 +611,7 @@ type FixtureRow = {
   status: WickEnvironment['status'];
   admitted_at: Date;
   expires_at: Date;
+  input_json?: CreateEnvironmentInput;
 };
 function fixtureEnvironment(row: FixtureRow): WickEnvironment {
   return {
@@ -480,6 +619,15 @@ function fixtureEnvironment(row: FixtureRow): WickEnvironment {
     status: row.status,
     expiresAt: row.expires_at.toISOString(),
     createdAt: row.admitted_at.toISOString(),
+    ...(row.input_json
+      ? {
+          name: row.input_json.name,
+          organizationId: row.input_json.organizationId,
+          groupId: row.input_json.groupId,
+          provider: row.input_json.provider,
+          profile: row.input_json.profile,
+        }
+      : {}),
   };
 }
 function fixtureAdapter(config: WickConfig, pool: Pool): WickAdapter {
@@ -500,6 +648,17 @@ function fixtureAdapter(config: WickConfig, pool: Pool): WickAdapter {
   }
   return {
     mode: 'fixture',
+    async list(input) {
+      const rows = (
+        await pool.query<FixtureRow>(
+          `SELECT * FROM broker_fixture_environments WHERE input_json->>'organizationId'=$1
+        AND input_json->>'groupId'=$2 AND input_json->>'provider'=$3 AND input_json->>'name'=$4
+        ORDER BY admitted_at DESC LIMIT 50`,
+          [input.organizationId, input.groupId, input.provider, input.search],
+        )
+      ).rows;
+      return { items: rows.map(fixtureEnvironment) };
+    },
     async catalog() {
       return fixtureCatalog(config);
     },

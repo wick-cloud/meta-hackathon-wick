@@ -32,7 +32,10 @@ export function managedPricing(item: CatalogItem, markupBps = DEFAULT_MARKUP_BPS
     throw new Error(
       'A published Wick rate and its retrieval timestamp are required. Sync the catalog.',
     );
-  if (item.managedRouteVerification !== 'organization-catalog-byok-disabled')
+  if (
+    item.managedRouteVerification !== 'organization-catalog-byok-disabled' &&
+    item.managedRouteVerification !== 'execution-preview-managed'
+  )
     throw new Error(
       'This Wick route has not been verified for managed billing. Sync an approved catalog.',
     );
