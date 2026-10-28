@@ -70,7 +70,8 @@ export const vmView = (r: Row) => ({
 });
 export async function getCatalog(ctx: Pick<AppContext, 'pool' | 'wick'>): Promise<CatalogItem[]> {
   const result = await ctx.pool.query(
-    'SELECT id,item,approved FROM broker_catalog WHERE source_mode=$1 ORDER BY id',
+    `SELECT id,item,approved FROM broker_catalog WHERE source_mode=$1
+      AND ($1 <> 'real' OR COALESCE(item->>'provider','') <> 'boat') ORDER BY id`,
     [ctx.wick.mode],
   );
   return result.rows.map((r) => ({ ...r.item, id: r.id, approved: r.approved }));

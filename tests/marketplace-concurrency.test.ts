@@ -1225,6 +1225,21 @@ describe.skipIf(!databaseUrl)('PostgreSQL marketplace concurrency and invariants
     );
   });
 
+  it('excludes previously stored Boat real configurations without changing historical rows', async () => {
+    const oldBoat = { ...catalog, id: 'old-boat', provider: 'boat' };
+    await pool.query(
+      "INSERT INTO broker_catalog(id,item,approved,source_mode) VALUES($1,$2,true,'real')",
+      [oldBoat.id, oldBoat],
+    );
+    const real = { ...ctx, wick: { ...ctx.wick, mode: 'real' as const } };
+    expect(await getCatalog(real)).toEqual([]);
+    expect(
+      (await pool.query('SELECT item,approved FROM broker_catalog WHERE id=$1', [oldBoat.id]))
+        .rows[0],
+    ).toEqual({ item: oldBoat, approved: true });
+    expect(await getCatalog(ctx)).toHaveLength(1);
+  });
+
   it('removes approval from vanished catalog items and excludes fixture configurations in real mode', async () => {
     const real = { ...ctx, wick: { ...ctx.wick, mode: 'real' as const } };
     expect(await getCatalog(real)).toEqual([]);
