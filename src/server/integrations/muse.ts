@@ -288,10 +288,8 @@ const offeringSchema = {
         additionalProperties: false,
         properties: {
           candidateId: { type: 'string' },
-          name: { type: 'string', maxLength: 80 },
-          description: { type: 'string', maxLength: 400 },
         },
-        required: ['candidateId', 'name', 'description'],
+        required: ['candidateId'],
       },
     },
   },
@@ -568,10 +566,19 @@ export function createMuseAdapter(config: MuseConfig, options: MuseOptions = {})
         const minimumPriceCents = floor
           ? Number(floor[1]) * 100 + Number((floor[2] ?? '').padEnd(2, '0'))
           : current.minimumPriceCents;
+        const disableAutomation =
+          /\b(?:do\s+not|don['’]t|never|no|disable|pause|stop|turn\s+off)\s+(?:(?:all|any)\s+)?(?:auto(?:matic(?:ally)?)?\s*bid(?:ding|s)?|bid(?:ding|s)?\s+automatically|fill\s+idle|sell\s+idle|automatic\s+counteroffers?)\b/i.test(
+            strategy,
+          ) ||
+          /\b(?:auto(?:matic)?\s*bid(?:ding|s)?|automatic\s+counteroffers?)\s+(?:off|disabled|paused)\b/i.test(
+            strategy,
+          );
+        const enableAutomation =
+          /\b(?:fill\s+idle|auto(?:matic(?:ally)?)?\s*bid(?:ding|s)?|bid(?:ding|s)?\s+automatically|sell\s+idle|automatic\s+counteroffers?)\b/i.test(
+            strategy,
+          );
         value = {
-          autoBid: /\b(?:fill idle|auto(?:matic(?:ally)?)?\s*bid|sell idle)\b/i.test(strategy)
-            ? true
-            : current.autoBid,
+          autoBid: disableAutomation ? false : enableAutomation ? true : current.autoBid,
           minimumPriceCents,
           basePriceCents: Math.max(minimumPriceCents, current.basePriceCents),
           maxPriceCents: current.maxPriceCents ?? null,
@@ -979,14 +986,7 @@ export function createMuseAdapter(config: MuseConfig, options: MuseOptions = {})
       let modelCalled = false;
       if (mode === 'fixture')
         value = {
-          proposals: candidates.slice(0, 3).map((candidate) => {
-            const item = catalog.find((item) => item.id === candidate.catalogId)!;
-            return {
-              candidateId: candidate.id,
-              name: `${item.name} · on demand`,
-              description: `Existing approved ${item.cpu} CPU / ${item.memoryGb} GiB configuration in ${item.region}, priced for ${candidate.durationMinutes} minutes. Review before publishing.`,
-            };
-          }),
+          proposals: candidates.slice(0, 3).map((candidate) => ({ candidateId: candidate.id })),
         };
       else if (!candidates.length) value = { proposals: [] };
       else {
@@ -994,8 +994,8 @@ export function createMuseAdapter(config: MuseConfig, options: MuseOptions = {})
         value = await complete(
           'wick_supplier_offerings',
           offeringSchema,
-          'Select up to three server-priced candidate identifiers addressing aggregate unmatched demand, with a plain short name and description. Candidate duration and price are the explicit publishing baseline, not a price for a different demand duration. Other rental durations require their own deterministic quotes. Never originate or alter a price, resource, region or duration. Explain only the candidate public properties, not private pricing limits. No code, jobs or configuration definitions. Provider review and explicit publishing are required.',
-          { demand, catalog: modelCatalog(catalog), policy: ownPolicy, candidates },
+          'Select up to three server-priced candidate identifiers addressing aggregate unmatched demand. Candidate duration and price are the explicit publishing baseline, not a price for a different demand duration. Other rental durations require their own deterministic quotes. Never originate or alter a price, resource, region or duration. Return identifiers only; public listing text is constructed from approved catalog facts by the server. Provider review and explicit publishing are required.',
+          { demand, catalog: modelCatalog(catalog), candidates },
         );
       }
       const row = object(value, 'Muse offering response');
@@ -1005,16 +1005,18 @@ export function createMuseAdapter(config: MuseConfig, options: MuseOptions = {})
       const seen = new Set<string>();
       const proposals: OfferingProposal[] = row.proposals.map((value) => {
         const suggestion = object(value, 'Muse offering');
-        requireKeys(suggestion, ['candidateId', 'name', 'description'], 'Muse offering');
+        requireKeys(suggestion, ['candidateId'], 'Muse offering');
         const candidateId = string(suggestion.candidateId, 'Offering candidate identifier', 200);
         const candidate = candidates.find((item) => item.id === candidateId);
         if (!candidate || seen.has(candidate.catalogId))
           fail('Muse suggested an unapproved, duplicate, or unmatched configuration.');
         seen.add(candidate.catalogId);
+        const item = catalog.find((item) => item.id === candidate.catalogId)!;
+        const resources = `${item.cpu} CPU / ${item.memoryGb} GiB${item.gpu ? ` / ${item.gpu}` : ''}`;
         return {
           catalogId: candidate.catalogId,
-          name: redactMuseText(string(suggestion.name, 'Offering name', 80)),
-          description: redactMuseText(string(suggestion.description, 'Offering description', 400)),
+          name: `${resources} rental`.slice(0, 80),
+          description: `Existing approved ${resources} configuration in ${item.region}, priced for ${candidate.durationMinutes} minutes. Review before publishing.`,
           priceCents: candidate.totalPriceCents,
           durationMinutes: candidate.durationMinutes,
           priceBasis: 'server-priced-candidate',
@@ -1034,7 +1036,7 @@ export function createMuseAdapter(config: MuseConfig, options: MuseOptions = {})
             'Suggestions are not published automatically.',
             'Each displayed price applies to its explicit publishing baseline duration; other rental durations require their own quote.',
             'Existing approved configurations only; no preparation jobs or generated setup code.',
-            'Only aggregate demand dimensions and this supplier’s policy are supplied.',
+            'Only aggregate demand dimensions, approved public catalog facts and server-priced candidates are supplied; private policy limits are omitted.',
           ],
         ),
       };

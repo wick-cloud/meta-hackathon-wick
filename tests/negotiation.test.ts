@@ -119,7 +119,7 @@ describe.skipIf(!databaseUrl)('buyer-reviewed nonbinding negotiation', () => {
         providerActor.id,
         providerActor.name,
         {
-          autoBid: false,
+          autoBid: true,
           minimumPriceCents: 50,
           basePriceCents: 100,
           reserveSlots: 2,
@@ -200,6 +200,137 @@ describe.skipIf(!databaseUrl)('buyer-reviewed nonbinding negotiation', () => {
     expect(spy).toHaveBeenCalledTimes(1);
     expect(spy.mock.calls[0][0].capacity.available).toBe(1);
     expect(JSON.stringify(spy.mock.calls[0][0])).not.toContain(buyer.id);
+  });
+  it('requires approved automation for proposals while preserving manual bids', async () => {
+    await pool.query(
+      "UPDATE broker_providers SET policy=jsonb_set(policy,'{autoBid}','false') WHERE id=$1",
+      [providerId],
+    );
+    const spy = vi.spyOn(ctx.muse, 'selectCounteroffers');
+    const i = await intent();
+    expect((await proposeCounteroffers(ctx, buyer, i.id)).offers).toHaveLength(0);
+    expect(spy).not.toHaveBeenCalled();
+    expect(await counts()).toEqual({ requests: 0, holds: 0, vms: 0 });
+    const request = await createRequest(ctx, buyer, {
+      description: 'Provider manually reviews this exact request',
+      catalogId: item.id,
+      region: item.region,
+      durationMinutes: 30,
+      maxPriceCents: 500,
+      requirements: { cpu: item.cpu, memoryGb: item.memoryGb },
+    });
+    await submitBid(ctx, providerActor, request.id, { totalPriceCents: 100, offeringId });
+    expect((await counts()).holds).toBe(1);
+  });
+  it('rejects a paused provider under its lock and invalidates cached proposals', async () => {
+    const p = await proposed();
+    const lock = await pool.connect();
+    await lock.query('BEGIN');
+    await lock.query(
+      "UPDATE broker_providers SET policy=jsonb_set(policy,'{autoBid}','false') WHERE id=$1",
+      [providerId],
+    );
+    const pending = acceptCounteroffer(ctx, buyer, p.intent.id, p.offers[0].id, {
+      operationKey: randomUUID(),
+    }).catch((error) => error);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    await lock.query('COMMIT');
+    lock.release();
+    expect((await pending).message).toMatch(/paused automatic/);
+    expect((await proposeCounteroffers(ctx, buyer, p.intent.id)).offers).toHaveLength(0);
+    expect(await counts()).toEqual({ requests: 0, holds: 0, vms: 0 });
+  });
+  it('coalesces parallel same-intent model calls, caches repeats and keeps provider receipts private', async () => {
+    const i = await intent();
+    const select = ctx.muse.selectCounteroffers.bind(ctx.muse);
+    let release!: () => void;
+    let started!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const began = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const spy = vi.spyOn(ctx.muse, 'selectCounteroffers').mockImplementation(async (input) => {
+      started();
+      await gate;
+      return select(input);
+    });
+    const calls = Array.from({ length: 6 }, () => proposeCounteroffers(ctx, buyer, i.id));
+    await began;
+    const other = { ...buyer, id: randomUUID() };
+    await expect(proposeCounteroffers(ctx, other, i.id)).rejects.toThrow(/not found/);
+    release();
+    const results = await Promise.all(calls);
+    const result = results[0];
+    expect(results.every((r) => JSON.stringify(r.offers) === JSON.stringify(result.offers))).toBe(
+      true,
+    );
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect((await proposeCounteroffers(ctx, buyer, i.id)).offers.map((o) => o.id).sort()).toEqual(
+      result.offers.map((o) => o.id).sort(),
+    );
+    expect(spy).toHaveBeenCalledTimes(1);
+    const events = (
+      await pool.query("SELECT * FROM broker_activity WHERE kind='counteroffer_proposed'")
+    ).rows;
+    expect(events).toHaveLength(result.offers.length);
+    expect(
+      events.every(
+        (e) => e.provider_id === providerId && e.mode === 'fixture' && e.model_called === false,
+      ),
+    ).toBe(true);
+    expect(events[0].receipt.constraints.join(' ')).toMatch(/no capacity/);
+    expect(JSON.stringify(result)).not.toMatch(/receipt|spare slots|minimum total/);
+    const key = randomUUID();
+    const first = await acceptCounteroffer(ctx, buyer, i.id, result.offers[0].id, {
+      operationKey: key,
+    });
+    expect(
+      await acceptCounteroffer(ctx, buyer, i.id, result.offers[0].id, { operationKey: key }),
+    ).toEqual(first);
+    expect(
+      (await pool.query("SELECT * FROM broker_activity WHERE kind='counteroffer_accepted'")).rows,
+    ).toHaveLength(1);
+  });
+  it('does not publish a proposal or decision if automation pauses during the model call', async () => {
+    const select = ctx.muse.selectCounteroffers.bind(ctx.muse);
+    vi.spyOn(ctx.muse, 'selectCounteroffers').mockImplementation(async (input) => {
+      await pool.query(
+        "UPDATE broker_providers SET policy=jsonb_set(policy,'{autoBid}','false') WHERE id=$1",
+        [providerId],
+      );
+      return select(input);
+    });
+    const i = await intent();
+    expect((await proposeCounteroffers(ctx, buyer, i.id)).offers).toHaveLength(0);
+    expect((await pool.query('SELECT * FROM broker_counteroffers')).rows).toHaveLength(0);
+    expect((await pool.query('SELECT * FROM broker_activity')).rows).toHaveLength(0);
+    expect(await counts()).toEqual({ requests: 0, holds: 0, vms: 0 });
+  });
+  it('invalidates the short proposal cache when approved provider limits change', async () => {
+    const spy = vi.spyOn(ctx.muse, 'selectCounteroffers');
+    const p = await proposed();
+    await pool.query(
+      "UPDATE broker_providers SET policy=jsonb_set(policy,'{minimumPriceCents}','150') WHERE id=$1",
+      [providerId],
+    );
+    const next = await proposeCounteroffers(ctx, buyer, p.intent.id);
+    expect(next.offers.every((o) => o.totalPriceCents === 150)).toBe(true);
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect(next.offers.every((o) => !p.offers.some((old) => old.id === o.id))).toBe(true);
+  });
+  it('caches a bounded empty model decision without repeating fanout', async () => {
+    const spy = vi.spyOn(ctx.muse, 'selectCounteroffers').mockResolvedValue({
+      selections: [],
+      receipt: { observed: [], decision: 'No selection', constraints: [] },
+      mode: 'fixture',
+      modelCalled: false,
+    });
+    const i = await intent();
+    expect((await proposeCounteroffers(ctx, buyer, i.id)).offers).toHaveLength(0);
+    expect((await proposeCounteroffers(ctx, buyer, i.id)).offers).toHaveLength(0);
+    expect(spy).toHaveBeenCalledTimes(1);
   });
   it('uses immutable idempotent intents and rejects changed operation bodies', async () => {
     const key = randomUUID(),
@@ -387,7 +518,7 @@ describe.skipIf(!databaseUrl)('buyer-reviewed nonbinding negotiation', () => {
     expect(
       (await app.inject({ method: 'POST', url: `/api/intents/${i.id}/propose` })).statusCode,
     ).toBe(429);
-    expect(spy).toHaveBeenCalledTimes(10);
+    expect(spy).toHaveBeenCalledTimes(1);
     await app.close();
   });
   it('uses current real rates and deterministic supplier floor, then rejects stale source rates', async () => {

@@ -166,11 +166,11 @@ describe.skipIf(!databaseUrl)(
     });
     const dashboard = async () =>
       (await app.inject({ method: 'GET', url: '/api/provider/dashboard' })).json();
-    const apply = (policy: SupplierPolicy, expectedRevision: number) =>
+    const apply = (policy: SupplierPolicy, expectedRevision: number, operationKey = randomUUID()) =>
       app.inject({
         method: 'PUT',
         url: '/api/provider/policy',
-        payload: { ...policy, expectedRevision },
+        payload: { ...policy, expectedRevision, operationKey },
       });
     const request = () =>
       createRequest(ctx, buyer, {
@@ -216,6 +216,133 @@ describe.skipIf(!databaseUrl)(
         policyRevision: 2,
         capacity: { total: 3, held: 0, free: 3, available: 1 },
       });
+    });
+
+    it('concurrent identical Apply retries return one durable response and write one activity', async () => {
+      const key = randomUUID();
+      const policy = { ...basePolicy, reserveSlots: 2 };
+      const results = await Promise.all([apply(policy, 1, key), apply(policy, 1, key)]);
+      expect(results.map((result) => result.statusCode)).toEqual([200, 200]);
+      expect(results[0].json()).toEqual(results[1].json());
+      expect(results[0].json()).toMatchObject({ policyRevision: 2, policy });
+      expect(
+        (
+          await pool.query(
+            "SELECT count(*)::int AS n FROM broker_activity WHERE provider_id=$1 AND kind='policy_changed'",
+            [providerId],
+          )
+        ).rows[0].n,
+      ).toBe(1);
+      const stored = (
+        await pool.query('SELECT policy_apply_receipt FROM broker_providers WHERE id=$1', [
+          providerId,
+        ])
+      ).rows[0].policy_apply_receipt;
+      expect(stored.response).toEqual(results[0].json());
+      expect(stored.operationKey).toBe(key);
+    });
+
+    it('lost-response replay survives later capacity changes and JSON property order without mutation', async () => {
+      const key = randomUUID();
+      // Omitted capabilities are captured from the policy at the original revision.
+      const input: SupplierPolicy = { autoBid: true, minimumPriceCents: 6, basePriceCents: 10 };
+      const applied = await apply(input, 1, key);
+      expect(applied.statusCode, applied.body).toBe(200);
+      await pool.query('UPDATE broker_providers SET total_capacity=1 WHERE id=$1', [providerId]);
+      const retry = await app.inject({
+        method: 'PUT',
+        url: '/api/provider/policy',
+        payload: {
+          operationKey: key,
+          expectedRevision: 1,
+          basePriceCents: 10,
+          minimumPriceCents: 6,
+          autoBid: true,
+        },
+      });
+      expect(retry.statusCode, retry.body).toBe(200);
+      expect(retry.json()).toEqual(applied.json());
+      expect(retry.json().policy.allowedCatalogIds).toEqual(basePolicy.allowedCatalogIds);
+      expect(await dashboard()).toMatchObject({ policyRevision: 3, capacity: { total: 1 } });
+      expect(
+        (
+          await pool.query(
+            "SELECT count(*)::int AS n FROM broker_activity WHERE provider_id=$1 AND kind='policy_changed'",
+            [providerId],
+          )
+        ).rows[0].n,
+      ).toBe(1);
+    });
+
+    it('rejects same-key changed input and stale different operations, retaining the accepted receipt', async () => {
+      const key = randomUUID();
+      const policy = { ...basePolicy, reserveSlots: 2 };
+      const applied = await apply(policy, 1, key);
+      expect(applied.statusCode).toBe(200);
+      expect((await apply({ ...policy, reserveSlots: 1 }, 1, key)).statusCode).toBe(409);
+      expect((await apply(policy, 2, key)).statusCode).toBe(409);
+      expect((await apply({ ...policy, reserveSlots: 1 }, 1)).statusCode).toBe(409);
+      expect(await dashboard()).toMatchObject({ policyRevision: 2, policy: { reserveSlots: 2 } });
+      expect((await apply(policy, 1, key)).json()).toEqual(applied.json());
+    });
+
+    it('bounds receipts to the latest accepted Apply and keeps superseded operations stale', async () => {
+      const firstKey = randomUUID();
+      const lastKey = randomUUID();
+      expect((await apply({ ...basePolicy, reserveSlots: 1 }, 1, firstKey)).statusCode).toBe(200);
+      const latest = await apply({ ...basePolicy, reserveSlots: 2 }, 2, lastKey);
+      expect(latest.statusCode).toBe(200);
+      expect((await apply({ ...basePolicy, reserveSlots: 1 }, 1, firstKey)).statusCode).toBe(409);
+      const stored = (
+        await pool.query('SELECT policy_apply_receipt FROM broker_providers WHERE id=$1', [
+          providerId,
+        ])
+      ).rows[0].policy_apply_receipt;
+      expect(stored.operationKey).toBe(lastKey);
+      expect(stored.response).toEqual(latest.json());
+    });
+
+    it('a new no-op Apply consumes a revision so superseded retries cannot write duplicate activity', async () => {
+      const policy = { ...basePolicy, reserveSlots: 0 };
+      const firstKey = randomUUID();
+      const secondKey = randomUUID();
+      const first = await apply(policy, 1, firstKey);
+      expect(first.statusCode).toBe(200);
+      const second = await apply(policy, 2, secondKey);
+      expect(second.statusCode).toBe(200);
+      expect(second.json()).toMatchObject({ policyRevision: 3, policy });
+      expect((await apply(policy, 1, firstKey)).statusCode).toBe(409);
+      expect((await apply({ ...policy, minimumPriceCents: 6 }, 1, firstKey)).statusCode).toBe(409);
+      expect((await apply(policy, 2, secondKey)).json()).toEqual(second.json());
+      expect(
+        (
+          await pool.query(
+            "SELECT count(*)::int AS n FROM broker_activity WHERE provider_id=$1 AND kind='policy_changed'",
+            [providerId],
+          )
+        ).rows[0].n,
+      ).toBe(2);
+      expect(await dashboard()).toMatchObject({ policyRevision: 3 });
+    });
+
+    it('scopes identical operation keys to the owning provider and rejects missing keys', async () => {
+      const key = randomUUID();
+      expect((await apply({ ...basePolicy, reserveSlots: 2 }, 1, key)).statusCode).toBe(200);
+      ctx.requireActor = async () => ({ ...actor, id: 'competitor-private' });
+      try {
+        const result = await apply({ ...basePolicy, reserveSlots: 1 }, 1, key);
+        expect(result.statusCode, result.body).toBe(200);
+        expect(result.json()).toMatchObject({ policyRevision: 2, policy: { reserveSlots: 1 } });
+      } finally {
+        ctx.requireActor = async () => actor;
+      }
+      expect(await dashboard()).toMatchObject({ policyRevision: 2, policy: { reserveSlots: 2 } });
+      const missing = await app.inject({
+        method: 'PUT',
+        url: '/api/provider/policy',
+        payload: { ...basePolicy, expectedRevision: 2 },
+      });
+      expect(missing.statusCode).toBe(400);
     });
 
     it('does not hold provider locks during model calls and rejects their stale revision afterward', async () => {

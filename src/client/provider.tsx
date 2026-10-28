@@ -29,6 +29,7 @@ import type {
 } from '../shared/types';
 import { fixedQuote, managedPricing } from '../shared/pricing';
 import {
+  ApiError,
   api,
   dateTime,
   money,
@@ -247,6 +248,9 @@ export function ProviderPolicy() {
     { catalog, modes } = useSession();
   const [policy, setPolicy] = useState<SupplierPolicy | null>(null),
     [baseRevision, setBaseRevision] = useState<number | null>(null),
+    [applyAttempt, setApplyAttempt] = useState<
+      (SupplierPolicy & { expectedRevision: number; operationKey: string }) | null
+    >(null),
     [dirty, setDirty] = useState(false),
     [strategy, setStrategy] = useState(''),
     [proposal, setProposal] = useState<PolicyProposal | null>(null),
@@ -258,16 +262,18 @@ export function ProviderPolicy() {
       data &&
       !dirty &&
       !proposal &&
+      !applyAttempt &&
       (baseRevision === null || data.policyRevision >= baseRevision)
     ) {
       setPolicy({ ...data.policy, reserveSlots: data.policy.reserveSlots ?? 0 });
       setBaseRevision(data.policyRevision);
     }
-  }, [data, dirty, proposal, baseRevision]);
+  }, [data, dirty, proposal, baseRevision, applyAttempt]);
   function update(change: Partial<SupplierPolicy>) {
     setPolicy((old) => (old ? { ...old, ...change } : old));
     setDirty(true);
     setSaved(false);
+    setApplyAttempt(null);
   }
   function discardDraft() {
     if (!data) return;
@@ -277,6 +283,7 @@ export function ProviderPolicy() {
     setProposal(null);
     setActionError('');
     setSaved(false);
+    setApplyAttempt(null);
   }
   async function propose(event: FormEvent) {
     event.preventDefault();
@@ -293,6 +300,7 @@ export function ProviderPolicy() {
       setPolicy({ ...result.policy, reserveSlots: result.policy.reserveSlots ?? 0 });
       setBaseRevision(result.baseRevision);
       setProposal(result);
+      setApplyAttempt(null);
       setDirty(true);
       reload();
     } catch (err) {
@@ -310,21 +318,27 @@ export function ProviderPolicy() {
     if (!policy || baseRevision === null) return;
     setBusy('save');
     setActionError('');
+    const attempt = applyAttempt ?? {
+      ...policy,
+      expectedRevision: baseRevision,
+      operationKey: crypto.randomUUID(),
+    };
+    setApplyAttempt(attempt);
     try {
       const result = await put<{ policy: SupplierPolicy; policyRevision: number }>(
         '/api/provider/policy',
-        {
-          ...policy,
-          expectedRevision: baseRevision,
-        },
+        attempt,
       );
       setPolicy({ ...result.policy, reserveSlots: result.policy.reserveSlots ?? 0 });
       setBaseRevision(result.policyRevision);
       setProposal(null);
+      setApplyAttempt(null);
       setDirty(false);
       setSaved(true);
       reload();
     } catch (err) {
+      if (err instanceof ApiError && [400, 401, 403, 404, 409, 422, 429].includes(err.status))
+        setApplyAttempt(null);
       setActionError(err instanceof Error ? err.message : 'Policy could not be saved.');
       reload();
     } finally {
@@ -368,12 +382,12 @@ export function ProviderPolicy() {
               maxLength={1000}
               minLength={3}
               required
-              disabled={!!busy}
+              disabled={!!busy || !!applyAttempt}
               placeholder="Fill idle machines, keep two slots spare, never quote below $0.05."
             />
           </label>
           <div className="form-actions">
-            <button className="button muse-button" disabled={!!busy || stale}>
+            <button className="button muse-button" disabled={!!busy || stale || !!applyAttempt}>
               {busy === 'propose' ? (
                 <Spinner label="Preparing limits" />
               ) : (
@@ -400,9 +414,14 @@ export function ProviderPolicy() {
           <DetailRow label="Kept spare by active policy">{data.policy.reserveSlots ?? 0}</DetailRow>
           <DetailRow label="Available for new holds">{data.capacity.available}</DetailRow>
           <DetailRow label="Active minimum total">{money(data.policy.minimumPriceCents)}</DetailRow>
+          <DetailRow label="Automatic bids and counteroffers">
+            {data.policy.autoBid
+              ? 'Enabled within your approved limits'
+              : 'Paused; manual bids remain available'}
+          </DetailRow>
         </section>
       )}
-      {stale && (
+      {stale && !applyAttempt && (
         <div className="error-box" role="alert">
           <div>
             Your saved policy or capacity changed. This draft is based on revision {baseRevision};
@@ -428,6 +447,15 @@ export function ProviderPolicy() {
         </section>
       )}
       <ErrorBox error={error || actionError} retry={error ? reload : undefined} />
+      {applyAttempt && !busy && (
+        <div className="info-note" role="status">
+          <ShieldCheck size={17} />
+          <p>
+            Apply may have succeeded. Retry the same reviewed limits to recover its result before
+            editing. The retry uses the original operation key and cannot apply twice.
+          </p>
+        </div>
+      )}
       <form onSubmit={save}>
         <fieldset disabled={!!busy} style={{ border: 0, padding: 0, margin: 0 }}>
           <div className="provider-two-column">
@@ -445,6 +473,7 @@ export function ProviderPolicy() {
                   max={100}
                   step={1}
                   required
+                  disabled={!!applyAttempt}
                   value={spare}
                   onChange={(event) => update({ reserveSlots: Number(event.target.value) })}
                 />
@@ -456,14 +485,20 @@ export function ProviderPolicy() {
               </label>
               <label className="toggle-row" htmlFor="auto-bid">
                 <div>
-                  <strong>Automatic bidding</strong>
-                  <p>After you apply, Muse may submit eligible bids within these limits.</p>
+                  <strong>Automatic bids and counteroffers</strong>
+                  <p>
+                    After you apply, Muse may submit bids and propose alternatives within these
+                    limits. Buyer acceptance can bind a counteroffer and start provisioning. Pausing
+                    stops new automatic proposals and counteroffer fills; manual bids remain
+                    available.
+                  </p>
                 </div>
                 <input
                   id="auto-bid"
                   type="checkbox"
                   className="toggle-input"
                   checked={policy.autoBid}
+                  disabled={!!applyAttempt}
                   onChange={(e) => update({ autoBid: e.target.checked })}
                 />
                 <span className="toggle-track" aria-hidden="true" />
@@ -473,12 +508,14 @@ export function ProviderPolicy() {
                   id="minimum-price"
                   label="Minimum total price (USD)"
                   value={policy.minimumPriceCents}
+                  disabled={!!applyAttempt}
                   onChange={(minimumPriceCents) => update({ minimumPriceCents })}
                 />
                 <MoneyInput
                   id="base-price"
                   label="Base total price (USD)"
                   value={policy.basePriceCents}
+                  disabled={!!applyAttempt}
                   onChange={(basePriceCents) => update({ basePriceCents })}
                 />
               </div>
@@ -486,6 +523,7 @@ export function ProviderPolicy() {
                 id="policy-max-price"
                 label="Maximum total price (USD)"
                 value={policy.maxPriceCents ?? policy.basePriceCents}
+                disabled={!!applyAttempt}
                 onChange={(maxPriceCents) => update({ maxPriceCents })}
               />
               <p className="field-hint">
@@ -506,6 +544,7 @@ export function ProviderPolicy() {
                       <input
                         type="checkbox"
                         checked={allowed.includes(item.id)}
+                        disabled={!!applyAttempt}
                         onChange={(e) =>
                           update({
                             allowedCatalogIds: e.target.checked
@@ -526,19 +565,28 @@ export function ProviderPolicy() {
               <div className="form-actions">
                 <button
                   className="button primary"
-                  disabled={!!busy || stale || baseRevision === null}
+                  disabled={!!busy || (stale && !applyAttempt) || baseRevision === null}
                 >
                   {busy === 'save' ? (
                     <Spinner label="Saving policy" />
                   ) : (
                     <>
                       <Save size={16} />
-                      {proposal ? 'Apply reviewed limits' : 'Save policy'}
+                      {applyAttempt
+                        ? 'Retry same apply'
+                        : proposal
+                          ? 'Apply reviewed limits'
+                          : 'Save policy'}
                     </>
                   )}
                 </button>
                 {(dirty || proposal) && (
-                  <button type="button" className="button secondary" onClick={discardDraft}>
+                  <button
+                    type="button"
+                    className="button secondary"
+                    onClick={discardDraft}
+                    disabled={!!applyAttempt}
+                  >
                     Discard draft
                   </button>
                 )}
@@ -558,8 +606,9 @@ export function ProviderPolicy() {
                 <div>
                   <h3>A proposal with boundaries</h3>
                   <p>
-                    Muse can propose a price or decline. Deterministic validation checks the
-                    configuration, available capacity, pricing bounds, and auction deadline.
+                    Muse selects among server-priced options or declines. Deterministic validation
+                    checks the configuration, available capacity, pricing bounds, and auction
+                    deadline.
                   </p>
                   <span className="tiny-label">
                     {modes.muse === 'fixture'
@@ -577,7 +626,7 @@ export function ProviderPolicy() {
                   Same floor, spare slots, and capacity checks
                 </DetailRow>
                 <DetailRow label="Buyer-approved alternatives">
-                  Same saved limits, rechecked on acceptance
+                  Require active automation and saved limits, rechecked on acceptance
                 </DetailRow>
                 <p className="small-muted">
                   Your private policy is isolated from other suppliers. Credentials and customer
@@ -588,6 +637,23 @@ export function ProviderPolicy() {
           </div>
         </fieldset>
       </form>
+      <section className="card recent-activity">
+        <div className="section-heading">
+          <h2>Counteroffer decisions</h2>
+          <Link className="text-link" href="/provider/activity">
+            View all activity <ArrowRight size={14} />
+          </Link>
+        </div>
+        <p className="muted-text">
+          Your private decision receipts. Proposed alternatives hold no slots until the buyer
+          explicitly accepts.
+        </p>
+        <ActivityList
+          items={(data?.activity ?? [])
+            .filter((item) => item.kind.startsWith('counteroffer_'))
+            .slice(0, 5)}
+        />
+      </section>
     </>
   );
 }
@@ -782,7 +848,7 @@ export function ProviderRequests() {
           </p>
         </div>
         <span className="quiet-badge">
-          Auto bidding {dashboard.data?.policy.autoBid ? 'on' : 'off'}
+          Automatic bids and counteroffers {dashboard.data?.policy.autoBid ? 'on' : 'paused'}
         </span>
       </div>
       <ErrorBox
@@ -944,8 +1010,8 @@ export function ProviderOfferings() {
         <div>
           <h3>Let demand point the way.</h3>
           <p>
-            Muse can suggest offerings from recorded unmatched requests and your private policy.
-            Review before publishing.
+            Muse can suggest approved configurations from recent unmatched demand. The server checks
+            your saved limits and calculates every suggested total. Review before publishing.
           </p>
           <span>
             {modes.muse === 'fixture'
@@ -1248,7 +1314,7 @@ export function ProviderActivity() {
       <PageHeader
         eyebrow="A CLEAR RECORD"
         title="See how things are moving."
-        description="Your provider’s capacity, bids, and lifecycle activity in one place."
+        description="Your provider’s capacity, bids, counteroffer decisions, and lifecycle activity in one place."
       >
         <button className="button secondary" onClick={reload}>
           <RefreshCw size={15} />

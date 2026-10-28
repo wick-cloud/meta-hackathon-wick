@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import type { PoolClient } from 'pg';
-import type { Actor, CatalogItem } from '../../shared/types.js';
+import type { Actor, CatalogItem, Mode } from '../../shared/types.js';
 import {
   acceptedBidQuote,
   fixedQuote,
@@ -9,7 +9,7 @@ import {
   requireCurrentRate,
 } from '../../shared/pricing.js';
 import { HttpError, type AppContext } from '../context.js';
-import { transaction } from './db.js';
+import { activity, transaction } from './db.js';
 import { awardHeldBid, globalAdmissionAvailable } from './auction.js';
 import { integer, positiveNumber, shortText, uuid, offeringView, iso, type Row } from './data.js';
 import { availableForBids } from './policy.js';
@@ -354,9 +354,55 @@ function quoteCandidate(
     return;
   return { totalPriceCents: price, ...(pricing ? { pricing } : {}) };
 }
+type ProposalResult = Awaited<ReturnType<typeof getIntent>>;
+function proposalResult(intent: Row, offers: Row[]): ProposalResult {
+  return {
+    intent: intentView(intent),
+    offers: offers
+      .sort(
+        (a, b) =>
+          a.snapshot.public.totalPriceCents - b.snapshot.public.totalPriceCents ||
+          a.id.localeCompare(b.id),
+      )
+      .map(offerView),
+  };
+}
+
+type ProposalState = {
+  pending: Map<string, Promise<ProposalResult>>;
+  cache: Map<string, { fingerprint: string; expiresAt: number; offerIds: string[] }>;
+};
+// One app process: in-flight work is shared only within the authenticated buyer/intent.
+// A short, bounded cache also covers a model decision to propose no alternatives.
+const proposalStates = new WeakMap<AppContext, ProposalState>();
 export async function proposeCounteroffers(ctx: AppContext, actor: Actor, id: string) {
   const intent = await ownedIntent(ctx, actor, id);
   ensureOpen(intent, ctx);
+  let state = proposalStates.get(ctx);
+  if (!state) {
+    state = { pending: new Map(), cache: new Map() };
+    proposalStates.set(ctx, state);
+  }
+  const key = `${ctx.wick.mode}:${actor.id}:${intent.id}`;
+  const pending = state.pending.get(key);
+  if (pending) return pending;
+  if (state.pending.size >= 128)
+    throw new HttpError(429, 'Muse suggestions are busy. Try again shortly.');
+  const work = generateCounteroffers(ctx, actor, intent, state, key);
+  state.pending.set(key, work);
+  try {
+    return await work;
+  } finally {
+    state.pending.delete(key);
+  }
+}
+async function generateCounteroffers(
+  ctx: AppContext,
+  actor: Actor,
+  intent: Row,
+  state: ProposalState,
+  key: string,
+): Promise<ProposalResult> {
   const desired = intent.desired as Desired,
     flex = intent.flexibility as Flexibility;
   // One bounded SQL projection; provider private policy never crosses provider boundaries.
@@ -364,7 +410,7 @@ export async function proposeCounteroffers(ctx: AppContext, actor: Actor, id: st
     await ctx.pool.query(
       `WITH candidates AS (
     SELECT p.*,(SELECT count(*)::int FROM broker_holds h WHERE h.provider_id=p.id AND h.released_at IS NULL) AS held
-    FROM broker_providers p WHERE EXISTS(SELECT 1 FROM broker_offerings o JOIN broker_catalog c ON c.id=o.catalog_id WHERE o.provider_id=p.id AND o.active AND c.approved AND c.source_mode=$1) ORDER BY p.id LIMIT 4)
+    FROM broker_providers p WHERE p.policy->>'autoBid'='true' AND EXISTS(SELECT 1 FROM broker_offerings o JOIN broker_catalog c ON c.id=o.catalog_id WHERE o.provider_id=p.id AND o.active AND c.approved AND c.source_mode=$1) ORDER BY p.id LIMIT 4)
     SELECT row_to_json(p) AS provider,row_to_json(o) AS offering,c.item FROM candidates p CROSS JOIN LATERAL(SELECT * FROM broker_offerings o WHERE o.provider_id=p.id AND o.active ORDER BY o.id LIMIT 12)o JOIN broker_catalog c ON c.id=o.catalog_id AND c.approved AND c.source_mode=$1 ORDER BY p.id,o.id LIMIT 48`,
       [ctx.wick.mode],
     )
@@ -376,6 +422,7 @@ export async function proposeCounteroffers(ctx: AppContext, actor: Actor, id: st
       item = row.item as CatalogItem;
     if (ctx.wick.mode === 'real' && item.provider === 'boat') continue;
     if (
+      p.policy.autoBid !== true ||
       availableForBids(p.total_capacity, p.held, p.policy) < 1 ||
       (p.policy.allowedCatalogIds && !p.policy.allowedCatalogIds.includes(item.id))
     )
@@ -431,8 +478,29 @@ export async function proposeCounteroffers(ctx: AppContext, actor: Actor, id: st
     }
     if (group.candidates.length) groups.set(p.id, group);
   }
-  const selected: { candidate: Row; mode: string; modelCalled: boolean }[] = [];
+  const selected: { candidate: Row; mode: Mode; modelCalled: boolean }[] = [];
   const bounded = [...groups.values()];
+  const fingerprint = hash(
+    bounded.map(({ provider, candidates }) => ({
+      providerId: provider.id,
+      policyRevision: provider.policy_revision,
+      held: provider.held,
+      candidates: candidates.map((c) => c.id),
+    })),
+  );
+  const now = Date.now();
+  for (const [cacheKey, entry] of state.cache)
+    if (entry.expiresAt <= now) state.cache.delete(cacheKey);
+  const cached = state.cache.get(key);
+  if (cached?.fingerprint === fingerprint) {
+    const offers = (
+      await ctx.pool.query(
+        'SELECT * FROM broker_counteroffers WHERE intent_id=$1 AND id=ANY($2::uuid[]) AND expires_at>clock_timestamp() ORDER BY created_at DESC,id LIMIT 3',
+        [intent.id, cached.offerIds],
+      )
+    ).rows;
+    if (offers.length === cached.offerIds.length) return proposalResult(intent, offers);
+  }
   for (let offset = 0; offset < bounded.length; offset += 2) {
     const results = await Promise.all(
       bounded.slice(offset, offset + 2).map(async ({ provider, candidates }) => {
@@ -474,7 +542,7 @@ export async function proposeCounteroffers(ctx: AppContext, actor: Actor, id: st
     selected.push(...results.flat());
   }
   // Persist only bounded deterministic public alternatives. No reservation, auction or Wick call.
-  await transaction(ctx.pool, async (db) => {
+  const persistedResult = await transaction(ctx.pool, async (db) => {
     const current = (
       await db.query('SELECT * FROM broker_intents WHERE id=$1 AND buyer_id=$2 FOR UPDATE', [
         intent.id,
@@ -482,24 +550,83 @@ export async function proposeCounteroffers(ctx: AppContext, actor: Actor, id: st
       ])
     ).rows[0];
     ensureOpen(current, ctx);
+    const persisted: Row[] = [];
     for (const { candidate, mode, modelCalled } of selected
       .sort((a, b) => a.candidate.totalPriceCents - b.candidate.totalPriceCents)
-      .slice(0, 3))
-      await db.query(
-        `INSERT INTO broker_counteroffers(intent_id,provider_id,offering_id,candidate_key,snapshot,mode,model_called) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(intent_id,candidate_key) DO UPDATE SET expires_at=excluded.expires_at WHERE broker_counteroffers.expires_at<=clock_timestamp()`,
-        [
-          intent.id,
+      .slice(0, 3)) {
+      const provider = (
+        await db.query('SELECT * FROM broker_providers WHERE id=$1 FOR SHARE', [
           candidate.providerId,
-          candidate.offeringId,
-          candidate.id,
-          candidate,
-          mode,
-          modelCalled,
-        ],
-      );
+        ])
+      ).rows[0];
+      if (
+        !provider ||
+        provider.policy.autoBid !== true ||
+        provider.policy_revision !== candidate.policyRevision
+      )
+        continue;
+      const inserted = (
+        await db.query(
+          `INSERT INTO broker_counteroffers(intent_id,provider_id,offering_id,candidate_key,snapshot,mode,model_called) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(intent_id,candidate_key) DO NOTHING RETURNING *`,
+          [
+            intent.id,
+            candidate.providerId,
+            candidate.offeringId,
+            candidate.id,
+            candidate,
+            mode,
+            modelCalled,
+          ],
+        )
+      ).rows[0];
+      const stored =
+        inserted ??
+        (
+          await db.query(
+            `UPDATE broker_counteroffers SET expires_at=CASE WHEN expires_at<=clock_timestamp() THEN clock_timestamp()+interval '5 minutes' ELSE expires_at END WHERE intent_id=$1 AND candidate_key=$2 RETURNING *`,
+            [intent.id, candidate.id],
+          )
+        ).rows[0];
+      persisted.push(stored);
+      if (inserted)
+        await activity(
+          db,
+          provider.id,
+          null,
+          'counteroffer_proposed',
+          'Counteroffer proposed; waiting for explicit buyer acceptance. No slot is held.',
+          {
+            mode,
+            modelCalled,
+            receipt: {
+              observed: [
+                `${candidate.catalog.name}; ${candidate.after.durationMinutes} minutes; fixed total ${candidate.totalPriceCents} USD cents.`,
+                `Approved policy revision ${provider.policy_revision}; minimum total ${provider.policy.minimumPriceCents} USD cents; ${provider.policy.reserveSlots ?? 0} spare slots protected.`,
+              ],
+              decision:
+                'Proposed a supported alternative within the buyer’s reviewed flexibility and your approved automatic limits.',
+              constraints: [
+                'Explicit buyer acceptance is required.',
+                'Proposal reserves no capacity and creates no environment.',
+              ],
+            },
+          },
+        );
+    }
+    return persisted;
+  }).then((offers) => {
+    if (state.cache.size >= 256 && !state.cache.has(key))
+      state.cache.delete(state.cache.keys().next().value!);
+    state.cache.set(key, {
+      fingerprint,
+      expiresAt: Date.now() + 30_000,
+      offerIds: offers.map((o) => o.id),
+    });
+    return proposalResult(intent, offers);
   });
-  return getIntent(ctx, actor, intent.id);
+  return persistedResult;
 }
+
 export async function acceptCounteroffer(
   ctx: AppContext,
   actor: Actor,
@@ -549,6 +676,8 @@ export async function acceptCounteroffer(
     const p = (
       await db.query('SELECT * FROM broker_providers WHERE id=$1 FOR UPDATE', [offer.provider_id])
     ).rows[0];
+    if (p.policy.autoBid !== true)
+      throw new HttpError(409, 'This provider paused automatic bids and counteroffers.');
     const offering = (
       await db.query('SELECT * FROM broker_offerings WHERE id=$1 AND provider_id=$2 FOR SHARE', [
         offer.offering_id,
@@ -673,6 +802,29 @@ export async function acceptCounteroffer(
     ).rows[0];
     await db.query('INSERT INTO broker_holds(bid_id,provider_id) VALUES($1,$2)', [bid.id, p.id]);
     const awarded = await awardHeldBid(ctx, db, request, bid);
+    await activity(
+      db,
+      p.id,
+      request.id,
+      'counteroffer_accepted',
+      'Buyer accepted the reviewed counteroffer; the fixed quote is frozen and provisioning is queued.',
+      {
+        mode: offer.mode,
+        modelCalled: offer.model_called,
+        receipt: {
+          observed: [
+            `${catalog.item.name}; ${snap.after.durationMinutes} minutes; fixed total ${snap.totalPriceCents} USD cents.`,
+            `Approved policy revision ${p.policy_revision}; ${p.policy.reserveSlots ?? 0} spare slots protected.`,
+          ],
+          decision:
+            'Accepted the buyer-approved alternative under your active automatic bids and counteroffers policy.',
+          constraints: [
+            'Provider floor, spare capacity and global admission revalidated.',
+            'One frozen quote and capacity hold; normal provisioning and cleanup apply.',
+          ],
+        },
+      },
+    );
     await db.query(
       "UPDATE broker_intents SET status='accepted',accepted_offer_id=$2,accepted_request_id=$3,acceptance_key=$4 WHERE id=$1",
       [intent.id, offerId, request.id, key],

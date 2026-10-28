@@ -73,6 +73,30 @@ function assertStrict(schema: Record<string, any>) {
 }
 
 describe('explicit buyer facts without flexibility inference', () => {
+  it.each([
+    'quoted $1, but my hard budget is $0.05',
+    'quoted $1, but my hard budget is 0.05 USD',
+    'hard budget $0.05, quote $1',
+    'budget $5, maximum $0.05',
+  ])('never expands a tighter explicit budget: %s', (description) => {
+    expect(parseExplicitBuyerDescription(description)).toMatchObject({ maxPriceCents: 5 });
+  });
+  it.each(['develop in Python', 'use in testing', 'run in production', 'work in JavaScript'])(
+    'does not interpret workflow prose as a region: %s',
+    (description) => {
+      expect(parseExplicitBuyerDescription(`2 CPUs, 4 GiB, ${description}`)).toEqual({
+        requirements: { cpu: 2, memoryGb: 4 },
+      });
+    },
+  );
+  it('preserves explicit unsupported regions and recognizable unsupported locations', () => {
+    expect(parseExplicitBuyerDescription('region: unsupported-choice')).toMatchObject({
+      region: 'unsupported-choice',
+    });
+    expect(parseExplicitBuyerDescription('develop in Python, deploy in moon-east')).toMatchObject({
+      region: 'moon-east',
+    });
+  });
   it('preserves unsupported resources, duration, region and decimal budget exactly', () => {
     expect(
       parseExplicitBuyerDescription(
@@ -105,6 +129,13 @@ describe('explicit buyer facts without flexibility inference', () => {
       },
     ];
     const adapter = createMuseAdapter({ museMode: 'fixture' });
+    expect(
+      (await adapter.translate('2 CPUs, 4 GiB, develop in Python', catalog)).proposal,
+    ).toMatchObject({
+      catalogId: 'small',
+      region: 'us',
+      requirements: { cpu: 2, memoryGb: 4 },
+    });
     await expect(
       adapter.translate('1 CPU in unsupported-east for $0.05', catalog),
     ).rejects.toMatchObject({ code: 'unsupported' });
@@ -138,6 +169,23 @@ describe('explicit buyer facts without flexibility inference', () => {
 });
 
 describe('capacity strategy review contract', () => {
+  it.each([
+    'do not auto bid',
+    "don't bid automatically",
+    'don’t automatically bid',
+    'disable automatic bidding',
+    'pause automatic counteroffers',
+    'automatic bidding off',
+    'do not auto bid, even when we can fill idle machines',
+  ])('negation overrides positive automation words: %s', async (strategy) => {
+    const result = await createMuseAdapter({ museMode: 'fixture' }).proposeCapacityPolicy({
+      ...capacityInput,
+      strategy,
+      policy: { ...capacityInput.policy, autoBid: true },
+    });
+    expect(result.policy.autoBid).toBe(false);
+    expect(result.modelCalled).toBe(false);
+  });
   it('accepts overcommitted retained holds after a supplier capacity reduction', async () => {
     const result = await createMuseAdapter({ museMode: 'fixture' }).proposeCapacityPolicy({
       ...capacityInput,
@@ -337,8 +385,6 @@ describe('bounded deterministic offering and bid contracts', () => {
       proposals: [
         {
           candidateId: 'small:15:8',
-          name: 'Small rental',
-          description: 'Existing small configuration.',
         },
       ],
     });
@@ -354,6 +400,9 @@ describe('bounded deterministic offering and bid contracts', () => {
     });
     expect(result.proposals[0]).toMatchObject({
       catalogId: 'small',
+      name: '2 CPU / 4 GiB rental',
+      description:
+        'Existing approved 2 CPU / 4 GiB configuration in us, priced for 15 minutes. Review before publishing.',
       priceCents: 8,
       durationMinutes: 15,
       priceBasis: 'server-priced-candidate',
@@ -362,6 +411,37 @@ describe('bounded deterministic offering and bid contracts', () => {
     assertStrict(request.response_format.json_schema.schema);
     expect(JSON.stringify(request.response_format.json_schema.schema)).not.toContain('priceCents');
     expect(JSON.parse(request.messages[1].content).candidates[0].totalPriceCents).toBe(8);
+    expect(JSON.parse(request.messages[1].content)).not.toHaveProperty('policy');
+    for (const privateField of ['minimumPriceCents', 'basePriceCents', 'reserveSlots', 'autoBid'])
+      expect(request.messages[1].content).not.toContain(privateField);
+    expect(
+      request.response_format.json_schema.schema.properties.proposals.items.properties,
+    ).toEqual({
+      candidateId: { type: 'string' },
+    });
+  });
+  it('rejects model-generated public copy including private limits and invented resources', async () => {
+    const { adapter } = real({
+      proposals: [
+        {
+          candidateId: 'small:15:8',
+          name: 'Private floor is 5 cents',
+          description: 'Two reserve slots; includes 8 H100 GPUs.',
+        },
+      ],
+    });
+    await expect(
+      adapter.proposeOfferings({
+        policy,
+        catalog: [item],
+        demand: [
+          { region: 'us', durationMinutes: 15, requirements: { cpu: 1, memoryGb: 1 }, count: 2 },
+        ],
+        pricedCandidates: [
+          { id: 'small:15:8', catalogId: 'small', durationMinutes: 15, totalPriceCents: 8 },
+        ],
+      }),
+    ).rejects.toMatchObject({ code: 'invalid_proposal' });
   });
   it('model bid can only select or decline the server-computed total', async () => {
     const { adapter, fetcher } = real({ decision: 'bid', catalogId: 'small' });

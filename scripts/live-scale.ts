@@ -654,6 +654,7 @@ async function main() {
         approved: true,
       });
       await api('provider', '/api/provider/policy', 'PUT', {
+        operationKey: `scale-policy:${header.runId}`,
         expectedRevision: (await api('provider', '/api/provider/dashboard')).policyRevision,
         autoBid: false,
         reserveSlots: 0,

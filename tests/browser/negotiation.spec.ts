@@ -89,11 +89,13 @@ test('reviewed provider limits and explicit buyer counteroffer acceptance create
     expect(unchanged.policyRevision).toEqual(original.policyRevision);
     await providerPage.getByLabel('Slots to keep spare').fill('0');
     await providerPage.getByLabel('Minimum total price (USD)').fill('0.05');
+    await providerPage.getByLabel('Automatic bids and counteroffers', { exact: false }).check();
     await providerPage.getByRole('button', { name: 'Apply reviewed limits', exact: true }).click();
     await expect(providerPage.getByText('Policy saved', { exact: true })).toBeVisible();
     const applied = await (await providerPage.request.get('/api/provider/dashboard')).json();
     expect(applied.policy.reserveSlots).toBe(0);
     expect(applied.policy.minimumPriceCents).toBe(5);
+    expect(applied.policy.autoBid).toBe(true);
 
     const offering = (
       await (await providerPage.request.get('/api/provider/offerings')).json()
@@ -133,6 +135,20 @@ test('reviewed provider limits and explicit buyer counteroffer acceptance create
     expect(createdResponse.ok()).toBe(true);
     const intent = await createdResponse.json();
     await expect(page).toHaveURL(new RegExp(`/alternatives/${intent.id}$`));
+    // Publishing alone is not standing consent. Pause the shared control and
+    // prove buyer-triggered proposal generation cannot use this provider.
+    await providerPage.getByLabel('Automatic bids and counteroffers', { exact: false }).uncheck();
+    await providerPage.getByRole('button', { name: 'Save policy', exact: true }).click();
+    await expect(providerPage.getByText('Policy saved', { exact: true })).toBeVisible();
+    const paused = await page.request.post(`/api/intents/${intent.id}/propose`, { data: {} });
+    expect(paused.ok()).toBe(true);
+    expect((await paused.json()).offers).toEqual([]);
+    expect(
+      (await (await providerPage.request.get('/api/provider/dashboard')).json()).capacity.held,
+    ).toBe(0);
+    await providerPage.getByLabel('Automatic bids and counteroffers', { exact: false }).check();
+    await providerPage.getByRole('button', { name: 'Save policy', exact: true }).click();
+    await expect(providerPage.getByText('Policy saved', { exact: true })).toBeVisible();
     const beforeProposals = await (
       await providerPage.request.get('/api/provider/dashboard')
     ).json();
@@ -153,6 +169,29 @@ test('reviewed provider limits and explicit buyer counteroffer acceptance create
     expect(
       (await (await providerPage.request.get('/api/provider/dashboard')).json()).capacity.held,
     ).toBe(beforeProposals.capacity.held);
+    const providerDecisions = (
+      await (await providerPage.request.get('/api/provider/activity')).json()
+    ).items;
+    const proposedReceipt = providerDecisions.find(
+      (item: { kind: string }) => item.kind === 'counteroffer_proposed',
+    );
+    expect(proposedReceipt.mode).toBe('fixture');
+    expect(proposedReceipt.modelCalled).toBe(false);
+    expect(proposedReceipt.message).toContain('No slot is held');
+    await providerPage.reload();
+    const decisions = providerPage
+      .locator('section')
+      .filter({
+        has: providerPage.getByRole('heading', { name: 'Counteroffer decisions', exact: true }),
+      });
+    await expect(
+      decisions
+        .getByText('Counteroffer proposed; waiting for explicit buyer acceptance. No slot is held.')
+        .first(),
+    ).toBeVisible();
+    await expect(
+      decisions.getByText('Fixture · no model call', { exact: true }).first(),
+    ).toBeVisible();
     await page.getByRole('button', { name: 'Review this exact offer' }).first().click();
     const finalReview = page.getByRole('region', { name: 'Final counteroffer review' });
     await expect(finalReview.getByRole('cell', { name: 'moon-1', exact: true })).toBeVisible();
@@ -197,6 +236,12 @@ test('reviewed provider limits and explicit buyer counteroffer acceptance create
     expect(resolved.intent.status).toBe('accepted');
     expect(resolved.intent.desired).toEqual(intent.desired);
     expect((await (await page.request.get('/api/vms')).json()).items.length).toBe(baselineVms + 1);
+    const acceptedDecisions = (
+      await (await providerPage.request.get('/api/provider/activity')).json()
+    ).items.filter((item: { kind: string }) => item.kind === 'counteroffer_accepted');
+    expect(acceptedDecisions).toHaveLength(1);
+    expect(acceptedDecisions[0].mode).toBe('fixture');
+    expect(acceptedDecisions[0].modelCalled).toBe(false);
   } finally {
     try {
       if (vmId) {
@@ -218,7 +263,11 @@ test('reviewed provider limits and explicit buyer counteroffer acceptance create
       try {
         const current = await (await providerPage.request.get('/api/provider/dashboard')).json();
         const restored = await providerPage.request.put('/api/provider/policy', {
-          data: { ...original.policy, expectedRevision: current.policyRevision },
+          data: {
+            ...original.policy,
+            expectedRevision: current.policyRevision,
+            operationKey: crypto.randomUUID(),
+          },
         });
         expect(restored.ok()).toBe(true);
       } finally {

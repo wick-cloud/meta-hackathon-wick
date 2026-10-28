@@ -1,5 +1,29 @@
 import type { Requirements } from './types.js';
 
+// Bare "in ..." is ambiguous prose. Recognize locations, not programming languages or
+// workflows; an explicit "region ..." always preserves an unsupported canonical choice.
+const REGIONAL_WORDS = new Set(
+  'us usa eu uk ca au asia europe africa australia america americas antarctica canada japan india china singapore tokyo osaka london paris frankfurt amsterdam dublin sydney melbourne mumbai delhi seoul hongkong taipei zurich stockholm helsinki warsaw madrid milan montreal toronto oregon ohio virginia california texas'.split(
+    ' ',
+  ),
+);
+function explicitRegion(description: string): string | undefined {
+  const explicit = description.match(/\bregion\s*(?:[:=]|is|of)?\s*([a-z][a-z0-9_-]{0,119})\b/i);
+  if (explicit) return explicit[1]!.toLowerCase();
+  for (const match of description.matchAll(/\bin\s+([a-z][a-z0-9_-]{0,119})\b/gi)) {
+    const candidate = match[1]!.toLowerCase();
+    if (
+      REGIONAL_WORDS.has(candidate) ||
+      (/[\w][-_][\w]/.test(candidate) &&
+        /(?:^|[-_])(?:us|eu|uk|ca|au|ap|asia|europe|north|south|east|west|central|northeast|northwest|southeast|southwest)(?:$|[-_])/.test(
+          candidate,
+        ))
+    )
+      return candidate;
+  }
+  return undefined;
+}
+
 /** Explicit facts only. This parser never grants flexibility or substitutes supported values. */
 export function parseExplicitBuyerDescription(description: string): {
   requirements: Partial<Requirements>;
@@ -18,12 +42,10 @@ export function parseExplicitBuyerDescription(description: string): {
   const money = [
     ...description.matchAll(/\$\s*(\d{1,6})(?:\.(\d{1,2})(?!\d))?\b/g),
     ...description.matchAll(
-      /\b(?:budget|max(?:imum)?(?:\s+total)?|under|up to)\s*(?:of|:|=)?\s*(\d{1,6})(?:\.(\d{1,2})(?!\d))?\s*(?:usd|dollars?)\b/gi,
+      /\b(?:budget|max(?:imum)?(?:\s+total)?|under|up to)\s*(?:of|is|:|=)?\s*(\d{1,6})(?:\.(\d{1,2})(?!\d))?\s*(?:usd|dollars?)\b/gi,
     ),
   ].map((value) => Number(value[1]) * 100 + Number((value[2] ?? '').padEnd(2, '0')));
-  const region =
-    description.match(/\bregion\s*(?:[:=]|is|of)?\s*([a-z][a-z0-9_-]{0,119})\b/i) ??
-    description.match(/\bin\s+((?!(?:a|an|the|my|our|your|this|that)\b)[a-z][a-z0-9_-]{0,119})\b/i);
+  const region = explicitRegion(description);
   return {
     requirements: {
       ...(cpu ? { cpu: Number(cpu[1]) } : {}),
@@ -43,7 +65,7 @@ export function parseExplicitBuyerDescription(description: string): {
           ? { durationMinutes: 60 }
           : {}),
     ...(money.length ? { maxPriceCents: Math.min(...money) } : {}),
-    ...(region ? { region: region[1]!.toLowerCase() } : {}),
+    ...(region ? { region } : {}),
   };
 }
 

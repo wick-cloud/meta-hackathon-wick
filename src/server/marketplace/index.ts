@@ -295,11 +295,43 @@ export async function registerMarketplace(app: FastifyInstance, ctx: AppContext)
     const actor = await ctx.requireActor(request, ['provider']);
     const body = request.body as Row;
     const expectedRevision = integer(body?.expectedRevision, 'Expected policy revision', 1);
+    const operationKey = shortText(body?.operationKey, 'Operation key', 128);
+    if (operationKey.length < 8 || !/^[a-zA-Z0-9:._-]+$/.test(operationKey))
+      throw new HttpError(
+        400,
+        'Use a stable operation key of 8–128 letters, digits, or :._- characters.',
+      );
+    const { operationKey: _operationKey, ...input } = body;
+    const allowedFields = new Set([
+      'expectedRevision',
+      'autoBid',
+      'minimumPriceCents',
+      'basePriceCents',
+      'reserveSlots',
+      'maxPriceCents',
+      'allowedCatalogIds',
+    ]);
+    if (Object.keys(input).some((key) => !allowedFields.has(key)))
+      throw new HttpError(400, 'Policy Apply contains an unsupported field.');
     return transaction(ctx.pool, async (db) => {
       const p = (
-        await db.query('SELECT * FROM broker_providers WHERE user_id=$1 FOR UPDATE', [actor.id])
+        await db.query(
+          `SELECT *,policy_apply_receipt->'input'=$2::jsonb AS same_apply_input
+           FROM broker_providers WHERE user_id=$1 FOR UPDATE`,
+          [actor.id, input],
+        )
       ).rows[0];
       if (!p) throw new HttpError(403, 'Provider access is not configured.');
+      // Replays must be checked before current policy/capacity validation: the
+      // successful response can have been lost before those values changed.
+      if (p.policy_apply_receipt?.operationKey === operationKey) {
+        if (!p.same_apply_input)
+          throw new HttpError(
+            409,
+            'This Apply operation key was already used with different limits.',
+          );
+        return p.policy_apply_receipt.response;
+      }
       if (expectedRevision !== p.policy_revision)
         throw new HttpError(
           409,
@@ -308,12 +340,14 @@ export async function registerMarketplace(app: FastifyInstance, ctx: AppContext)
       const policy = validatePolicy(body, p.policy);
       if ((policy.reserveSlots ?? 0) > p.total_capacity)
         throw new HttpError(400, 'Reserved spare slots cannot exceed your current total capacity.');
-      const updated = (
-        await db.query(
-          'UPDATE broker_providers SET policy=$2 WHERE id=$1 RETURNING policy_revision',
-          [p.id, policy],
-        )
-      ).rows[0];
+      // The provider lock and revision trigger make each new Apply consume exactly
+      // one revision, including a no-op. Store response and mutation atomically.
+      const response = { policy, policyRevision: p.policy_revision + 1 };
+      await db.query('UPDATE broker_providers SET policy=$2,policy_apply_receipt=$3 WHERE id=$1', [
+        p.id,
+        policy,
+        { operationKey, input, response },
+      ]);
       await activity(
         db,
         p.id,
@@ -321,7 +355,7 @@ export async function registerMarketplace(app: FastifyInstance, ctx: AppContext)
         'policy_changed',
         'Reviewed pricing and reserve limits applied. Previously accepted bids and reservations remain binding.',
       );
-      return { policy, policyRevision: updated.policy_revision };
+      return response;
     });
   });
   app.get('/api/provider/requests', async (request) => {

@@ -172,12 +172,39 @@ test('provider saves capacity and policy, then publishes a reviewed offering', a
     );
 
     await page.goto('/provider/policy');
-    await page.getByLabel('Automatic bidding', { exact: false }).uncheck();
+    await page.getByLabel('Automatic bids and counteroffers', { exact: false }).uncheck();
     const changedPrice = original.policy.basePriceCents + 5;
     await page.getByLabel('Base total price (USD)').fill((changedPrice / 100).toFixed(2));
+    // Apply commits, but the first response is lost: the UI must retry the same
+    // reviewed operation even after the dashboard sees its new policy revision.
+    let appliedBody: unknown;
+    await page.route(
+      '**/api/provider/policy',
+      async (route) => {
+        appliedBody = route.request().postDataJSON();
+        expect((await route.fetch()).ok()).toBe(true);
+        await route.abort('failed');
+      },
+      { times: 1 },
+    );
     await page.getByRole('button', { name: 'Save policy', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Retry same apply', exact: true })).toBeEnabled();
+    await expect(page.getByLabel('Base total price (USD)')).toBeDisabled();
+    const afterApply = await (await page.request.get('/api/provider/dashboard')).json();
+    const replay = page.waitForResponse(
+      (response) =>
+        new URL(response.url()).pathname === '/api/provider/policy' &&
+        response.request().method() === 'PUT',
+    );
+    await page.getByRole('button', { name: 'Retry same apply', exact: true }).click();
+    const replayResponse = await replay;
+    expect(replayResponse.ok()).toBe(true);
+    expect(replayResponse.request().postDataJSON()).toEqual(appliedBody);
     await expect(page.getByText('Policy saved', { exact: true })).toBeVisible();
-    const policy = (await (await page.request.get('/api/provider/dashboard')).json()).policy;
+    const replayedDashboard = await (await page.request.get('/api/provider/dashboard')).json();
+    expect(replayedDashboard.policyRevision).toBe(afterApply.policyRevision);
+    expect(replayedDashboard.activity).toEqual(afterApply.activity);
+    const policy = replayedDashboard.policy;
     expect(policy.autoBid).toBe(false);
     expect(policy.basePriceCents).toBe(changedPrice);
 
@@ -203,7 +230,11 @@ test('provider saves capacity and policy, then publishes a reviewed offering', a
     await page.request.put('/api/provider/capacity', { data: { total: original.capacity.total } });
     const currentPolicy = await (await page.request.get('/api/provider/dashboard')).json();
     await page.request.put('/api/provider/policy', {
-      data: { ...original.policy, expectedRevision: currentPolicy.policyRevision },
+      data: {
+        ...original.policy,
+        expectedRevision: currentPolicy.policyRevision,
+        operationKey: crypto.randomUUID(),
+      },
     });
     if (offeringId)
       await page.request.patch(`/api/provider/offerings/${offeringId}`, {

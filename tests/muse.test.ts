@@ -345,8 +345,6 @@ describe('real Meta structured-output contract', () => {
       proposals: [
         {
           candidateId: 'large:60',
-          name: 'Larger environment',
-          description: 'Existing approved larger configuration.',
         },
       ],
     });
@@ -373,8 +371,6 @@ describe('real Meta structured-output contract', () => {
       proposals: [
         {
           candidateId: 'small:60',
-          name: 'Too small',
-          description: 'Existing but insufficient configuration.',
         },
       ],
     });
@@ -391,8 +387,6 @@ describe('real Meta structured-output contract', () => {
   it('rejects generated setup fields and duplicate offerings', async () => {
     const suggestion = {
       candidateId: 'large:60',
-      name: 'Larger environment',
-      description: 'Approved.',
     };
     const input = {
       demand: [{ region: 'us-east', durationMinutes: 60, requirements: { cpu: 8, memoryGb: 16 } }],
