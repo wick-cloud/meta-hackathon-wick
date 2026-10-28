@@ -44,7 +44,7 @@ describe('explicit Muse fixture mode',() => {
     expect(proposal.catalogId).toBe('gpu');
   });
   it('returns a fixed total quote and declines exhausted capacity',async () => {
-    expect(await fixture.proposeBid(bidInput())).toMatchObject({decision:'bid',catalogId:'small',totalPriceCents:65});
+    expect(await fixture.proposeBid(bidInput())).toMatchObject({decision:'bid',catalogId:'small',totalPriceCents:65,modelCalled:false});
     expect(await fixture.proposeBid({...bidInput(),availableCapacity:0})).toMatchObject({decision:'decline'});
   });
   it('checks budget, region and supplier catalog restrictions before proposing',async () => {
@@ -125,8 +125,15 @@ describe('real Meta structured-output contract',() => {
   });
   it('never calls Meta for a deterministic capacity decline',async () => {
     const {adapter,fetcher} = realAdapter({decision:'bid',totalPriceCents:65,catalogId:'small'});
-    expect((await adapter.proposeBid({...bidInput(),availableCapacity:0})).decision).toBe('decline');
+    const result = await adapter.proposeBid({...bidInput(),availableCapacity:0});
+    expect(result.decision).toBe('decline');
+    expect(result.modelCalled).toBe(false);
+    expect(result.receipt.constraints).toContain('This decision required no Meta model call.');
     expect(fetcher).not.toHaveBeenCalled();
+  });
+  it('identifies actual completed model calls for both accepted and declined proposals',async () => {
+    expect((await realAdapter({decision:'bid',totalPriceCents:65,catalogId:'small'}).adapter.proposeBid(bidInput())).modelCalled).toBe(true);
+    expect((await realAdapter({decision:'decline',totalPriceCents:null,catalogId:null}).adapter.proposeBid(bidInput())).modelCalled).toBe(true);
   });
   it('does not send buyer identities, descriptions, or unknown demand fields for offering suggestions',async () => {
     const {adapter,fetcher} = realAdapter({proposals:[{catalogId:'large',name:'Larger environment',description:'Existing approved larger configuration.',priceCents:70}]});
@@ -202,5 +209,9 @@ describe('credential redaction',() => {
   it('removes private keys, basic auth, named tokens and credential-bearing URLs',() => {
     const result = redactMuseText('-----BEGIN PRIVATE KEY-----\nprivate-pem\n-----END PRIVATE KEY----- Basic dXNlcjpwYXNz refresh_token=private-token https://user:password@example.com/x');
     for (const secret of ['private-pem','dXNlcjpwYXNz','private-token','user:password']) expect(result).not.toContain(secret);
+  });
+  it('redacts JSON credentials, prefixed environment variables and incomplete private keys',() => {
+    const result = redactMuseText('{"password":"json-secret","token":"opaque-token"} META_API_KEY=meta-secret WICK_API_KEY=wick-secret OAUTH_CLIENT_SECRET=oauth-secret -----BEGIN PRIVATE KEY-----\nunfinished-pem');
+    for (const secret of ['json-secret','opaque-token','meta-secret','wick-secret','oauth-secret','unfinished-pem']) expect(result).not.toContain(secret);
   });
 });

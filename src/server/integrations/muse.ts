@@ -73,9 +73,9 @@ function modelCatalog(items:CatalogItem[]) {
 /** Redact common pasted secrets before any model call; credentials are never an adapter input. */
 export function redactMuseText(value:string):string {
   return value
-    .replace(/-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*?-----END [^-]*PRIVATE KEY-----/gi, '[redacted private key]')
+    .replace(/-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*?(?:-----END [^-]*PRIVATE KEY-----|$)/gi, '[redacted private key]')
     .replace(/\b(Bearer|Basic)\s+[A-Za-z0-9._~+\/=:-]+/gi, '$1 [redacted]')
-    .replace(/\b(api[_ -]?key|access[_ -]?token|refresh[_ -]?token|password|secret|authorization)\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi, '$1=[redacted]')
+    .replace(/(?:["']?)(\b(?:[a-z][a-z0-9]*[_-])*(?:api[_ -]?key|access[_ -]?token|refresh[_ -]?token|private[_ -]?key|password|token|secret|authorization))(?:["']?)\s*[:=]\s*(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s,;}]+)/gi, '$1=[redacted]')
     .replace(/\b(sk-[A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0-9_]{12,}|AKIA[A-Z0-9]{16})\b/g, '[redacted credential]')
     .replace(/(https?:\/\/)[^\s/@]+:[^\s/@]+@/gi, '$1[redacted]@');
 }
@@ -256,9 +256,10 @@ export function createMuseAdapter(config:MuseConfig, options:MuseOptions={}):Mus
       const catalog = catalogItems(input.catalog);
       const item = catalog.find(candidate => candidate.id === input.request.catalogId);
       const region = (input.request as BidInput['request'] & {region?:string}).region;
-      const decline = (decision:string):BidProposal => ({decision:'decline',receipt:receipt(mode,
+      let modelCalled = false;
+      const decline = (decision:string):BidProposal => ({decision:'decline',modelCalled,receipt:receipt(mode,
         [`${available} available simulated supply slots.`,`Requested ${duration} minutes; maximum total $${(maxPrice/100).toFixed(2)}.`],decision,
-        ['Only this supplier’s capacity and pricing policy were considered.','No capacity is reserved by this suggestion.'])});
+        ['Only this supplier’s capacity and pricing policy were considered.',modelCalled ? 'A Meta structured-output call completed.' : 'This decision required no Meta model call.','No capacity is reserved by this suggestion.'])});
       if (!available) return decline('Declined: this supplier has no available capacity.');
       if (!item || !item.durationMinutes.includes(duration) || !fits(item,needed) || (region !== undefined && item.region !== region) || (ownPolicy.allowedCatalogIds && !ownPolicy.allowedCatalogIds.includes(item.id))) return decline('Declined: the approved configuration, region, resources, or exact duration is outside this supplier’s policy.');
       if (maxPrice < ownPolicy.minimumPriceCents) return decline('Declined: the customer’s fixed total budget is below this supplier’s minimum.');
@@ -268,6 +269,7 @@ export function createMuseAdapter(config:MuseConfig, options:MuseOptions={}):Mus
         if (totalPriceCents > maxPrice || (ownPolicy.maxPriceCents !== undefined && totalPriceCents > ownPolicy.maxPriceCents)) return decline('Declined: the supplier’s demo fixed quote is outside the allowed budget.');
         value = {decision:'bid',totalPriceCents,catalogId:item.id};
       } else {
+        modelCalled = true;
         value = await complete('wick_supplier_bid',bidSchema,
           'Propose one fixed total USD integer-cent price for the complete requested rental, or decline. Respect this supplier’s isolated private policy, available capacity and the customer total budget. A decline has null price and catalogId. A bid must use the requested catalogId. Never assume capacity has been reserved.',
           {request:{description:descriptionInput(input.request.description),catalogId:item.id,region:item.region,durationMinutes:duration,maxPriceCents:maxPrice,requirements:needed},policy:ownPolicy,availableCapacity:available,catalog:modelCatalog([item])});
@@ -281,10 +283,10 @@ export function createMuseAdapter(config:MuseConfig, options:MuseOptions={}):Mus
       if (row.decision !== 'bid' || row.catalogId !== item.id) fail('Muse proposed an invalid bid or changed the requested configuration.');
       const totalPriceCents = integer(row.totalPriceCents,'Muse fixed total price');
       if (totalPriceCents < ownPolicy.minimumPriceCents || totalPriceCents > maxPrice || (ownPolicy.maxPriceCents !== undefined && totalPriceCents > ownPolicy.maxPriceCents)) fail('Muse proposed a price outside this supplier’s policy or customer budget.');
-      return {decision:'bid',catalogId:item.id,totalPriceCents,receipt:receipt(mode,
+      return {decision:'bid',catalogId:item.id,totalPriceCents,modelCalled,receipt:receipt(mode,
         [`${available} available simulated supply slots.`,`${duration} minutes on ${item.name}; customer budget $${(maxPrice/100).toFixed(2)}.`],
         `Propose a fixed total quote of $${(totalPriceCents/100).toFixed(2)}.`,
-        ['Only this supplier’s capacity and pricing policy were considered.','Submission must atomically recheck auction deadline, eligibility and capacity; a suggestion reserves nothing.'])};
+        ['Only this supplier’s capacity and pricing policy were considered.',modelCalled ? 'A Meta structured-output call completed.' : 'This decision required no Meta model call.','Submission must atomically recheck auction deadline, eligibility and capacity; a suggestion reserves nothing.'])};
     },
     async proposeOfferings(input:OfferingsInput) {
       const ownPolicy = policy(input.policy);
