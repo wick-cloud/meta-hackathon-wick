@@ -15,6 +15,7 @@ import { createMuseAdapter } from './integrations/muse.js';
 import { registerTerminal } from './integrations/terminal.js';
 import { registerMarketplace, startMarketplaceWorkers, getCatalog } from './marketplace/index.js';
 import { registerMuse } from './muse/index.js';
+import { registerNegotiation } from './marketplace/negotiation.js';
 export async function buildApp(
   config: Config,
   options: { wrapWick?: (adapter: WickAdapter) => WickAdapter; clientRoot?: string } = {},
@@ -77,12 +78,10 @@ export async function buildApp(
   });
   app.setErrorHandler((error, request, reply) => {
     if (error instanceof ZodError)
-      return reply
-        .status(400)
-        .send({
-          error: 'Please check the supplied values.',
-          details: error.issues.map((i) => ({ field: i.path.join('.'), message: i.message })),
-        });
+      return reply.status(400).send({
+        error: 'Please check the supplied values.',
+        details: error.issues.map((i) => ({ field: i.path.join('.'), message: i.message })),
+      });
     const status =
       error instanceof HttpError
         ? error.statusCode
@@ -94,14 +93,12 @@ export async function buildApp(
         { name: (error as Error).name, code: (error as { code?: string }).code },
         'Request failed',
       );
-    return reply
-      .status(status)
-      .send({
-        error:
-          status >= 500
-            ? 'The service could not complete this request. Please try again.'
-            : (error as Error).message,
-      });
+    return reply.status(status).send({
+      error:
+        status >= 500
+          ? 'The service could not complete this request. Please try again.'
+          : (error as Error).message,
+    });
   });
   app.get('/health', async () => ({
     status: 'ok',
@@ -135,6 +132,7 @@ export async function buildApp(
     return { items: await getCatalog(ctx) };
   });
   await registerMarketplace(app, ctx);
+  registerNegotiation(app, ctx);
   await registerMuse(app, ctx);
   await registerTerminal(app, ctx);
   await startMarketplaceWorkers(ctx);

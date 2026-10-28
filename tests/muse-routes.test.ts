@@ -1,6 +1,7 @@
 import Fastify from 'fastify';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { registerMuse } from '../src/server/muse/index.js';
+import { createMuseAdapter } from '../src/server/integrations/muse.js';
 import { HttpError, type AppContext } from '../src/server/context.js';
 import type { Mode, Role } from '../src/shared/types.js';
 
@@ -15,8 +16,23 @@ async function harness(role: Role | 'anonymous' = 'buyer', wickMode: Mode = 'fix
     reply.code(error.statusCode ?? 500).send({ error: error.message });
   });
   const query = vi.fn(async (sql: string, params?: unknown[]) => {
-    if (sql.includes('FROM broker_catalog'))
-      return { rows: [{ id: 'small', item: { id: 'small', approved: false }, approved: true }] };
+    if (sql.includes('SELECT id,item,approved FROM broker_catalog'))
+      return {
+        rows: [
+          {
+            id: 'small',
+            item: {
+              id: 'small',
+              approved: false,
+              cpu: 2,
+              memoryGb: 4,
+              region: 'us-east',
+              durationMinutes: [15, 30, 60],
+            },
+            approved: true,
+          },
+        ],
+      };
     if (sql.includes('FROM broker_providers'))
       return {
         rows: [
@@ -44,16 +60,103 @@ async function harness(role: Role | 'anonymous' = 'buyer', wickMode: Mode = 'fix
     return { id: 'actor-owned-id', email: 'test@example.invalid', name: 'Test', role };
   });
   const ctx = {
+    config: { targetMarkupBps: 2000 },
     pool: { query },
     wick: { mode: wickMode },
     muse: { translate, proposeOfferings },
     requireActor,
   } as unknown as AppContext;
   await registerMuse(app, ctx);
-  return { app, query, translate, proposeOfferings, requireActor };
+  return { app, query, translate, proposeOfferings, requireActor, ctx };
 }
 
 describe('Muse route authorization and input boundaries', () => {
+  it('filters unrelated configurations and shows a 30-minute publish baseline for 15-minute demand', async () => {
+    const { app, query, ctx } = await harness('provider');
+    ctx.muse = createMuseAdapter(
+      { museMode: 'fixture' },
+      {
+        fetch: () => {
+          throw new Error('No Meta calls');
+        },
+      },
+    );
+    query.mockImplementation(async (sql: string) => {
+      if (sql.includes('SELECT id,item,approved FROM broker_catalog'))
+        return {
+          rows: [
+            {
+              id: 'small',
+              approved: true,
+              item: {
+                id: 'small',
+                name: 'Small',
+                description: '',
+                provider: 'fixture',
+                profile: 'small',
+                region: 'us-east',
+                cpu: 2,
+                memoryGb: 4,
+                durationMinutes: [15, 30, 60],
+              },
+            },
+            {
+              id: 'other',
+              approved: true,
+              item: {
+                id: 'other',
+                name: 'Other',
+                description: '',
+                provider: 'fixture',
+                profile: 'small',
+                region: 'eu',
+                cpu: 2,
+                memoryGb: 4,
+                durationMinutes: [15, 30, 60],
+              },
+            },
+          ],
+        } as never;
+      if (sql.includes('FROM broker_providers'))
+        return {
+          rows: [
+            {
+              id: 'provider-a',
+              policy: { autoBid: false, minimumPriceCents: 30, basePriceCents: 50 },
+            },
+          ],
+        } as never;
+      return {
+        rows: [
+          {
+            region: 'us-east',
+            durationMinutes: 15,
+            requirements: { cpu: 2, memoryGb: 4 },
+            count: 3,
+          },
+        ],
+      } as never;
+    });
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/provider/offerings/propose',
+      payload: {},
+    });
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.json()).toMatchObject({
+      mode: 'fixture',
+      modelCalled: false,
+      proposals: [
+        {
+          catalogId: 'small',
+          durationMinutes: 30,
+          priceCents: 50,
+          priceBasis: 'server-priced-candidate',
+        },
+      ],
+    });
+    expect(response.json().proposals).toHaveLength(1);
+  });
   it('rejects unauthenticated calls before reading data or invoking Muse', async () => {
     const { app, query, translate } = await harness('anonymous');
     const response = await app.inject({
@@ -97,7 +200,19 @@ describe('Muse route authorization and input boundaries', () => {
         payload: { description: 'Linux' },
       });
       expect(response.statusCode).toBe(200);
-      expect(translate.mock.calls[0]).toEqual(['Linux', [{ id: 'small', approved: true }]]);
+      expect(translate.mock.calls[0]).toEqual([
+        'Linux',
+        [
+          {
+            id: 'small',
+            approved: true,
+            cpu: 2,
+            memoryGb: 4,
+            region: 'us-east',
+            durationMinutes: [15, 30, 60],
+          },
+        ],
+      ]);
       const catalogQuery = query.mock.calls.find(([sql]) => sql.includes('FROM broker_catalog'));
       expect(catalogQuery?.[0]).toContain('WHERE source_mode=$1');
       expect(catalogQuery?.[1]).toEqual([mode]);
@@ -131,6 +246,13 @@ describe('Muse route authorization and input boundaries', () => {
     ]);
     expect(JSON.stringify(suggestionInput)).not.toContain('other-provider');
     expect(JSON.stringify(suggestionInput)).not.toContain('untrusted-body');
+    const demandQuery = query.mock.calls.find(([sql]) => sql.includes('WITH recent_requests'));
+    expect(demandQuery?.[1]).toEqual(['fixture', ['small']]);
+    expect(demandQuery?.[0]).toContain("interval '7 days'");
+    expect(demandQuery?.[0]).toContain('resolution_request_id IS NULL');
+    expect(suggestionInput).toMatchObject({
+      pricedCandidates: [{ catalogId: 'small', durationMinutes: 30, totalPriceCents: 50 }],
+    });
   });
   it('bounds repeated paid translation requests per authenticated actor', async () => {
     const { app, translate } = await harness();

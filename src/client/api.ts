@@ -129,6 +129,16 @@ export interface Draft {
   museMode?: Mode;
 }
 
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    public status: number,
+  ) {
+    super(message);
+    this.name = 'ApiError';
+  }
+}
+
 export async function api<T>(url: string, options: RequestInit = {}): Promise<T> {
   const response = await fetch(url, {
     credentials: 'same-origin',
@@ -140,12 +150,13 @@ export async function api<T>(url: string, options: RequestInit = {}): Promise<T>
   });
   const data = await response.json().catch(() => null);
   if (!response.ok)
-    throw new Error(
+    throw new ApiError(
       typeof data?.error === 'string'
         ? data.error
         : data?.error?.message ||
             data?.message ||
             `Request failed (${response.status}). Please try again.`,
+      response.status,
     );
   return data as T;
 }

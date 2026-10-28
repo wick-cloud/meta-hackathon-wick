@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { HttpError, type AppContext } from '../context.js';
 import { getCatalog, getProvider } from '../marketplace/data.js';
+import { offeringPriceCandidates, recentUnmetDemand } from './demand.js';
 
 /** A small per-user limit also bounds paid calls; no model loop or automatic retry. */
 export async function registerMuse(app: FastifyInstance, ctx: AppContext) {
@@ -41,21 +42,39 @@ export async function registerMuse(app: FastifyInstance, ctx: AppContext) {
   app.post('/api/provider/offerings/propose', async (request) => {
     const actor = await ctx.requireActor(request, ['provider']);
     rateLimit(actor.id);
-    const [provider, catalog, demand] = await Promise.all([
-      getProvider(ctx.pool, actor),
-      getCatalog(ctx),
-      ctx.pool.query(`
-        SELECT region, duration_minutes AS "durationMinutes", requirements, count(*)::integer AS count
-        FROM (
-          SELECT region,duration_minutes,requirements
-          FROM broker_requests WHERE status='no_offers'
-          ORDER BY created_at DESC,id DESC LIMIT 200
-        ) recent
-        GROUP BY region,duration_minutes,requirements
-        ORDER BY count(*) DESC,region,duration_minutes LIMIT 40
-      `),
-    ]);
+    const [provider, catalog] = await Promise.all([getProvider(ctx.pool, actor), getCatalog(ctx)]);
+    const allowed = catalog.filter(
+      (item) =>
+        item.approved &&
+        (!provider.policy.allowedCatalogIds || provider.policy.allowedCatalogIds.includes(item.id)),
+    );
+    const demand = await recentUnmetDemand(
+      ctx.pool,
+      ctx.wick.mode,
+      allowed.map((item) => item.id),
+    );
+    const pricedCandidates = offeringPriceCandidates(
+      allowed,
+      provider.policy,
+      ctx.wick.mode,
+      ctx.config.targetMarkupBps,
+    ).filter((candidate) => {
+      const item = allowed.find((entry) => entry.id === candidate.catalogId)!;
+      return demand.some(
+        (group) =>
+          item.region === group.region &&
+          item.durationMinutes.includes(group.durationMinutes) &&
+          item.cpu >= group.requirements.cpu &&
+          item.memoryGb >= group.requirements.memoryGb &&
+          (!group.requirements.gpu || item.gpu === group.requirements.gpu),
+      );
+    });
     // Buyer identity, free text, credentials and other suppliers' policies never leave this route.
-    return ctx.muse.proposeOfferings({ demand: demand.rows, catalog, policy: provider.policy });
+    return ctx.muse.proposeOfferings({
+      demand,
+      catalog: allowed,
+      policy: provider.policy,
+      pricedCandidates,
+    });
   });
 }
