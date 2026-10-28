@@ -13,17 +13,18 @@ import type { CatalogItem } from '../src/shared/types.js';
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const schema = `broker_fractional_${randomUUID().replaceAll('-', '')}`;
-const boatMemory = 3814 / 1024;
-const boat: CatalogItem = {
-  id: 'offline-boat-small',
-  name: 'Boat small contract fixture',
-  description: 'Published resource shape, entirely offline',
-  provider: 'boat',
+// Preserve the fractional GiB regression without asserting this is an E2B resource size.
+const fractionalMemory = 3814 / 1024;
+const syntheticOffering: CatalogItem = {
+  id: 'offline-synthetic-fractional',
+  name: 'Synthetic fractional memory fixture',
+  description: 'Synthetic resources for offline validation, not actual E2B catalog specifications',
+  provider: 'e2b',
   profile: 'small',
   region: 'auto',
   cpu: 2,
-  memoryGb: boatMemory,
-  resources: { cpu: 2, memoryGb: boatMemory },
+  memoryGb: fractionalMemory,
+  resources: { cpu: 2, memoryGb: fractionalMemory },
   approved: true,
   durationMinutes: [15, 30, 60],
   pricingMode: 'managed',
@@ -33,7 +34,7 @@ const boat: CatalogItem = {
   rateRetrievedAt: new Date().toISOString(),
 };
 
-describe.skipIf(!databaseUrl)('fractional Boat GiB through buyer HTTP APIs, offline', () => {
+describe.skipIf(!databaseUrl)('synthetic fractional GiB through buyer HTTP APIs, offline', () => {
   let admin: Pool;
   let pool: Pool;
   const app = Fastify();
@@ -45,11 +46,11 @@ describe.skipIf(!databaseUrl)('fractional Boat GiB through buyer HTTP APIs, offl
   });
   const requestBody = () => ({
     description: 'Manual exact catalog resources',
-    catalogId: boat.id,
-    region: boat.region,
+    catalogId: syntheticOffering.id,
+    region: syntheticOffering.region,
     durationMinutes: 15,
     maxPriceCents: 10,
-    requirements: { cpu: boat.cpu, memoryGb: boat.memoryGb },
+    requirements: { cpu: syntheticOffering.cpu, memoryGb: syntheticOffering.memoryGb },
   });
   beforeAll(async () => {
     admin = new Pool({ connectionString: databaseUrl });
@@ -85,7 +86,7 @@ describe.skipIf(!databaseUrl)('fractional Boat GiB through buyer HTTP APIs, offl
     await pool.query('TRUNCATE broker_requests,broker_catalog CASCADE');
     await pool.query(
       "INSERT INTO broker_catalog(id,item,approved,source_mode) VALUES($1,$2,true,'real')",
-      [boat.id, { ...boat, rateRetrievedAt: new Date().toISOString() }],
+      [syntheticOffering.id, { ...syntheticOffering, rateRetrievedAt: new Date().toISOString() }],
     );
   });
   afterAll(async () => {
@@ -99,7 +100,7 @@ describe.skipIf(!databaseUrl)('fractional Boat GiB through buyer HTTP APIs, offl
     expect(modelFetch).not.toHaveBeenCalled();
   });
 
-  it('accepts and freezes exact Boat RAM copied by manual review without rounding up', async () => {
+  it('accepts and freezes exact fractional RAM copied by manual review without rounding up', async () => {
     const response = await app.inject({
       method: 'POST',
       url: '/api/requests',
@@ -109,9 +110,9 @@ describe.skipIf(!databaseUrl)('fractional Boat GiB through buyer HTTP APIs, offl
     expect(response.json().requirements.memoryGb).toBe(3.724609375);
     const stored = (await pool.query('SELECT requirements,catalog_snapshot FROM broker_requests'))
       .rows[0];
-    expect(stored.requirements.memoryGb).toBe(boatMemory);
-    expect(stored.catalog_snapshot.memoryGb).toBe(boatMemory);
-    expect(stored.catalog_snapshot.resources.memoryGb).toBe(boatMemory);
+    expect(stored.requirements.memoryGb).toBe(fractionalMemory);
+    expect(stored.catalog_snapshot.memoryGb).toBe(fractionalMemory);
+    expect(stored.catalog_snapshot.resources.memoryGb).toBe(fractionalMemory);
   });
 
   it('preserves fractional explicit memory in Muse fixture translation and submits that proposal', async () => {
@@ -124,17 +125,17 @@ describe.skipIf(!databaseUrl)('fractional Boat GiB through buyer HTTP APIs, offl
     expect(translated.statusCode).toBe(200);
     const result = translated.json();
     expect(result.mode).toBe('fixture');
-    expect(result.proposal.requirements.memoryGb).toBe(boatMemory);
+    expect(result.proposal.requirements.memoryGb).toBe(fractionalMemory);
     const submitted = await app.inject({
       method: 'POST',
       url: '/api/requests',
       payload: { ...result.proposal, description, maxPriceCents: 10 },
     });
     expect(submitted.statusCode, submitted.body).toBe(200);
-    expect(submitted.json().requirements.memoryGb).toBe(boatMemory);
+    expect(submitted.json().requirements.memoryGb).toBe(fractionalMemory);
   });
 
-  it('accepts positive sub-GiB requirements but rejects requests above actual Boat memory', async () => {
+  it('accepts positive sub-GiB requirements but rejects requests above synthetic catalog memory', async () => {
     const body = requestBody();
     body.requirements.memoryGb = 0.5;
     expect(
