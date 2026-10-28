@@ -94,13 +94,29 @@ export interface Activity {
 export interface Dashboard {
   provider: { id: string; name: string; simulated: boolean };
   policy: SupplierPolicy;
-  capacity: { total: number; held: number; available: number };
+  policyRevision: number;
+  capacity: {
+    total: number;
+    held: number;
+    available: number;
+    free?: number;
+    reserveSlots?: number;
+  };
   activity: Activity[];
+}
+export interface PolicyProposal {
+  policy: SupplierPolicy;
+  baseRevision: number;
+  capacity: Dashboard['capacity'];
+  receipt: Receipt;
+  mode: Mode;
+  modelCalled: boolean;
 }
 export interface Proposal {
   proposal: Translation;
   receipt: Receipt;
   mode: Mode;
+  modelCalled?: boolean;
 }
 export interface Draft {
   description: string;

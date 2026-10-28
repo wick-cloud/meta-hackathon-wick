@@ -38,6 +38,7 @@ import {
   type Dashboard,
   type EnvironmentRequest,
   type Offering,
+  type PolicyProposal,
   type VM,
 } from './api';
 import {
@@ -63,6 +64,7 @@ import {
 export function ProviderCapacity() {
   const { data, error, loading, reload } = useResource<Dashboard>('/api/provider/dashboard', 5000);
   const [total, setTotal] = useState<number | null>(null),
+    [capacityRevision, setCapacityRevision] = useState<number | null>(null),
     [busy, setBusy] = useState(false),
     [actionError, setActionError] = useState(''),
     [saved, setSaved] = useState(false);
@@ -72,12 +74,19 @@ export function ProviderCapacity() {
     setActionError('');
     setSaved(false);
     try {
-      await put('/api/provider/capacity', { total: total ?? data?.capacity.total });
+      await put('/api/provider/capacity', {
+        total: total ?? data?.capacity.total,
+        expectedRevision: capacityRevision ?? data?.policyRevision,
+      });
       setTotal(null);
+      setCapacityRevision(null);
       setSaved(true);
       reload();
     } catch (err) {
       setActionError(err instanceof Error ? err.message : 'Capacity could not be updated.');
+      setTotal(null);
+      setCapacityRevision(null);
+      reload();
     } finally {
       setBusy(false);
     }
@@ -110,7 +119,7 @@ export function ProviderCapacity() {
         <StatCard
           label="Available now"
           value={capacity.available}
-          note="Eligible for new capacity holds"
+          note={`${data.policy.reserveSlots ?? 0} spare slots protected by policy`}
           icon={<CheckCircle2 size={18} />}
         />
       </div>
@@ -125,12 +134,18 @@ export function ProviderCapacity() {
             {capacity.total > 0 ? (
               Array.from({ length: Math.min(capacity.total, 24) }, (_, i) => (
                 <div
-                  className={`capacity-slot ${i < capacity.held ? 'held' : 'available'}`}
+                  className={`capacity-slot ${i < capacity.held || i >= capacity.held + capacity.available ? 'held' : 'available'}`}
                   key={i}
                 >
                   <Server size={23} />
                   <strong>Slot {i + 1}</strong>
-                  <span>{i < capacity.held ? 'Reserved' : 'Available'}</span>
+                  <span>
+                    {i < capacity.held
+                      ? 'Held'
+                      : i >= capacity.held + capacity.available
+                        ? 'Kept spare'
+                        : 'Available'}
+                  </span>
                 </div>
               ))
             ) : (
@@ -151,7 +166,7 @@ export function ProviderCapacity() {
             </span>
             <span>
               <i className="held-dot" />
-              Reservation held
+              Held or kept spare
             </span>
           </div>
           <div className="info-note">
@@ -171,6 +186,11 @@ export function ProviderCapacity() {
             Publish the number of demo VM slots you want to offer. This is simulated inventory, not
             measured provider capacity.
           </p>
+          <p>
+            <Link className="text-link" href="/provider/policy">
+              Open Muse Capacity Manager <ArrowRight size={14} />
+            </Link>
+          </p>
           <form onSubmit={save}>
             <label className="field" htmlFor="total-capacity">
               <span>Total VM slots</span>
@@ -182,6 +202,7 @@ export function ProviderCapacity() {
                 step={1}
                 value={total ?? capacity.total}
                 onChange={(e) => {
+                  if (capacityRevision === null) setCapacityRevision(data.policyRevision);
                   setTotal(Number(e.target.value));
                   setSaved(false);
                 }}
@@ -221,167 +242,350 @@ export function ProviderCapacity() {
 }
 
 export function ProviderPolicy() {
-  const { data, error, loading, reload } = useResource<Dashboard>('/api/provider/dashboard'),
+  const { data, error, loading, reload } = useResource<Dashboard>('/api/provider/dashboard', 5000),
     { catalog, modes } = useSession();
   const [policy, setPolicy] = useState<SupplierPolicy | null>(null),
-    [busy, setBusy] = useState(false),
+    [baseRevision, setBaseRevision] = useState<number | null>(null),
+    [dirty, setDirty] = useState(false),
+    [strategy, setStrategy] = useState(''),
+    [proposal, setProposal] = useState<PolicyProposal | null>(null),
+    [busy, setBusy] = useState<'save' | 'propose' | ''>(''),
     [actionError, setActionError] = useState(''),
     [saved, setSaved] = useState(false);
   useEffect(() => {
-    if (data && !policy) setPolicy(data.policy);
-  }, [data, policy]);
+    if (
+      data &&
+      !dirty &&
+      !proposal &&
+      (baseRevision === null || data.policyRevision >= baseRevision)
+    ) {
+      setPolicy({ ...data.policy, reserveSlots: data.policy.reserveSlots ?? 0 });
+      setBaseRevision(data.policyRevision);
+    }
+  }, [data, dirty, proposal, baseRevision]);
   function update(change: Partial<SupplierPolicy>) {
     setPolicy((old) => (old ? { ...old, ...change } : old));
+    setDirty(true);
     setSaved(false);
+  }
+  function discardDraft() {
+    if (!data) return;
+    setPolicy({ ...data.policy, reserveSlots: data.policy.reserveSlots ?? 0 });
+    setBaseRevision(data.policyRevision);
+    setDirty(false);
+    setProposal(null);
+    setActionError('');
+    setSaved(false);
+  }
+  async function propose(event: FormEvent) {
+    event.preventDefault();
+    setBusy('propose');
+    setActionError('');
+    setSaved(false);
+    try {
+      const result = await post<PolicyProposal>('/api/provider/policy/propose', { strategy });
+      const current = await api<Dashboard>('/api/provider/dashboard');
+      if (current.policyRevision !== result.baseRevision)
+        throw new Error(
+          'Your saved limits changed while Muse prepared this proposal. Reload saved limits and try again.',
+        );
+      setPolicy({ ...result.policy, reserveSlots: result.policy.reserveSlots ?? 0 });
+      setBaseRevision(result.baseRevision);
+      setProposal(result);
+      setDirty(true);
+      reload();
+    } catch (err) {
+      setActionError(
+        err instanceof Error
+          ? err.message
+          : 'Muse could not propose limits. Your saved policy is unchanged.',
+      );
+    } finally {
+      setBusy('');
+    }
   }
   async function save(event: FormEvent) {
     event.preventDefault();
-    if (!policy) return;
-    setBusy(true);
+    if (!policy || baseRevision === null) return;
+    setBusy('save');
     setActionError('');
     try {
-      await put('/api/provider/policy', policy);
+      const result = await put<{ policy: SupplierPolicy; policyRevision: number }>(
+        '/api/provider/policy',
+        {
+          ...policy,
+          expectedRevision: baseRevision,
+        },
+      );
+      setPolicy({ ...result.policy, reserveSlots: result.policy.reserveSlots ?? 0 });
+      setBaseRevision(result.policyRevision);
+      setProposal(null);
+      setDirty(false);
       setSaved(true);
       reload();
     } catch (err) {
       setActionError(err instanceof Error ? err.message : 'Policy could not be saved.');
+      reload();
     } finally {
-      setBusy(false);
+      setBusy('');
     }
   }
   if (loading || (!policy && !error)) return <Spinner label="Loading policy" />;
   if (!policy) return <ErrorBox error={error || 'Policy unavailable.'} retry={reload} />;
   const allowed = policy.allowedCatalogIds ?? catalog.filter((c) => c.approved).map((c) => c.id);
+  const stale = baseRevision !== null && !!data && data.policyRevision > baseRevision;
+  const spare = policy.reserveSlots ?? 0;
+  const proposedAvailable = Math.max(
+    0,
+    (data?.capacity.total ?? 0) - (data?.capacity.held ?? 0) - spare,
+  );
   return (
     <>
       <PageHeader
         eyebrow="YOUR PRICING, YOUR RULES"
-        title="Set the boundaries. Stay in control."
-        description="Muse uses only your own capacity and pricing policy to evaluate requests."
-      />
+        title="Muse Capacity Manager"
+        description="Describe your selling strategy, review explicit limits, then choose whether to apply them."
+      >
+        <span className="quiet-badge">
+          {modes.muse === 'fixture' ? 'Fixture Muse · no model calls' : 'Muse · reviewed proposals'}
+        </span>
+      </PageHeader>
+      <section className="card">
+        <h2>Your selling strategy</h2>
+        <p className="muted-text">
+          Muse uses only your own saved policy, current capacity, and approved configurations. A
+          proposal holds no slots and changes no active limits.
+        </p>
+        <form onSubmit={propose}>
+          <label className="field" htmlFor="selling-strategy">
+            <span>Natural-language selling strategy</span>
+            <textarea
+              id="selling-strategy"
+              value={strategy}
+              onChange={(event) => setStrategy(event.target.value)}
+              rows={3}
+              maxLength={1000}
+              minLength={3}
+              required
+              disabled={!!busy}
+              placeholder="Fill idle machines, keep two slots spare, never quote below $0.05."
+            />
+          </label>
+          <div className="form-actions">
+            <button className="button muse-button" disabled={!!busy || stale}>
+              {busy === 'propose' ? (
+                <Spinner label="Preparing limits" />
+              ) : (
+                <>
+                  <Sparkles size={16} />
+                  Propose editable limits
+                </>
+              )}
+            </button>
+            <span className="field-hint">
+              Replaces the draft below for your review. Apply is a separate action.
+            </span>
+          </div>
+        </form>
+      </section>
+      {data && (
+        <section className="card policy-notes">
+          <div className="section-heading">
+            <h2>Current capacity and active policy</h2>
+            <span>Revision {data.policyRevision}</span>
+          </div>
+          <DetailRow label="Configured demo slots">{data.capacity.total}</DetailRow>
+          <DetailRow label="Existing holds">{data.capacity.held}</DetailRow>
+          <DetailRow label="Kept spare by active policy">{data.policy.reserveSlots ?? 0}</DetailRow>
+          <DetailRow label="Available for new holds">{data.capacity.available}</DetailRow>
+          <DetailRow label="Active minimum total">{money(data.policy.minimumPriceCents)}</DetailRow>
+        </section>
+      )}
+      {stale && (
+        <div className="error-box" role="alert">
+          <div>
+            Your saved policy or capacity changed. This draft is based on revision {baseRevision};
+            reload current limits before applying.
+          </div>
+          <button type="button" className="text-button" onClick={discardDraft} disabled={!!busy}>
+            Reload saved limits
+          </button>
+        </div>
+      )}
+      {proposal && (
+        <section className="card">
+          <h2>Proposed limits · not active</h2>
+          <p className="muted-text">
+            Review and edit every limit below. The decision receipt describes the original proposal;
+            your edits are applied only when you choose Apply reviewed limits.
+          </p>
+          <ReceiptCard
+            receipt={proposal.receipt}
+            mode={proposal.mode}
+            modelCalled={proposal.modelCalled}
+          />
+        </section>
+      )}
       <ErrorBox error={error || actionError} retry={error ? reload : undefined} />
       <form onSubmit={save}>
-        <div className="provider-two-column">
-          <section className="card">
-            <h2>Bidding policy</h2>
-            <label className="toggle-row" htmlFor="auto-bid">
-              <div>
-                <strong>Automatic bidding</strong>
-                <p>Let Muse propose eligible offers and submit them within your policy.</p>
+        <fieldset disabled={!!busy} style={{ border: 0, padding: 0, margin: 0 }}>
+          <div className="provider-two-column">
+            <section className="card">
+              <div className="section-heading">
+                <h2>{proposal ? 'Review proposed limits' : 'Bidding policy'}</h2>
+                <span>Based on revision {baseRevision}</span>
               </div>
-              <input
-                id="auto-bid"
-                type="checkbox"
-                className="toggle-input"
-                checked={policy.autoBid}
-                onChange={(e) => update({ autoBid: e.target.checked })}
-              />
-              <span className="toggle-track" aria-hidden="true" />
-            </label>
-            <div className="field-grid">
-              <MoneyInput
-                id="minimum-price"
-                label="Minimum total price (USD)"
-                value={policy.minimumPriceCents}
-                onChange={(minimumPriceCents) => update({ minimumPriceCents })}
-              />
-              <MoneyInput
-                id="base-price"
-                label="Base total price (USD)"
-                value={policy.basePriceCents}
-                onChange={(basePriceCents) => update({ basePriceCents })}
-              />
-            </div>
-            <MoneyInput
-              id="policy-max-price"
-              label="Maximum total price (USD)"
-              value={policy.maxPriceCents ?? policy.basePriceCents}
-              onChange={(maxPriceCents) => update({ maxPriceCents })}
-            />
-            <p className="field-hint">
-              Fixed totals for the selected rental, in integer USD cents. The customer’s maximum
-              price also applies.
-            </p>
-            <div className="form-divider" />
-            <h3>Eligible configurations</h3>
-            <p className="muted-text">
-              Only administrator-approved existing Wick configurations can be offered.
-            </p>
-            <div className="catalog-checks">
-              {catalog
-                .filter((c) => c.approved)
-                .map((item) => (
-                  <label key={item.id}>
-                    <input
-                      type="checkbox"
-                      checked={allowed.includes(item.id)}
-                      onChange={(e) =>
-                        update({
-                          allowedCatalogIds: e.target.checked
-                            ? [...allowed, item.id]
-                            : allowed.filter((id) => id !== item.id),
-                        })
-                      }
-                    />
-                    <div>
-                      <strong>{item.name}</strong>
-                      <span>
-                        {item.cpu} vCPU · {item.memoryGb} GiB · {item.region}
-                      </span>
-                    </div>
-                  </label>
-                ))}
-            </div>
-            <div className="form-actions">
-              <button className="button primary" disabled={busy}>
-                {busy ? (
-                  <Spinner label="Saving policy" />
-                ) : (
-                  <>
-                    <Save size={16} />
-                    Save policy
-                  </>
-                )}
-              </button>
-              {saved && (
-                <span className="saved-label">
-                  <Check size={15} />
-                  Policy saved
+              <label className="field" htmlFor="reserve-slots">
+                <span>Slots to keep spare</span>
+                <input
+                  id="reserve-slots"
+                  type="number"
+                  min={0}
+                  max={100}
+                  step={1}
+                  required
+                  value={spare}
+                  onChange={(event) => update({ reserveSlots: Number(event.target.value) })}
+                />
+                <span className="field-hint">
+                  With current holds, these limits allow {proposedAvailable} new slots. Spare slots
+                  apply to manual bids, automatic bids, and accepted alternatives. Existing holds
+                  remain intact.
                 </span>
-              )}
-            </div>
-          </section>
-          <aside>
-            <div className="muse-explainer large">
-              <span className="icon-tile violet">
-                <Sparkles size={20} />
-              </span>
-              <div>
-                <h3>A proposal with boundaries</h3>
-                <p>
-                  Muse can propose a price or decline. Deterministic validation checks the
-                  configuration, available capacity, pricing bounds, and auction deadline.
-                </p>
-                <span className="tiny-label">
-                  {modes.muse === 'fixture'
-                    ? 'Fixture proposals · no model calls'
-                    : 'Powered by muse-wonder-1.0'}
-                </span>
+              </label>
+              <label className="toggle-row" htmlFor="auto-bid">
+                <div>
+                  <strong>Automatic bidding</strong>
+                  <p>After you apply, Muse may submit eligible bids within these limits.</p>
+                </div>
+                <input
+                  id="auto-bid"
+                  type="checkbox"
+                  className="toggle-input"
+                  checked={policy.autoBid}
+                  onChange={(e) => update({ autoBid: e.target.checked })}
+                />
+                <span className="toggle-track" aria-hidden="true" />
+              </label>
+              <div className="field-grid">
+                <MoneyInput
+                  id="minimum-price"
+                  label="Minimum total price (USD)"
+                  value={policy.minimumPriceCents}
+                  onChange={(minimumPriceCents) => update({ minimumPriceCents })}
+                />
+                <MoneyInput
+                  id="base-price"
+                  label="Base total price (USD)"
+                  value={policy.basePriceCents}
+                  onChange={(basePriceCents) => update({ basePriceCents })}
+                />
               </div>
-            </div>
-            <div className="card policy-notes">
-              <h3>What your policy changes</h3>
-              <DetailRow label="Future bids">Use your saved policy</DetailRow>
-              <DetailRow label="Existing reservations">Remain in place</DetailRow>
-              <DetailRow label="Awarded quotes">Stay fixed</DetailRow>
-              <DetailRow label="Manual bids">Same capacity hold checks</DetailRow>
-              <p className="small-muted">
-                Your private policy is isolated from other suppliers. Credentials and customer
-                terminal contents never go to Muse.
+              <MoneyInput
+                id="policy-max-price"
+                label="Maximum total price (USD)"
+                value={policy.maxPriceCents ?? policy.basePriceCents}
+                onChange={(maxPriceCents) => update({ maxPriceCents })}
+              />
+              <p className="field-hint">
+                Fixed totals for the selected rental, in integer USD cents. The customer’s maximum
+                price also applies. For real Wick rentals, the rounded upstream compute cost is an
+                additional minimum.
               </p>
-            </div>
-          </aside>
-        </div>
+              <div className="form-divider" />
+              <h3>Eligible configurations</h3>
+              <p className="muted-text">
+                Only administrator-approved existing Wick configurations can be offered.
+              </p>
+              <div className="catalog-checks">
+                {catalog
+                  .filter((c) => c.approved)
+                  .map((item) => (
+                    <label key={item.id}>
+                      <input
+                        type="checkbox"
+                        checked={allowed.includes(item.id)}
+                        onChange={(e) =>
+                          update({
+                            allowedCatalogIds: e.target.checked
+                              ? [...allowed, item.id]
+                              : allowed.filter((id) => id !== item.id),
+                          })
+                        }
+                      />
+                      <div>
+                        <strong>{item.name}</strong>
+                        <span>
+                          {item.cpu} vCPU · {item.memoryGb} GiB · {item.region}
+                        </span>
+                      </div>
+                    </label>
+                  ))}
+              </div>
+              <div className="form-actions">
+                <button
+                  className="button primary"
+                  disabled={!!busy || stale || baseRevision === null}
+                >
+                  {busy === 'save' ? (
+                    <Spinner label="Saving policy" />
+                  ) : (
+                    <>
+                      <Save size={16} />
+                      {proposal ? 'Apply reviewed limits' : 'Save policy'}
+                    </>
+                  )}
+                </button>
+                {(dirty || proposal) && (
+                  <button type="button" className="button secondary" onClick={discardDraft}>
+                    Discard draft
+                  </button>
+                )}
+                {saved && (
+                  <span className="saved-label">
+                    <Check size={15} />
+                    Policy saved
+                  </span>
+                )}
+              </div>
+            </section>
+            <aside>
+              <div className="muse-explainer large">
+                <span className="icon-tile violet">
+                  <Sparkles size={20} />
+                </span>
+                <div>
+                  <h3>A proposal with boundaries</h3>
+                  <p>
+                    Muse can propose a price or decline. Deterministic validation checks the
+                    configuration, available capacity, pricing bounds, and auction deadline.
+                  </p>
+                  <span className="tiny-label">
+                    {modes.muse === 'fixture'
+                      ? 'Fixture proposals · no model calls'
+                      : 'Powered by muse-wonder-1.0'}
+                  </span>
+                </div>
+              </div>
+              <div className="card policy-notes">
+                <h3>What your policy changes</h3>
+                <DetailRow label="Future bids">Use your saved policy</DetailRow>
+                <DetailRow label="Existing reservations">Remain in place</DetailRow>
+                <DetailRow label="Awarded quotes">Stay fixed</DetailRow>
+                <DetailRow label="Manual bids">
+                  Same floor, spare slots, and capacity checks
+                </DetailRow>
+                <DetailRow label="Buyer-approved alternatives">
+                  Same saved limits, rechecked on acceptance
+                </DetailRow>
+                <p className="small-muted">
+                  Your private policy is isolated from other suppliers. Credentials and customer
+                  terminal contents never go to Muse.
+                </p>
+              </div>
+            </aside>
+          </div>
+        </fieldset>
       </form>
     </>
   );
@@ -571,7 +775,10 @@ export function ProviderRequests() {
             {dashboard.data?.capacity.available ?? '—'} available slots · {items.length} loaded
             requests
           </h3>
-          <p>Manual and automatic bids use the same capacity checks. Late offers are rejected.</p>
+          <p>
+            Manual and automatic bids honor your saved price floor and spare slots. Late offers are
+            rejected.
+          </p>
         </div>
         <span className="quiet-badge">
           Auto bidding {dashboard.data?.policy.autoBid ? 'on' : 'off'}
@@ -638,6 +845,7 @@ export function ProviderOfferings() {
       proposals: OfferingProposal[];
       receipt: Receipt;
       mode: Mode;
+      modelCalled?: boolean;
     } | null>(null);
   async function create(event: FormEvent) {
     event.preventDefault();
@@ -752,7 +960,10 @@ export function ProviderOfferings() {
                   <div>
                     <strong>{proposal.name}</strong>
                     <p>{proposal.description}</p>
-                    <span>{money(proposal.priceCents)} total</span>
+                    <span>
+                      {money(proposal.priceCents)}{' '}
+                      {modes.wick === 'real' ? '· 30 minute example' : 'fixed fixture rental total'}
+                    </span>
                   </div>
                   <button
                     className="button secondary small"
@@ -773,7 +984,11 @@ export function ProviderOfferings() {
               manually.
             </p>
           )}
-          <ReceiptCard receipt={suggestions.receipt} mode={suggestions.mode} />
+          <ReceiptCard
+            receipt={suggestions.receipt}
+            mode={suggestions.mode}
+            modelCalled={suggestions.modelCalled}
+          />
         </section>
       )}
       {showForm && (
@@ -834,9 +1049,10 @@ export function ProviderOfferings() {
                 />
               ) : (
                 <p className="field-hint">
-                  The published Wick rate and target markup suggest a price for each duration. Your
-                  binding bid can differ within your policy and the buyer’s budget, at or above the
-                  rounded upstream compute cost.
+                  Publishing stores a 30 minute example based on the current Wick rate and target
+                  markup. Each rental gets a duration-specific fixed quote. Your binding bid can
+                  differ within your policy and the buyer’s budget, at or above the rounded upstream
+                  compute cost.
                 </p>
               )}
               <div className="field">
