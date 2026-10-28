@@ -1,5 +1,11 @@
 # Verification and test operation
 
+## Real SDK readiness evidence, 2026-10-28
+
+The real Wick implementation passed **146/146 offline tests across 11 suites**, including the installed official SDK wire contract, scoped terminal renewal/flow control, integer pricing and stale snapshots, PostgreSQL 20/21 admission, cleanup, and the independent live runner's journal/watchdog guards. `npm run typecheck` passed. The production Vite build and server TypeScript compilation passed with output directed to `.verify-dist`, preserving the existing preview's served `dist` files.
+
+All **6/6 browser cases passed in 42.4 seconds** on a separate local fixture database and port 3301 through `scripts/verify-fixture-browser.ts`. This covered the real 30-second Broker auction, fixture terminal reconnect, invoice, provider, and admin flows. That isolated test process exited afterward. No real VM allocations or real Meta calls were made; the 20-VM live runner has not been executed. See [real Wick operation](REAL_WICK.md) and [the guarded live-run procedure](live-scale.md).
+
 Use Node 24. These tests run locally or in CI without paid Wick allocations or Meta calls. Unit adapter tests inject HTTP responses; PostgreSQL lifecycle tests use an explicitly constructed in-memory Wick adapter; browser tests require both application adapters to be in fixture mode before creating a rental.
 
 ## Commands

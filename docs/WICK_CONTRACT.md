@@ -47,6 +47,6 @@ The fixture terminal is an in-memory line editor with a short list of visibly si
 
 ## Checks
 
-`npm exec vitest run tests/wick-contract.test.ts tests/wick-terminal.test.ts tests/wick-fixture-db.test.ts`
+`npx vitest run tests/wick-contract.test.ts tests/wick-terminal.test.ts tests/wick-sdk-terminal.test.ts tests/wick-fixture-db.test.ts`
 
 The contract tests cover published envelope shape, nested session expiry, environment scoping, finite duration mapping, service REST authentication, official terminal auth/renewal frames, exact idempotency-key forwarding, removal of workload fields, response errors, and no fixture fallback. Local WebSocket tests cover cross-origin and cross-owner rejection, inactive rentals, explicit simulation, logout/revocation, concurrent shell bounds, and exact expiry. PostgreSQL tests exercise twelve concurrent creates with one key, restart-safe expiry, input-hash mismatch rejection, asynchronous cleanup, and expiry before readiness. PostgreSQL tests run when `TEST_DATABASE_URL` is supplied; they use unique keys and remove only their own fixture rows.
