@@ -31,6 +31,17 @@ const unscopedInput: CreateEnvironmentInput = {
   maximumPriceMicrosPerSecond: 5,
 };
 delete (unscopedInput as unknown as Record<string, unknown>).catalogId;
+function ownedFixture(journal: Journal, id: string) {
+  const records = journal.read();
+  const key = records.find(
+    (record) => record.kind === 'create-result' && record.environmentId === id,
+  )?.key;
+  const intent = records.find((record) => record.kind === 'create-intent' && record.key === key);
+  return {
+    ...(intent?.body as CreateEnvironmentInput),
+    createdAt: intent?.at ?? new Date().toISOString(),
+  };
+}
 function setup() {
   mkdirSync(CONTROL_DIRECTORY, { recursive: true, mode: 0o700 });
   const dir = mkdtempSync(join(CONTROL_DIRECTORY, 'offline-scale-'));
@@ -43,8 +54,10 @@ function setup() {
     maximumRunMs: 60_000,
   });
   const header = journal.header();
-  const create = vi.fn(async (_body: CreateEnvironmentInput, key: string) => ({
+  const create = vi.fn(async (body: CreateEnvironmentInput, key: string) => ({
     environment: {
+      ...body,
+      createdAt: new Date().toISOString(),
       id: `fixture_${key}`,
       status: 'running' as const,
       expiresAt: new Date(Date.now() + 900_000).toISOString(),
@@ -54,7 +67,12 @@ function setup() {
     mode: 'real',
     create,
     list: vi.fn(async () => ({ items: [] })),
-    get: vi.fn(async (id: string) => ({ id, status: 'terminated', expiresAt: null })),
+    get: vi.fn(async (id: string) => ({
+      ...ownedFixture(journal, id),
+      id,
+      status: 'terminated',
+      expiresAt: null,
+    })),
     terminate: vi.fn(async () => undefined),
   } as unknown as WickAdapter;
   const guard = createScaleGuard({
@@ -91,6 +109,8 @@ describe('offline live-scale admission safety; all adapters are local fakes', ()
       expect(JSON.stringify(records)).not.toMatch(/token|password|apiKey/);
       return {
         environment: {
+          ...body,
+          createdAt: new Date().toISOString(),
           id: 'fixture_only',
           status: 'running',
           expiresAt: new Date(Date.now() + 900000).toISOString(),
@@ -200,6 +220,28 @@ describe('offline live-scale admission safety; all adapters are local fakes', ()
       expect(create).toHaveBeenCalledTimes(1);
     },
   );
+  it('never binds a foreign-scope create result to a journal receipt', async () => {
+    const { journal, guard, create, input } = setup();
+    create.mockImplementation(async (body) => ({
+      environment: {
+        ...body,
+        organizationId: 'foreign-org',
+        id: 'fixture_foreign',
+        status: 'running',
+        createdAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 900000).toISOString(),
+      },
+    }));
+    let caught: unknown;
+    try {
+      await guard.adapter.create(input, 'fixture-key-1');
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).not.toHaveProperty('admissionRejected', true);
+    expect(journal.read().filter((record) => record.kind === 'create-result')).toEqual([]);
+    expect(create).toHaveBeenCalledTimes(1);
+  });
   it('rechecks admission after the durable start write before invoking transport', async () => {
     const { journal, guard, create, input } = setup();
     const append = journal.append.bind(journal);
@@ -424,6 +466,7 @@ describe('offline exact-resource cleanup journal', () => {
       terminated.add(id);
     });
     vi.mocked(adapter.get).mockImplementation(async (id) => ({
+      ...ownedFixture(journal, id),
       id,
       status: id === 'fixture-healthy' && terminated.has(id) ? 'terminated' : 'running',
       expiresAt: null,
@@ -431,6 +474,32 @@ describe('offline exact-resource cleanup journal', () => {
     expect(await cleanupJournal(journal, adapter, 50)).toEqual(['fixture-stuck']);
     expect(terminated).toEqual(new Set(['fixture-stuck', 'fixture-healthy']));
   });
+  it.each(['running', 'terminated'] as const)(
+    'refuses a known wrong-scope receipt even when native status is %s',
+    async (status) => {
+      const { journal, header, adapter, input } = setup();
+      journal.append('create-intent', {
+        key: 'fixture-foreign',
+        body: { ...input, name: `broker-scale-${header.runId}-foreign` },
+        vmId: 'vm',
+        requestId: 'request',
+      });
+      journal.append('create-start', { key: 'fixture-foreign' });
+      journal.append('create-result', { key: 'fixture-foreign', environmentId: 'fixture_foreign' });
+      vi.mocked(adapter.get).mockImplementation(async (id) => ({
+        ...ownedFixture(journal, id),
+        organizationId: 'foreign-org',
+        id,
+        status,
+        expiresAt: null,
+      }));
+      expect(await cleanupJournal(journal, adapter, 30)).toEqual(['fixture_foreign']);
+      expect(adapter.terminate).not.toHaveBeenCalled();
+      expect(
+        journal.read().filter((record) => record.kind === 'upstream-cleanup-confirmed'),
+      ).toEqual([]);
+    },
+  );
   it('rejects conflicting bodies and ambiguity instead of broad environment deletion', () => {
     const { journal, header, input } = setup();
     for (const rate of [5, 6])
@@ -460,6 +529,7 @@ describe('offline exact-resource cleanup journal', () => {
     vi.mocked(adapter.get).mockImplementation(async (id) => {
       if (++reads === 1) throw new Error('Synthetic transient read failure.');
       return {
+        ...ownedFixture(journal, id),
         id,
         status: vi.mocked(adapter.terminate).mock.calls.length ? 'terminated' : 'running',
         expiresAt: null,

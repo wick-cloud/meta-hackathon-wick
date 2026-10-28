@@ -13,7 +13,11 @@ import {
 import { resolve, dirname, relative } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { spawn } from 'node:child_process';
-import type { CreateEnvironmentInput, WickAdapter } from '../../src/server/integrations/types.js';
+import type {
+  CreateEnvironmentInput,
+  WickAdapter,
+  WickEnvironment,
+} from '../../src/server/integrations/types.js';
 
 export const CONTROL_DIRECTORY = resolve(process.cwd(), '../.broker-run/real-wick-20261028');
 export const MAX_CREATES = 20;
@@ -190,6 +194,36 @@ export function replayIntents(records: JournalRecord[], header: Header): Map<str
   return entries;
 }
 
+function intentTimes(records: JournalRecord[], key: string) {
+  const intentAt = Math.min(
+    ...records
+      .filter((record) => record.kind === 'create-intent' && record.key === key)
+      .map((record) => Date.parse(record.at)),
+  );
+  const starts = records.filter((record) => record.kind === 'create-start' && record.key === key);
+  return {
+    earliest: intentAt - 5000,
+    latest: Math.max(intentAt, ...starts.map((record) => Date.parse(record.at))) + 120_000,
+  };
+}
+function environmentOwned(
+  environment: WickEnvironment,
+  body: CreateEnvironmentInput,
+  times: { earliest: number; latest: number },
+) {
+  return (
+    environment.name === body.name &&
+    environment.organizationId === body.organizationId &&
+    environment.groupId === body.groupId &&
+    environment.provider === body.provider &&
+    environment.profile === body.profile &&
+    typeof environment.createdAt === 'string' &&
+    Date.parse(environment.createdAt) >= times.earliest &&
+    Date.parse(environment.createdAt) <= times.latest &&
+    Date.parse(environment.createdAt) <= Date.now() + 5000
+  );
+}
+
 /** flock is released by the OS on process death; every active create attempt shares this gate. */
 async function creationGate<T>(journal: Journal, action: () => Promise<T>): Promise<T> {
   const lock = spawn(
@@ -358,6 +392,10 @@ export function createScaleGuard(options: {
           },
           () => adapter.create(body, key),
         );
+        assert(
+          environmentOwned(result.environment, body, intentTimes(journal.read(), key)),
+          'Create result ownership was not established.',
+        );
         const observed = journal.read().filter((r) => r.kind === 'create-result' && r.key === key);
         assert(
           observed.every((r) => r.environmentId === result.environment.id),
@@ -416,6 +454,8 @@ export async function cleanupJournal(journal: Journal, adapter: WickAdapter, tim
     confirmed: boolean;
     terminateAttempts: number;
     lastTerminateAt: number;
+    body: CreateEnvironmentInput;
+    times: { earliest: number; latest: number };
   }[] = [];
   async function bounded<T>(items: T[], operation: (item: T) => Promise<void>) {
     let next = 0;
@@ -457,6 +497,7 @@ export async function cleanupJournal(journal: Journal, adapter: WickAdapter, tim
     }
   }
   await bounded([...intents], async ([key, intent]) => {
+    const times = intentTimes(records, key);
     const outcomes = records.filter(
       (record) => record.kind === 'create-result' && record.key === key,
     );
@@ -466,26 +507,10 @@ export async function cleanupJournal(journal: Journal, adapter: WickAdapter, tim
       'Invalid environment receipt.',
     );
     if (!ids.length) {
-      const intentAt = Math.min(
-        ...records
-          .filter((record) => record.kind === 'create-intent' && record.key === key)
-          .map((record) => Date.parse(record.at)),
-      );
-      const starts = records.filter(
-        (record) => record.kind === 'create-start' && record.key === key,
-      );
-      const latestStartAt = Math.max(intentAt, ...starts.map((record) => Date.parse(record.at)));
       const matches = discovered.filter(
         (environment) =>
-          environment.name === intent.body.name &&
-          environment.organizationId === intent.body.organizationId &&
-          environment.groupId === intent.body.groupId &&
-          environment.provider === intent.body.provider &&
-          environment.profile === intent.body.profile &&
-          (environment.providerKeyId ?? undefined) === intent.body.providerKeyId &&
-          typeof environment.createdAt === 'string' &&
-          Date.parse(environment.createdAt) >= intentAt - 5000 &&
-          Date.parse(environment.createdAt) <= latestStartAt + 120_000,
+          environmentOwned(environment, intent.body, times) &&
+          (environment.providerKeyId ?? undefined) === intent.body.providerKeyId,
       );
       ids = [...new Set(matches.map((environment) => environment.id))];
       if (ids.length === 1) {
@@ -511,11 +536,23 @@ export async function cleanupJournal(journal: Journal, adapter: WickAdapter, tim
       return;
     }
     const id = ids[0] as string;
-    const ownedItem = { key, id, confirmed: false, terminateAttempts: 0, lastTerminateAt: 0 };
+    const ownedItem = {
+      key,
+      id,
+      body: intent.body,
+      times,
+      confirmed: false,
+      terminateAttempts: 0,
+      lastTerminateAt: 0,
+    };
     owned.push(ownedItem);
     try {
       const environment = await adapter.get(id);
       assert.equal(environment.id, id);
+      assert(
+        environmentOwned(environment, intent.body, times),
+        'Known receipt ownership was not confirmed.',
+      );
       if (environment.status === 'terminated') {
         ownedItem.confirmed = true;
         return;
@@ -535,6 +572,10 @@ export async function cleanupJournal(journal: Journal, adapter: WickAdapter, tim
         try {
           const environment = await adapter.get(item.id);
           assert.equal(environment.id, item.id);
+          assert(
+            environmentOwned(environment, item.body, item.times),
+            'Known receipt ownership was not confirmed.',
+          );
           if (environment.status === 'terminated') item.confirmed = true;
           else if (item.terminateAttempts < 5 && Date.now() - item.lastTerminateAt >= 5000) {
             journal.append('cleanup-terminate', { key: item.key, environmentId: item.id });
