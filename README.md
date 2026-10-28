@@ -42,9 +42,13 @@ The simulated inventory and customer demo quote are distinct from Wick's real op
 
 ## Real integrations
 
-Configure real modes and server-only credentials in `.env` or Railway variables. Real Wick requires an API base, organization ID, group ID, and bearer credential. Real Muse uses Meta's `muse-wonder-1.0` and strict JSON schema structured output. No upstream credential, scoped session token, or terminal transcript is sent to the browser or Muse.
+Configure real modes and server-only credentials in `.env` or Railway variables. Real Wick uses the exact published `@wick-cloud/sdk@0.1.0-rc.0`, with an API base, organization ID, group ID, and service credential. The official SDK manages scoped terminal authentication and renewal. No upstream credential or scoped token reaches the browser. Terminal output goes only to the authenticated owning browser and is not logged or sent to Muse. Keep `MUSE_MODE=fixture` for the scale baseline; real Muse calls require separate authorization.
 
-Read [Wick contract evidence](docs/WICK_CONTRACT.md) and [Muse contract evidence](docs/MUSE.md) before enabling real modes. Public documentation and mocked HTTP contract tests do not verify live allocations or live terminal behavior. Real catalog entries require administrator approval. Missing upstream metadata fails closed.
+Managed real offerings freeze the published micro-USD/second rate and its local retrieval time. `BROKER_TARGET_MARKUP_BPS` defaults to 2000 (20%). A fixed quote is `max(1, ceil(rate × durationSeconds × (10000 + markupBps) / 100000000))` USD cents, using integer arithmetic and rounding upward once. The upstream full-term estimate is separate from the customer's fixed quote; neither is settled Wick usage. Managed rates already include Wick's price. BYOK is unsupported. Existing fixture prices and accepted quotes remain unchanged. Suppliers are explicitly demo allocations backed by Wick, not independent provider firms.
+
+Use the separate `scripts/configure-real.ts` command to review and explicitly approve selected real configurations for existing supplier accounts. It preserves passwords, sessions, reservations, and frozen quotes; do not rerun account seeding to change pricing. See [real Wick operation](docs/REAL_WICK.md) for setup and isolated scale-run commands.
+
+Read [Wick contract evidence](docs/WICK_CONTRACT.md) and [Muse contract evidence](docs/MUSE.md) before enabling real modes. Public documentation and offline contract tests do not verify live allocations or live terminal behavior. Real catalog entries require administrator approval. Missing required rate or compute fields fails closed; optional upstream catalog version, currency, money unit, revision, and mode are not invented or required.
 
 ## Deploy shape
 
