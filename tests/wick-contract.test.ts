@@ -99,6 +99,12 @@ describe('public Wick REST contract', () => {
     expect(error.message).toContain('reconciliation');
     expect(error.message).not.toContain('Service key');
   });
+  it('rejects observations and termination receipts for a different environment', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(environment), { status: 200 })));
+    await expect(createWickAdapter(config).get('different-environment')).rejects.toThrow('scope');
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(mutation), { status: 202 })));
+    await expect(createWickAdapter(config).terminate('different-environment')).rejects.toThrow('does not match');
+  });
   it('requires an explicit adapter mode and never replaces real errors with fixtures', async () => {
     expect(() => createWickAdapter({ ...config, wickMode: 'fixture' })).toThrow('PostgreSQL');
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ unexpected: 'shape' }), { status: 202 })));

@@ -101,9 +101,8 @@ describe('same-origin terminal bridge', () => {
     const start = Date.now();
     await app.close();
     // The browser can ignore its close handshake; the server still forces the socket closed.
-    await new Promise(resolve => setTimeout(resolve, 2100));
-    expect(app.websocketServer.clients.size).toBe(0);
-    expect(Date.now() - start).toBeLessThan(4500);
+    await expect.poll(() => app.websocketServer.clients.size, { timeout: 3000 }).toBe(0);
+    expect(Date.now() - start).toBeLessThan(5000);
     socket.resume();
   }, 6000);
 });

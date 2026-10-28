@@ -12,7 +12,7 @@ On 2026-10-28, an unauthenticated, read-only GET of <https://app.wick-cloud.com/
 | `GET /v1/organizations/{id}/providers` | `{data,nextCursor?}`; bounded to five pages of 200. Organization-private offers require a published `providerKeyId` to enter the broker catalog. |
 | `POST /v1/environments/preview` | Ordinary create body; `{eligible,blockers,requiredReservationMicros,fallbackProviders,…}`. No allocation is performed by preview. |
 | `POST /v1/environments` | Required `Idempotency-Key`; HTTP 202 `{environment,operation,replayed?}`. The normalized adapter result keeps the complete envelope in `raw`. |
-| `GET /v1/environments/{id}` | Direct `CustomerEnvironment`; lifecycle status and returned `expiresAt` are authoritative. Missing expiry remains null. |
+| `GET /v1/environments/{id}` | Direct `CustomerEnvironment`; lifecycle status and returned `expiresAt` are authoritative. Missing expiry remains null; an environment ID differing from the requested ID is rejected. |
 | `GET /v1/environments/{id}/connections` | `{provider,terminal,ssh}`. Only the explicit terminal boolean can satisfy terminal availability. |
 | `POST /v1/environments/{id}/sessions` | HTTP 201 `{session:{environmentId,expiresAt,…},token,terminalWebsocketUrl?,…}`. Expiry is nested inside `session`, and scope must match the server-owned environment ID. |
 | `POST /v1/environments/{id}/terminate` | HTTP 202 mutation envelope. Acceptance does not prove cleanup; caller must poll the environment. |
@@ -25,7 +25,7 @@ The public resource schema has CPU, memory MiB, and disk MiB; it contains no GPU
 
 ## Terminal boundary
 
-The browser connects only to the application's same-origin `/api/vms/:id/terminal`. Before upgrading, the server validates the exact configured Origin, current Better Auth buyer session, owner-scoped VM row, running lifecycle state, and future authoritative expiry. It repeats session/ownership/rental validation every two seconds and installs a timer for the exact expiry. Revocation, logout, termination, expiry, or an upstream failure closes the bridge. Disconnect alone does not terminate a rental or promise shell-process survival.
+The browser connects only to the application's same-origin `/api/vms/:id/terminal`. Before upgrading, the server validates the exact configured Origin, current Better Auth buyer session, owner-scoped VM row, running lifecycle state, and future authoritative expiry. It repeats session/ownership/rental validation every two seconds and installs a timer for the exact expiry. The frozen rental integration mode must also match the active adapter. Revocation, logout, termination, expiry, or an upstream failure closes the bridge; peers that ignore close frames are forcefully disconnected after two seconds, including during application shutdown. Disconnect alone does not terminate a rental or promise shell-process survival.
 
 The bridge accepts only bounded JSON `input`, `resize`, `ack`, and `ping` frames. Browser endpoints, environment identifiers, tokens, and reauthentication frames are discarded or rejected. Output is forwarded as validated base64; ready, exit, error, and pong frames are narrowed before they reach the browser. Error text from the upstream is not forwarded. There are at most two simultaneous shells per VM and 64 across the application process, 32 KiB client frames, 256 KiB buffers, a 150-frame-per-second input bound plus a separate 2000-acknowledgement-per-second allowance, and a 12-second upstream handshake deadline.
 
@@ -35,7 +35,7 @@ Only a short-lived environment session token is used for the upstream WebSocket.
 
 ## Failure and recovery behavior
 
-REST calls have a 12-second deadline, a 1 MiB response limit, and reject redirects. The adapter does not retry automatically: the durable marketplace worker supplies the persisted create key for reconciliation. Network errors, timeouts, HTTP 401/403/409/429, and server errors remain uncertain. Only create HTTP 400/422 are classified as admission rejection; no error response body or service key is exposed. Unsupported lifecycle states are rejected rather than interpreted as readiness or cleanup.
+REST calls have a 12-second deadline, a 1 MiB response limit, and reject redirects. The adapter does not retry automatically: the durable marketplace worker supplies the persisted create key for reconciliation. Network errors, timeouts, HTTP 401/403/409/429, and server errors remain uncertain. Only create HTTP 400/422 are classified as admission rejection; no error response body or service key is exposed. Unsupported lifecycle states are rejected rather than interpreted as readiness or cleanup. Provisioning observations keep the earliest authoritative expiry and cannot extend the clock. A cancellation before the first admission attempt avoids an upstream create entirely. Frozen rental modes prevent a real allocation from being reconciled through the fixture adapter after a configuration change.
 
 The caller must only charge after real `running` status, explicit terminal capability, and a future returned expiry. Cleanup release must wait for a confirmed terminal lifecycle state. A successful terminate request alone cannot release a supplier hold.
 

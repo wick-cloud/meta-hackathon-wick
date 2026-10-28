@@ -220,12 +220,17 @@ function realAdapter(config: WickConfig): WickAdapter {
       if (key.length < 8 || key.length > 200) throw new WickApiError('Invalid persisted idempotency key', 400, true);
       return parseCreateResult(await request('/v1/environments', { method: 'POST', body: createBody(input), key }));
     },
-    async get(id) { return parseEnvironment(await request(envPath(id))); },
+    async get(id) {
+      const environment = parseEnvironment(await request(envPath(id)));
+      if (environment.id !== id) throw new WickApiError('Wick returned an environment outside the requested scope');
+      return environment;
+    },
     async connections(id) { return parseConnections(await request(`${envPath(id)}/connections`)); },
     async session(id) { return parseSession(await request(`${envPath(id)}/sessions`, { method: 'POST' }), id); },
     async terminate(id) {
       // Acceptance is not cleanup. Callers must poll get() until a confirmed terminal lifecycle state.
-      parseCreateResult(await request(`${envPath(id)}/terminate`, { method: 'POST' }));
+      const result = parseCreateResult(await request(`${envPath(id)}/terminate`, { method: 'POST' }));
+      if (result.environment.id !== id) throw new WickApiError('Wick termination response does not match the requested environment');
     },
   };
 }
