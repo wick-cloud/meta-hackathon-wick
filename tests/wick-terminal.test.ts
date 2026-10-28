@@ -11,7 +11,7 @@ const sockets: WebSocket[] = [];
 afterEach(async () => { for (const socket of sockets.splice(0)) socket.terminate(); await Promise.all(instances.splice(0).map(app => app.close())); });
 
 async function harness() {
-  const state = { authenticated: true, owner: 'buyer-one', status: 'running', expiresAt: new Date(Date.now() + 60_000) };
+  const state = { authenticated: true, owner: 'buyer-one', status: 'running', expiresAt: new Date(Date.now() + 60_000), sourceMode: 'fixture' };
   const app = Fastify({ logger: false });
   app.setErrorHandler((error, _request, reply) => reply.code(error instanceof HttpError ? error.statusCode : 500).send({ error: error instanceof Error ? error.message : 'Unknown failure' }));
   await app.register(websocket, { options: { maxPayload: 33792 } });
@@ -19,7 +19,7 @@ async function harness() {
     config: { appUrl: 'http://localhost:3000' },
     wick: { mode: 'fixture' },
     requireActor: async () => { if (!state.authenticated) throw new HttpError(401, 'Sign in required'); return { id: 'buyer-one', role: 'buyer' }; },
-    pool: { query: async (_query: string, params: string[]) => ({ rows: params[1] === state.owner ? [{ id: vmId, buyer_id: state.owner, status: state.status, expires_at: state.expiresAt, environment_id: 'fixture_environment' }] : [] }) },
+    pool: { query: async (_query: string, params: string[]) => ({ rows: params[1] === state.owner ? [{ id: vmId, buyer_id: state.owner, status: state.status, expires_at: state.expiresAt, environment_id: 'fixture_environment', source_mode: state.sourceMode }] : [] }) },
   } as unknown as AppContext);
   await app.listen({ port: 0, host: '127.0.0.1' });
   instances.push(app);
@@ -53,6 +53,10 @@ describe('same-origin terminal bridge', () => {
     const { connect, state } = await harness();
     state.status = 'terminating'; expect(await rejected(connect())).toBe(409);
     state.status = 'running'; state.expiresAt = new Date(Date.now() - 1); expect(await rejected(connect())).toBe(409);
+  });
+  it('does not cross fixture and real integration modes when attaching a terminal', async () => {
+    const { connect, state } = await harness(); state.sourceMode = 'real';
+    expect(await rejected(connect())).toBe(409);
   });
   it('labels fixture output, never executes arbitrary commands, and does not expose upstream tokens', async () => {
     const { connect } = await harness();
@@ -91,4 +95,15 @@ describe('same-origin terminal bridge', () => {
     const socket = connect(); const ended = closed(socket); await opened(socket);
     expect(await ended).toBe(1008); expect(state.status).toBe('running');
   });
+  it('bounds shutdown when a client stops processing close frames', async () => {
+    const { app, connect } = await harness(); const socket = connect(); await opened(socket);
+    socket.pause();
+    const start = Date.now();
+    await app.close();
+    // The browser can ignore its close handshake; the server still forces the socket closed.
+    await new Promise(resolve => setTimeout(resolve, 2100));
+    expect(app.websocketServer.clients.size).toBe(0);
+    expect(Date.now() - start).toBeLessThan(4500);
+    socket.resume();
+  }, 6000);
 });

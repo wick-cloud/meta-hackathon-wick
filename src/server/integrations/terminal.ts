@@ -11,7 +11,7 @@ const MAX_SHELLS_PER_VM = 2;
 const VALIDATE_EVERY_MS = 2000;
 const RENEW_AFTER_MS = 240_000;
 type ClientFrame = { type: 'input'; data: string } | { type: 'resize'; cols: number; rows: number } | { type: 'ack'; bytes: number } | { type: 'ping' };
-type Rental = { id: string; buyer_id: string; status: string; environment_id: string; expires_at: Date | string };
+type Rental = { id: string; buyer_id: string; status: string; environment_id: string; expires_at: Date | string; source_mode?: string };
 
 export function parseTerminalInput(value: unknown): ClientFrame {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid terminal frame');
@@ -36,6 +36,7 @@ export async function registerTerminal(app: FastifyInstance, ctx: AppContext): P
   const allowedOrigin = new URL(ctx.config.appUrl).origin;
   const approved = new WeakMap<FastifyRequest, Rental>();
   const open = new Map<string, Set<WebSocket>>();
+  const disconnects = new Map<WebSocket, () => void>();
   let total = 0;
 
   async function authorize(request: FastifyRequest): Promise<Rental> {
@@ -44,9 +45,10 @@ export async function registerTerminal(app: FastifyInstance, ctx: AppContext): P
     const id = (request.params as { id: string }).id;
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) throw new HttpError(404, 'VM not found');
     const { rows } = await ctx.pool.query<Rental>(
-      `SELECT id,buyer_id,status,environment_id,expires_at FROM broker_vms WHERE id=$1 AND buyer_id=$2`, [id, actor.id]);
+      `SELECT id,buyer_id,status,environment_id,expires_at,COALESCE(catalog_snapshot->>'sourceMode','fixture') AS source_mode FROM broker_vms WHERE id=$1 AND buyer_id=$2`, [id, actor.id]);
     const rental = rows[0];
     if (!rental) throw new HttpError(404, 'VM not found');
+    if ((rental.source_mode ?? 'fixture') !== ctx.wick.mode) throw new HttpError(409, 'Rental belongs to a different Wick integration mode');
     if (rental.status !== 'running' || !rental.environment_id || !rental.expires_at || new Date(rental.expires_at).getTime() <= Date.now()) {
       throw new HttpError(409, 'Terminal requires an active, ready rental');
     }
@@ -96,10 +98,18 @@ export async function registerTerminal(app: FastifyInstance, ctx: AppContext): P
       pendingBytes = 0;
       line = '';
       sockets.delete(socket);
+      disconnects.delete(socket);
       if (!sockets.size) open.delete(rental!.id);
       total--;
       if (upstream && upstream.readyState !== WebSocket.CLOSED) upstream.close(1000, 'Broker connection closed');
       if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) socket.close(code, reason);
+      // A peer that ignores close frames must not keep a revoked shell or application shutdown alive.
+      const closingUpstream = upstream;
+      const forcedClose = setTimeout(() => {
+        if (socket.readyState !== WebSocket.CLOSED) socket.terminate();
+        if (closingUpstream && closingUpstream.readyState !== WebSocket.CLOSED) closingUpstream.terminate();
+      }, 2000);
+      forcedClose.unref();
       // Metadata only: do not log frames, command text, upstream URL, token, or request headers.
       request.log.info({ vmId: rental!.id, mode: ctx.wick.mode, reason }, 'Terminal disconnected');
     }
@@ -111,6 +121,7 @@ export async function registerTerminal(app: FastifyInstance, ctx: AppContext): P
       }).catch(() => close(1008, 'Rental access ended')).finally(() => { validating = false; });
     }, VALIDATE_EVERY_MS);
     const expiryTimer = setTimeout(() => close(1008, 'Rental expired'), Math.max(1, new Date(rental.expires_at).getTime() - Date.now()));
+    disconnects.set(socket, () => close(1001, 'Application restarting'));
 
     const fixtureCommand = (command: string) => {
       const trimmed = command.trim();
@@ -230,6 +241,6 @@ export async function registerTerminal(app: FastifyInstance, ctx: AppContext): P
   });
 
   app.addHook('preClose', async () => {
-    for (const sockets of open.values()) for (const socket of sockets) socket.close(1001, 'Application restarting');
+    for (const disconnect of [...disconnects.values()]) disconnect();
   });
 }
