@@ -712,6 +712,175 @@ describe.skipIf(!databaseUrl)('PostgreSQL marketplace concurrency and invariants
     );
   });
 
+  it('never creates during cleanup when admission is unknown and keeps its hold', async () => {
+    const { vm, bidId, buyerId } = await awardedVm();
+    const { lifecycle, wick } = lifecycleContext({
+      id: 'uncertain',
+      status: 'running',
+      expiresAt: new Date(Date.now() + 900000).toISOString(),
+    });
+    vi.mocked(wick.create).mockRejectedValueOnce(new Error('Transport outcome unknown'));
+    wick.list = vi.fn(async () => ({ items: [] }));
+    await provisionVm(lifecycle, vm.id);
+    await terminateVm(lifecycle, buyerId, vm.id);
+    await cleanupVm(lifecycle, vm.id);
+    expect(wick.create).toHaveBeenCalledTimes(1);
+    expect(wick.terminate).not.toHaveBeenCalled();
+    expect(wick.list).toHaveBeenCalledTimes(2);
+    const row = (
+      await pool.query('SELECT cleanup_confirmed_at,failure_reason FROM broker_vms WHERE id=$1', [
+        vm.id,
+      ])
+    ).rows[0];
+    expect(row.cleanup_confirmed_at).toBeNull();
+    expect(row.failure_reason).toContain('UNKNOWN');
+    expect(
+      (await pool.query('SELECT released_at FROM broker_holds WHERE bid_id=$1', [bidId])).rows[0]
+        .released_at,
+    ).toBeNull();
+  });
+
+  it('discovers exact owned environment after a missing create response without replaying create', async () => {
+    const { vm, buyerId, bidId } = await awardedVm();
+    const environment = {
+      id: 'discovered-exact',
+      status: 'running' as const,
+      expiresAt: new Date(Date.now() + 900000).toISOString(),
+      createdAt: new Date().toISOString(),
+      ...vm.create_input,
+    };
+    const { lifecycle, wick, state } = lifecycleContext(environment);
+    vi.mocked(wick.create).mockRejectedValueOnce(new Error('Response lost'));
+    wick.list = vi.fn(async () => ({
+      items: [{ ...environment, id: 'foreign', groupId: 'wrong' }, environment],
+    }));
+    vi.mocked(wick.terminate).mockImplementation(async () => {
+      state.environment.status = 'terminated';
+    });
+    await provisionVm(lifecycle, vm.id);
+    await terminateVm(lifecycle, buyerId, vm.id);
+    await cleanupVm(lifecycle, vm.id);
+    expect(wick.create).toHaveBeenCalledTimes(1);
+    expect(wick.terminate).toHaveBeenCalledExactlyOnceWith('discovered-exact');
+    expect(
+      (await pool.query('SELECT released_at FROM broker_holds WHERE bid_id=$1', [bidId])).rows[0]
+        .released_at,
+    ).not.toBeNull();
+  });
+
+  it.each(['byok', 'missing', 'provider-key', 'wrong-scope'])(
+    'quarantines %s real billing without issuing an invoice',
+    async (failure) => {
+      const { vm } = await awardedVm();
+      await pool.query(
+        'UPDATE broker_vms SET catalog_snapshot=catalog_snapshot || \'{"sourceMode":"real"}\'::jsonb WHERE id=$1',
+        [vm.id],
+      );
+      const environment: WickEnvironment = {
+        id: 'real-billing-fixture',
+        status: 'running',
+        expiresAt: new Date(Date.now() + 900000).toISOString(),
+        ...vm.create_input,
+        billingMode: 'wick_managed',
+        createdAt: new Date().toISOString(),
+      };
+      if (failure === 'byok') environment.billingMode = 'byok';
+      if (failure === 'missing') delete environment.billingMode;
+      if (failure === 'provider-key') environment.providerKeyId = 'unapproved';
+      if (failure === 'wrong-scope') environment.groupId = 'different-group';
+      const { lifecycle, wick, state } = lifecycleContext(environment);
+      wick.mode = 'real';
+      await provisionVm(lifecycle, vm.id);
+      expect(
+        (await pool.query('SELECT status,failure_reason FROM broker_vms WHERE id=$1', [vm.id]))
+          .rows[0],
+      ).toMatchObject(
+        failure === 'wrong-scope'
+          ? { status: 'provisioning', failure_reason: expect.stringContaining('ownership') }
+          : { status: 'terminating', failure_reason: expect.stringContaining('billing scope') },
+      );
+      expect((await pool.query('SELECT count(*)::int AS n FROM broker_invoices')).rows[0].n).toBe(
+        0,
+      );
+      if (failure === 'wrong-scope') {
+        expect(
+          (await pool.query('SELECT environment_id FROM broker_vms WHERE id=$1', [vm.id])).rows[0]
+            .environment_id,
+        ).toBeNull();
+        wick.list = vi.fn(async () => ({ items: [] }));
+        await terminateVm(lifecycle, vm.buyer_id, vm.id);
+        await cleanupVm(lifecycle, vm.id);
+        expect(wick.terminate).not.toHaveBeenCalled();
+      } else {
+        vi.mocked(wick.terminate).mockImplementation(async () => {
+          state.environment.status = 'terminated';
+        });
+        await cleanupVm(lifecycle, vm.id);
+        expect(wick.terminate).toHaveBeenCalledExactlyOnceWith(environment.id);
+      }
+    },
+  );
+
+  it('waits for pending billing metadata and verifies managed billing before readiness', async () => {
+    const { vm } = await awardedVm();
+    await pool.query(
+      'UPDATE broker_vms SET catalog_snapshot=catalog_snapshot || \'{"sourceMode":"real"}\'::jsonb WHERE id=$1',
+      [vm.id],
+    );
+    const environment: WickEnvironment = {
+      ...vm.create_input,
+      id: 'pending-billing',
+      status: 'provisioning',
+      createdAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 900000).toISOString(),
+    };
+    const { lifecycle, wick, state } = lifecycleContext(environment);
+    wick.mode = 'real';
+    await provisionVm(lifecycle, vm.id);
+    expect(
+      (await pool.query('SELECT status FROM broker_vms WHERE id=$1', [vm.id])).rows[0].status,
+    ).toBe('provisioning');
+    expect((await pool.query('SELECT count(*)::int AS n FROM broker_invoices')).rows[0].n).toBe(0);
+    state.environment.status = 'running';
+    state.environment.billingMode = 'wick_managed';
+    await provisionVm(lifecycle, vm.id);
+    expect((await pool.query('SELECT count(*)::int AS n FROM broker_invoices')).rows[0].n).toBe(1);
+  });
+
+  it('charges real rentals only after matching managed billing observation and terminal readiness', async () => {
+    const { vm } = await awardedVm();
+    await pool.query(
+      'UPDATE broker_vms SET catalog_snapshot=catalog_snapshot || \'{"sourceMode":"real"}\'::jsonb WHERE id=$1',
+      [vm.id],
+    );
+    const environment: WickEnvironment = {
+      id: 'managed-billing-fixture',
+      status: 'running',
+      expiresAt: new Date(Date.now() + 900000).toISOString(),
+      ...vm.create_input,
+      billingMode: 'wick_managed',
+      createdAt: new Date().toISOString(),
+    };
+    const { lifecycle, wick } = lifecycleContext(environment);
+    wick.mode = 'real';
+    expect(await markReady(lifecycle, vm.id)).toBe(false);
+    await pool.query('UPDATE broker_vms SET environment_id=$2,expires_at=$3 WHERE id=$1', [
+      vm.id,
+      environment.id,
+      environment.expiresAt,
+    ]);
+    for (const invalid of [
+      { ...environment, id: 'foreign-id' },
+      { ...environment, status: 'provisioning' as const },
+      { ...environment, expiresAt: 'invalid' },
+      { ...environment, name: 'wrong-name' },
+    ])
+      expect(await markReady(lifecycle, vm.id, invalid, true)).toBe(false);
+    expect(await markReady(lifecycle, vm.id, environment, false)).toBe(false);
+    await provisionVm(lifecycle, vm.id);
+    expect((await pool.query('SELECT count(*)::int AS n FROM broker_invoices')).rows[0].n).toBe(1);
+  });
+
   it('retains the winner slot after termination acceptance and preserves the full ready charge', async () => {
     const { vm, bidId, buyerId } = await awardedVm();
     const { lifecycle, state, wick } = lifecycleContext({

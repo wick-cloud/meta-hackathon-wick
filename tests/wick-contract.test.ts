@@ -100,6 +100,7 @@ describe('public Wick REST contract', () => {
   it('maps only available offers and exact supported finite TTLs; starts real choices unapproved', () => {
     const offer = {
       provider: 'boat',
+      byok: { enabled: false },
       profile: 'small',
       region: 'us-east',
       maxTtlSeconds: 1800,
@@ -168,6 +169,7 @@ describe('public Wick REST contract', () => {
   it('uses the filtered customer SDK catalog without requiring omitted schema metadata or BYOK provider reads', async () => {
     const offer = {
       provider: 'boat',
+      byok: { enabled: false },
       profile: 'small',
       region: 'auto',
       maxTtlSeconds: 3600,
@@ -316,6 +318,20 @@ describe('public Wick REST contract', () => {
       vi.fn(async () => new Response('x'.repeat(1024 * 1024 + 1))),
     );
     await expect(createWickAdapter(config).catalog()).rejects.toThrow('reconciliation');
+  });
+  it('cancels an oversized declared body before reading or retaining upstream data', async () => {
+    const cancel = vi.fn();
+    const pull = vi.fn();
+    const body = new ReadableStream<Uint8Array>({ cancel, pull }, { highWaterMark: 0 });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () => new Response(body, { headers: { 'content-length': String(1024 * 1024 + 1) } }),
+      ),
+    );
+    await expect(createWickAdapter(config).catalog()).rejects.toThrow('reconciliation');
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(pull).not.toHaveBeenCalled();
   });
   it('rejects credential-bearing API bases and wrong organization/group before issuing calls', async () => {
     const fetcher = vi.fn();

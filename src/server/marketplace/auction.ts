@@ -298,7 +298,7 @@ export async function closeAuction(ctx: AppContext, requestId: string) {
     const createInput = {
       organizationId: catalog.organizationId || config.wickOrganizationId || 'fixture-organization',
       groupId: catalog.groupId || config.wickGroupId || 'fixture-group',
-      name: `wick-broker-${vmId.slice(0, 8)}`,
+      name: `${config.environmentNamePrefix || 'wick-broker'}-${vmId.slice(0, 8)}`,
       provider: catalog.provider,
       profile: catalog.profile,
       region: catalog.region,

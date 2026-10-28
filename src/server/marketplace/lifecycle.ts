@@ -1,5 +1,10 @@
 import type { AppContext } from '../context.js';
 import type { WickEnvironment } from '../integrations/types.js';
+import {
+  discoverEnvironment,
+  managedEnvironmentMatches,
+  environmentOwnershipMatches,
+} from '../integrations/discovery.js';
 import { transaction, enqueue, activity, QUEUES } from './db.js';
 import type { Row } from './data.js';
 
@@ -64,7 +69,12 @@ async function persistObservation(ctx: AppContext, vmId: string, environment: Wi
     );
 }
 
-export async function markReady(ctx: AppContext, vmId: string) {
+export async function markReady(
+  ctx: AppContext,
+  vmId: string,
+  observation?: WickEnvironment,
+  terminalConfirmed = false,
+) {
   return transaction(ctx.pool, async (db) => {
     const vm = (await db.query('SELECT * FROM broker_vms WHERE id=$1 FOR UPDATE', [vmId])).rows[0];
     if (
@@ -72,6 +82,18 @@ export async function markReady(ctx: AppContext, vmId: string) {
       vm.status !== 'provisioning' ||
       vm.termination_requested_at ||
       (vm.catalog_snapshot.sourceMode ?? 'fixture') !== ctx.wick.mode
+    )
+      return false;
+    if (
+      ctx.wick.mode === 'real' &&
+      (!managedEnvironmentMatches(observation, vm.create_input) ||
+        observation?.id !== vm.environment_id ||
+        observation?.status !== 'running' ||
+        !observation.expiresAt ||
+        !Number.isFinite(Date.parse(observation.expiresAt)) ||
+        Date.parse(observation.expiresAt) <= Date.now() ||
+        !terminalConfirmed ||
+        !environmentOwnershipMatches(observation, vm.create_input, vm.created_at))
     )
       return false;
     const eligible = (
@@ -135,10 +157,29 @@ export async function provisionVm(ctx: AppContext, vmId: string) {
       const result = await ctx.wick.create(vm.create_input, vm.create_key);
       environment = result.environment;
     }
+    if (
+      ctx.wick.mode === 'real' &&
+      !environmentOwnershipMatches(environment, vm.create_input, vm.created_at)
+    )
+      throw new Error('Wick environment ownership is unverified; admission remains UNKNOWN.');
     await persistObservation(ctx, vmId, environment);
     const current = (await ctx.pool.query('SELECT * FROM broker_vms WHERE id=$1', [vmId])).rows[0];
     if (current.termination_requested_at || current.status !== 'provisioning') {
       await requestCleanup(ctx, vmId, 'Termination requested before the environment was ready.');
+      return;
+    }
+    if (
+      ctx.wick.mode === 'real' &&
+      (environment.billingMode === 'byok' ||
+        environment.providerKeyId ||
+        (environment.status === 'running' &&
+          !managedEnvironmentMatches(environment, vm.create_input)))
+    ) {
+      await requestCleanup(
+        ctx,
+        vmId,
+        'Unexpected or unverified Wick billing scope; quarantined for cleanup without an invoice.',
+      );
       return;
     }
     if (current.expires_at && new Date(current.expires_at).getTime() <= Date.now()) {
@@ -160,7 +201,7 @@ export async function provisionVm(ctx: AppContext, vmId: string) {
     }
     if (environment.status === 'running' && current.expires_at) {
       const connections = await ctx.wick.connections(environment.id);
-      if (connections.terminal && (await markReady(ctx, vmId))) return;
+      if (connections.terminal && (await markReady(ctx, vmId, environment, true))) return;
     }
     await retryProvision(
       ctx,
@@ -301,11 +342,20 @@ export async function cleanupVm(ctx: AppContext, vmId: string) {
     );
     let environment: WickEnvironment;
     if (!vm.environment_id) {
-      // An uncertain create response cannot release a slot. Reconcile the exact
-      // persisted key/input before trying termination; never issue a fresh key.
-      const result = await ctx.wick.create(vm.create_input, vm.create_key);
-      environment = result.environment;
+      // Cleanup is strictly read-only discovery followed by exact-ID termination.
+      // Replaying even the original key could allocate when the first call never arrived.
+      const discovered = await discoverEnvironment(ctx.wick, vm.create_input, vm.created_at);
+      if (!discovered)
+        throw new Error(
+          'Wick admission remains UNKNOWN; no matching environment discovered. Native TTL is a backstop, not cleanup confirmation.',
+        );
+      environment = discovered;
     } else environment = await ctx.wick.get(vm.environment_id);
+    if (
+      ctx.wick.mode === 'real' &&
+      !environmentOwnershipMatches(environment, vm.create_input, vm.created_at)
+    )
+      throw new Error('Wick cleanup ownership is unverified; no termination was attempted.');
     await persistObservation(ctx, vmId, environment);
     if (environment.status === 'terminated') {
       await confirmCleanup(ctx, vmId);
@@ -314,6 +364,11 @@ export async function cleanupVm(ctx: AppContext, vmId: string) {
     await ctx.wick.terminate(environment.id);
     // Termination acceptance is not cleanup confirmation.
     const observed = await ctx.wick.get(environment.id);
+    if (
+      ctx.wick.mode === 'real' &&
+      !environmentOwnershipMatches(observed, vm.create_input, vm.created_at)
+    )
+      throw new Error('Wick cleanup observation ownership is unverified.');
     await persistObservation(ctx, vmId, observed);
     if (observed.status === 'terminated') {
       await confirmCleanup(ctx, vmId);

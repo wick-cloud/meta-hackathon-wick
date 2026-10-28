@@ -23,6 +23,13 @@ export interface WickEnvironment {
   status: 'pending' | 'provisioning' | 'running' | 'terminating' | 'terminated' | 'failed';
   expiresAt: string | null;
   createdAt?: string;
+  name?: string;
+  organizationId?: string;
+  groupId?: string;
+  provider?: string;
+  profile?: string;
+  providerKeyId?: string;
+  billingMode?: 'wick_managed' | 'byok';
   raw?: unknown;
 }
 export interface WickCreateResult {
@@ -60,6 +67,16 @@ export interface WickAdapter {
   preview(input: CreateEnvironmentInput): Promise<unknown>;
   create(input: CreateEnvironmentInput, idempotencyKey: string): Promise<WickCreateResult>;
   get(id: string): Promise<WickEnvironment>;
+  list?(input: {
+    organizationId: string;
+    groupId: string;
+    search: string;
+    provider: string;
+    limit: 50;
+    newest: true;
+    archived: boolean;
+    cursor?: string;
+  }): Promise<{ items: WickEnvironment[]; nextCursor?: string }>;
   connections(id: string): Promise<WickConnections>;
   session(id: string): Promise<WickSession>;
   terminal(id: string, options?: WickTerminalOptions): Promise<WickTerminal>;

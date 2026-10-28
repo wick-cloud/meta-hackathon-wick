@@ -66,4 +66,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     logLevel: e.LOG_LEVEL,
   };
 }
-export type Config = ReturnType<typeof loadConfig>;
+export type Config = ReturnType<typeof loadConfig> & {
+  /** Internal isolated-run hook; not read from user environment or HTTP input. */
+  environmentNamePrefix?: string;
+};

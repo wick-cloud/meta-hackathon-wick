@@ -37,7 +37,7 @@ Fixture and real terminals share a small typed adapter. The bridge preserves own
 
 REST calls have a 12-second deadline, a 1 MiB response limit, and reject redirects. The adapter does not retry automatically: the durable marketplace worker supplies the persisted create key for reconciliation. Network errors, timeouts, HTTP 401/403/409/429, and server errors remain uncertain. Only create HTTP 400/422 are classified as admission rejection; no error response body or service key is exposed. Unsupported lifecycle states are rejected rather than interpreted as readiness or cleanup. Provisioning observations keep the earliest authoritative expiry and cannot extend the clock. A cancellation before the first admission attempt avoids an upstream create entirely. Frozen rental modes prevent a real allocation from being reconciled through the fixture adapter after a configuration change.
 
-The caller must only charge after real `running` status, explicit terminal capability, and a future returned expiry. Cleanup release must wait for a confirmed terminal lifecycle state. A successful terminate request alone cannot release a supplier hold.
+The caller must only charge after exact owned environment identity, real `running` status, explicit terminal capability, finite future returned expiry, and verified `wick_managed` billing without a provider key. Unexpected billing is quarantined; foreign scope is never bound or terminated. Cleanup never replays create: bounded read-only exact-name/scope/time discovery retains missing receipts as UNKNOWN and does not release holds. Cleanup release must wait for a confirmed terminal lifecycle state. A successful terminate request alone cannot release a supplier hold.
 
 ## Explicit fixture mode
 
