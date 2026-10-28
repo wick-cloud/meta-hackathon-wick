@@ -18,7 +18,8 @@
     "db:seed": "tsx scripts/seed.ts",
     "check": "npm run typecheck && npm test && npm run build",
     "seed:production": "node dist/scripts/seed.js",
-    "format": "prettier --write src scripts tests *.ts *.json"
+    "format": "prettier --write src scripts tests *.ts *.json",
+    "test:recovery": "tsx scripts/verify-recovery.ts"
   },
   "dependencies": {
     "@fastify/middie": "^9.0.3",

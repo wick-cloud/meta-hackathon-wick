@@ -50,7 +50,7 @@ Read [Wick contract evidence](docs/WICK_CONTRACT.md) and [Muse contract evidence
 
 One Railway app service using `Dockerfile` and `railway.toml`, plus PostgreSQL. Set `DATABASE_URL`, `APP_URL` (HTTPS in production), `BETTER_AUTH_SECRET`, explicit adapter modes, and required real credentials. The same always-on process serves UI, APIs, authentication, terminal WebSockets, and durable queue consumers. Use one replica for v1. `/health` is liveness; `/ready` checks database availability after startup. Migrations run under an advisory lock at startup; SIGTERM closes connections and drains jobs.
 
-Run the explicit seed separately where environment-supplied seed passwords are available: `npm run db:seed` from the development checkout or `npm run seed:production` in the built image. No deployment or account changes are performed by these repository files.
+Run the explicit seed separately where environment-supplied seed passwords are available: `npm run db:seed` from the development checkout or `npm run seed:production` in the built image. No external deployment or service-account changes were performed during this build.
 
 ## Verification
 
@@ -62,6 +62,8 @@ npm run test:browser
 ```
 
 Set `TEST_DATABASE_URL` to a dedicated test database for PostgreSQL concurrency/auth tests; these use disposable schemas. Browser tests require the seeded fixture application at `E2E_BASE_URL` (default `http://localhost:3000`) and seed credentials. Install Chromium once using `npx playwright install --with-deps chromium`.
+
+For an additional local process-restart check, stop the preview and run `npm run test:recovery`. It requires a built, seeded fixture app and loopback database, manages one app process at a time, and stops it when finished. Restart the preview with `npm start` afterward.
 
 CI explicitly selects fixture adapters and never allocates real compute or uses paid APIs. See [testing notes](docs/testing.md) and [HANDOFF.md](HANDOFF.md) for checks actually run and remaining limits.
 
