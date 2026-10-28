@@ -54,6 +54,18 @@ The application must already be running; the suite does not create additional ap
 - Fixture adapters cannot reconcile, charge, or release holds for a rental admitted under real mode. Fixture catalog IDs cannot enter real-mode requests, and catalog sync revokes approval for vanished configurations.
 - The configured VM concurrency limit applies when no administrator override exists.
 
+## Live process recovery
+
+After a production build and explicit seed, stop the existing local preview and run:
+
+```sh
+npx tsx scripts/verify-recovery.ts
+```
+
+The script rejects non-loopback app/database URLs and requires both adapter modes to be `fixture`. It manages one built application process at a time. It creates one actual database auction, restarts the app gracefully before the 30-second close, waits for the durable consumers to produce a ready fixture VM and one invoice, and restarts again. It asserts that the existing Better Auth session still works and the environment ID, create key, exact PostgreSQL expiry, readiness time, invoice ID, and price remain unchanged. It checks there is exactly one VM, fixture environment, and invoice, then terminates the fixture rental and waits for confirmed cleanup and capacity release.
+
+The script stops its application process on completion. Restart your ordinary preview afterward with `npm start`. This is a manual local integration check, not an external allocation test or a deployment step.
+
 ## Evidence from this build
 
-At 2026-10-28 06:32 UTC, `npm run test:db` passed all **26** marketplace tests against local PostgreSQL 16 with Node 24.22.1 and Vitest 5.0.5. The six distinct Playwright cases passed across the 06:34 full run and 06:35 targeted buyer rerun; the first full run exposed two test-harness assumptions that were corrected (review URL matching and numeric-input formatting). The full buyer workflow took 36.7 seconds, including the real 30-second auction and an authenticated fixture WebSocket connection/reconnection. This is local fixture/domain evidence, not verification of Wick's production API or the real Meta service. Final project-wide checks and browser results are recorded in `HANDOFF.md`.
+At 2026-10-28 06:32 UTC, `npm run test:db` passed all **26** marketplace tests against local PostgreSQL 16 with Node 24.22.1 and Vitest 5.0.5. At 06:43 UTC, the live process recovery script passed both graceful restarts and confirmed final cleanup. At 06:44 UTC, the final combined `npm run test:browser` run passed **6/6** cases in 40.7 seconds against the built application, real Better Auth, real PostgreSQL and durable job consumers. The buyer workflow included the actual 30-second auction and an authenticated fixture WebSocket connection/reconnection. Earlier test-harness assumptions about review URL matching and numeric-input formatting were corrected before this final run. This is local fixture/domain evidence, not verification of Wick's production API or the real Meta service. Final project-wide checks are recorded in `HANDOFF.md`.
