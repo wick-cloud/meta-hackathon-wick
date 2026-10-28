@@ -28,6 +28,8 @@ import {
 } from 'lucide-react';
 import {
   api,
+  cloudRouteName,
+  regionName,
   dateTime,
   loadDraft,
   money,
@@ -77,7 +79,7 @@ export function NewEnvironment() {
     [budget, setBudget] = useState(loadDraft()?.maxPriceCents ?? 500),
     [budgetEdited, setBudgetEdited] = useState(false);
   const approved = catalog.filter((item) => item.approved),
-    first = approved[0];
+    first = approved.find((item) => item.profile === 'small') ?? approved[0];
   function changeDescription(value: string) {
     setDescription(value);
     const explicit = parseExplicitBuyerDescription(value);
@@ -102,16 +104,23 @@ export function NewEnvironment() {
       );
       return;
     }
+    const explicitRegion = parseExplicitBuyerDescription(description).region;
+    const reference =
+      (explicitRegion
+        ? (approved.find((item) => item.region === explicitRegion && item.profile === 'small') ??
+          approved.find((item) => item.region === explicitRegion))
+        : undefined) ?? first;
     saveDraft({
       description: description.trim(),
-      catalogId: first.id,
-      region: first.region,
-      durationMinutes: first.durationMinutes.includes(30) ? 30 : first.durationMinutes[0]!,
+      catalogId: reference.id,
+      region: modes.wick === 'real' ? (explicitRegion ?? 'any') : reference.region,
+      matchAcrossProviders: modes.wick === 'real',
+      durationMinutes: reference.durationMinutes.includes(30) ? 30 : reference.durationMinutes[0]!,
       maxPriceCents: budget,
       requirements: {
-        cpu: first.cpu,
-        memoryGb: first.memoryGb,
-        ...(first.gpu ? { gpu: first.gpu } : {}),
+        cpu: reference.cpu,
+        memoryGb: reference.memoryGb,
+        ...(reference.gpu ? { gpu: reference.gpu } : {}),
       },
     });
     navigate('/requests/review');
@@ -129,6 +138,11 @@ export function NewEnvironment() {
       });
       saveDraft({
         ...result.proposal,
+        region:
+          modes.wick === 'real'
+            ? (parseExplicitBuyerDescription(description).region ?? 'any')
+            : result.proposal.region,
+        matchAcrossProviders: modes.wick === 'real',
         description: description.trim(),
         maxPriceCents: budget,
         receipt: result.receipt,
@@ -376,6 +390,7 @@ export function RequestReview() {
         description: draft.description.trim() || `${selected.name} environment`,
         catalogId: draft.catalogId,
         region: draft.region,
+        matchAcrossProviders: draft.matchAcrossProviders === true,
         durationMinutes: draft.durationMinutes,
         maxPriceCents: draft.maxPriceCents,
         requirements: draft.requirements,
@@ -418,7 +433,9 @@ export function RequestReview() {
               />
             </label>
             <label className="field" htmlFor="configuration">
-              <span>Configuration</span>
+              <span>
+                {draft.matchAcrossProviders ? 'Reference configuration' : 'Configuration'}
+              </span>
               <select
                 id="configuration"
                 value={draft.catalogId}
@@ -426,7 +443,8 @@ export function RequestReview() {
                   const item = approved.find((c) => c.id === e.target.value)!;
                   update({
                     catalogId: item.id,
-                    region: item.region,
+                    region:
+                      draft.matchAcrossProviders && draft.region === 'any' ? 'any' : item.region,
                     requirements: {
                       cpu: item.cpu,
                       memoryGb: item.memoryGb,
@@ -449,6 +467,32 @@ export function RequestReview() {
               </select>
               {selected && <span className="field-hint">{selected.description}</span>}
             </label>
+            {modes.wick === 'real' && (
+              <div className="catalog-checks">
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={draft.matchAcrossProviders === true}
+                    onChange={(e) =>
+                      update({
+                        matchAcrossProviders: e.target.checked,
+                        region: e.target.checked
+                          ? draft.region
+                          : (selected?.region ?? draft.region),
+                      })
+                    }
+                  />
+                  <div>
+                    <strong>Let compatible providers compete</strong>
+                    <span>
+                      Match your minimum resources and exact rental length across E2B, Daytona,
+                      Baseten (Blaxel) and Modal. Region limits below remain binding. Blaxel CPU and
+                      disk figures are provider-managed estimates.
+                    </span>
+                  </div>
+                </label>
+              </div>
+            )}
             <div className="field-grid">
               <label className="field" htmlFor="region">
                 <span>Region</span>
@@ -457,7 +501,13 @@ export function RequestReview() {
                   value={draft.region}
                   onChange={(e) => update({ region: e.target.value })}
                 >
-                  {selected && <option value={selected.region}>{selected.region}</option>}
+                  {draft.matchAcrossProviders && <option value="any">Any available region</option>}
+                  {draft.region !== 'any' && draft.region !== selected?.region && (
+                    <option value={draft.region}>{regionName(draft.region)}</option>
+                  )}
+                  {selected && (
+                    <option value={selected.region}>{regionName(selected.region)}</option>
+                  )}
                 </select>
               </label>
               <label className="field" htmlFor="duration">
@@ -530,20 +580,32 @@ export function RequestReview() {
                 <Layers3 size={21} />
               </div>
               <h2>Your environment, at a glance</h2>
-              <p>{selected?.name || 'Select a configuration'}</p>
+              <p>
+                {draft.matchAcrossProviders
+                  ? 'Lowest compatible provider offer'
+                  : selected?.name || 'Select a configuration'}
+              </p>
               <DetailRow label="Resources">
                 {draft.requirements.cpu} vCPU · {draft.requirements.memoryGb} GiB
               </DetailRow>
-              <DetailRow label="Region">{draft.region}</DetailRow>
+              <DetailRow label="Region">{regionName(draft.region)}</DetailRow>
               <DetailRow label="Rental">{draft.durationMinutes} minutes</DetailRow>
               <DetailRow label="Auction length">30 seconds</DetailRow>
               {selected?.pricingMode === 'managed' &&
                 selected.rateMicrosPerSecond !== undefined && (
                   <>
-                    <DetailRow label="Managed rate">
+                    <DetailRow
+                      label={draft.matchAcrossProviders ? 'Reference managed rate' : 'Managed rate'}
+                    >
                       {selected.rateMicrosPerSecond} µUSD / second
                     </DetailRow>
-                    <DetailRow label="Suggested target quote">
+                    <DetailRow
+                      label={
+                        draft.matchAcrossProviders
+                          ? 'Reference target quote'
+                          : 'Suggested target quote'
+                      }
+                    >
                       {money(
                         fixedQuote(managedPricing(selected), draft.durationMinutes).totalPriceCents,
                       )}
@@ -564,7 +626,7 @@ export function RequestReview() {
               </div>
               <span className="demo-price-note">
                 {modes.wick === 'real'
-                  ? 'Demo supplier allocation backed by Wick'
+                  ? 'Provider allocations backed by Wick'
                   : 'Simulated demo supply'}{' '}
                 · No payment due
               </span>
@@ -757,8 +819,18 @@ export function AuctionPage({ id }: { id: string }) {
                             ? 'Lowest eligible offer'
                             : bid.status === 'lost'
                               ? 'Capacity released'
-                              : 'Simulated demo supply'}
+                              : bid.simulated
+                                ? 'Simulated demo supply'
+                                : 'Wick-managed allocation'}
                       </span>
+                      {bid.catalogName && (
+                        <span>
+                          {bid.catalogName} · {regionName(bid.region ?? '')}
+                        </span>
+                      )}
+                      {bid.cloudProvider === 'provider-blaxel' && (
+                        <span>Underlying Wick route: {cloudRouteName(bid.cloudProvider)}</span>
+                      )}
                     </div>
                     <div className="bid-price">
                       <strong>{money(bid.totalPriceCents)}</strong>
@@ -845,7 +917,7 @@ export function AuctionPage({ id }: { id: string }) {
             <DetailRow label="Resources">
               {request.requirements.cpu} vCPU · {request.requirements.memoryGb} GiB
             </DetailRow>
-            <DetailRow label="Region">{request.region}</DetailRow>
+            <DetailRow label="Region">{regionName(request.region)}</DetailRow>
             <DetailRow label="Rental">{request.durationMinutes} minutes</DetailRow>
             <DetailRow label="Maximum total">{money(request.maxPriceCents)}</DetailRow>
             <DetailRow label="Auction closes">{dateTime(request.closesAt)}</DetailRow>

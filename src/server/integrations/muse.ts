@@ -9,6 +9,7 @@ import type {
 } from '../../shared/types.js';
 import type { MuseAdapter } from './types.js';
 import { parseExplicitBuyerDescription } from '../../shared/muse-contracts.js';
+import { catalogSatisfiesRequest } from '../marketplace/matching.js';
 
 export const MUSE_MODEL = 'muse-wonder-1.0';
 const DURATIONS = [15, 30, 60];
@@ -1072,9 +1073,9 @@ function normalizeDemand(values: unknown[]): DemandGroup[] {
   });
 }
 function demandFits(item: CatalogItem, demand: DemandGroup): boolean {
-  return (
-    item.region === demand.region &&
-    item.durationMinutes.includes(demand.durationMinutes) &&
-    fits(item, demand.requirements)
-  );
+  return catalogSatisfiesRequest(item, {
+    region: demand.region,
+    duration_minutes: demand.durationMinutes,
+    requirements: demand.requirements,
+  });
 }

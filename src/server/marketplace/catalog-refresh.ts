@@ -48,7 +48,7 @@ export async function startCatalogRefresh(ctx: AppContext) {
     retryLimit: 2,
     retryDelay: 30,
     retryBackoff: true,
-    expireInSeconds: 60,
+    expireInSeconds: 90,
     retentionSeconds: 600,
     deleteAfterSeconds: 86400,
   });

@@ -27,7 +27,7 @@ const item: CatalogItem = {
   id: 'real-offline-priced',
   name: 'Real contract fixture',
   description: '',
-  provider: 'boat',
+  provider: 'e2b',
   profile: 'small',
   region: 'auto',
   cpu: 1,

@@ -427,7 +427,7 @@ export default function App() {
               <div className="topbar-account">
                 <span className="environment-badge">
                   <span className="demo-dot" />
-                  {session.modes.wick === 'real' ? 'Wick-backed demo supply' : 'Simulated supply'}
+                  {session.modes.wick === 'real' ? 'Wick-managed providers' : 'Simulated supply'}
                 </span>
                 <div className="account-avatar">
                   {user.name

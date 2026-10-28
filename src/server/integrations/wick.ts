@@ -36,6 +36,14 @@ export class WickApiError extends Error {
 
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 const RENTAL_SECONDS = [900, 1800, 3600];
+const MANAGED_PROVIDERS = new Map([
+  ['e2b', 'E2B'],
+  ['daytona', 'Daytona'],
+  ['modal', 'Modal'],
+  ['provider-blaxel', 'Baseten (Blaxel)'],
+]);
+const MAX_MANAGED_ROUTES = 16;
+const ROUTE_PREVIEW_CONCURRENCY = 4;
 type JsonObject = Record<string, unknown>;
 function object(value: unknown, field: string): JsonObject {
   if (!value || typeof value !== 'object' || Array.isArray(value))
@@ -134,7 +142,7 @@ export function parseCatalog(
       return [string(profile.id, 'profile.id'), profile];
     }),
   );
-  const result: CatalogItem[] = [];
+  const result = new Map<string, CatalogItem>();
   const rateRetrievedAt = new Date().toISOString();
   for (const value of raw.offers) {
     const offer = object(value, 'offer');
@@ -146,16 +154,16 @@ export function parseCatalog(
       (offer.scope != null && offer.scope !== 'global')
     )
       continue;
+    const provider = string(offer.provider, 'offer.provider');
+    // Provider names select native Wick routes, independently of marketplace account names.
+    const providerName = MANAGED_PROVIDERS.get(provider);
+    if (!providerName || !offer.byok) continue;
     const rate = offer.rateMicrosPerSecond;
     if (!Number.isSafeInteger(rate) || (rate as number) < 0)
       throw new WickApiError('Wick offer has invalid rateMicrosPerSecond');
     const profileId = string(offer.profile, 'offer.profile');
     const profile = profiles.get(profileId);
     if (!profile) throw new WickApiError('Wick offer refers to an unknown resource profile');
-    const provider = string(offer.provider, 'offer.provider');
-    // Boat customer allocations are excluded by user choice. E2B's BYOK capability
-    // is not its selected billing route; execution preview must prove managed routing.
-    if (provider !== 'e2b' || !offer.byok) continue;
     const region = string(offer.region, 'offer.region');
     const route = `${provider}:${profileId}:${region}`;
     const byokDisabled = object(offer.byok, 'offer.byok').enabled === false;
@@ -167,14 +175,18 @@ export function parseCatalog(
     if (!durationMinutes.length) continue;
     const resources =
       offer.resources == null ? profile : object(offer.resources, 'offer.resources');
+    const description =
+      typeof profile.description === 'string'
+        ? profile.description
+        : 'Published Wick configuration';
     // Connection capability is checked again before charging; catalog capabilities are not a readiness assertion.
-    result.push({
+    const item: CatalogItem = {
       id: `${provider}:${profileId}:${region}`,
-      name: `${string(profile.name, 'profile.name')} · ${provider}`,
+      name: `${string(profile.name, 'profile.name')} · ${providerName}`,
       description:
-        typeof profile.description === 'string'
-          ? profile.description
-          : 'Published Wick configuration',
+        provider === 'provider-blaxel'
+          ? `${description} Listed as Baseten, backed by Blaxel. CPU and disk figures are estimates; Blaxel manages these resources.`
+          : description,
       provider,
       profile: profileId,
       region,
@@ -198,9 +210,13 @@ export function parseCatalog(
       approved: false,
       organizationId: config.wickOrganizationId,
       groupId: config.wickGroupId,
-    });
+    };
+    const existing = result.get(route);
+    if (existing && JSON.stringify(existing) !== JSON.stringify(item))
+      throw new WickApiError('Wick catalog has conflicting offers for one managed route');
+    result.set(route, item);
   }
-  return result;
+  return [...result.values()];
 }
 
 function managedPreviewMatches(value: unknown, input: CreateEnvironmentInput): boolean {
@@ -389,9 +405,9 @@ function realAdapter(config: WickConfig): WickAdapter {
     if (body.organizationId !== config.wickOrganizationId || body.groupId !== config.wickGroupId)
       throw new WickApiError('Wick create target is outside the configured scope', 400, true);
     if (body.providerKeyId) throw new WickApiError('BYOK pricing is unsupported', 400, true);
-    if (body.provider !== 'e2b')
+    if (!MANAGED_PROVIDERS.has(body.provider))
       throw new WickApiError(
-        'Only the explicitly enabled E2B customer route is supported',
+        'Only E2B, Daytona, Modal, and Baseten (Blaxel) customer routes are supported',
         400,
         true,
       );
@@ -409,29 +425,34 @@ function realAdapter(config: WickConfig): WickAdapter {
       // Merely advertising BYOK support does not establish managed billing.
       const potential = new Set(
         raw.offers
-          .filter((offer) => offer.provider === 'e2b')
+          .filter((offer) => MANAGED_PROVIDERS.has(offer.provider))
           .map((offer) => `${offer.provider}:${offer.profile}:${offer.region}`),
       );
       const candidates = parseCatalog(raw, config, potential);
-      if (candidates.length > 8)
+      if (candidates.length > MAX_MANAGED_ROUTES)
         throw new WickApiError('Too many managed routes for bounded verification');
       const verified: CatalogItem[] = [];
-      for (const item of candidates) {
-        const body = approvedBody({
-          organizationId: config.wickOrganizationId,
-          groupId: config.wickGroupId,
-          name: 'wick-broker-route-preview',
-          provider: item.provider,
-          profile: item.profile,
-          region: item.region,
-          ttlSeconds: 900,
-          visibility: 'private',
-          maximumPriceMicrosPerSecond: item.rateMicrosPerSecond,
-        });
-        const preview = await invoke(() =>
-          sdk.executionPreview.create({ body: { kind: 'environment', input: body } }),
+      for (let offset = 0; offset < candidates.length; offset += ROUTE_PREVIEW_CONCURRENCY) {
+        const batch = await Promise.all(
+          candidates.slice(offset, offset + ROUTE_PREVIEW_CONCURRENCY).map(async (item) => {
+            const body = approvedBody({
+              organizationId: config.wickOrganizationId,
+              groupId: config.wickGroupId,
+              name: 'wick-broker-route-preview',
+              provider: item.provider,
+              profile: item.profile,
+              region: item.region,
+              ttlSeconds: 900,
+              visibility: 'private',
+              maximumPriceMicrosPerSecond: item.rateMicrosPerSecond,
+            });
+            const preview = await invoke(() =>
+              sdk.executionPreview.create({ body: { kind: 'environment', input: body } }),
+            );
+            return managedPreviewMatches(preview, body) ? item : undefined;
+          }),
         );
-        if (managedPreviewMatches(preview, body)) verified.push(item);
+        verified.push(...batch.filter((item): item is CatalogItem => item !== undefined));
       }
       return verified;
     },

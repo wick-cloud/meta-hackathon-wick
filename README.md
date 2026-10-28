@@ -29,8 +29,8 @@ Seeded identities are `buyer@demo.wick.local`, `supplier-a@demo.wick.local`, `su
 
 ## Product behavior
 
-- Buyers review catalog, region, resources, exact 15/30/60-minute duration, and maximum total USD price before starting an auction. Default duration is 30 minutes.
-- Providers manage simulated capacity, private pricing policy, manual/automatic bidding, approved-configuration offerings, and activity in the same application.
+- Buyers review catalog, region, minimum resources, exact 15/30/60-minute duration, and maximum total USD price before starting an auction. Default duration is 30 minutes. An explicitly reviewed cross-provider request can compare compatible offerings; exact-route requests retain their selected configuration.
+- Providers manage configured capacity, private pricing policy, manual/automatic bidding, approved-configuration offerings, and activity in the same application. Real operator-managed provider accounts are bound to their own upstream cloud; changing a pricing policy cannot widen that identity.
 - Manual and auto bids share a locked capacity reservation path. The lowest total price wins; equal prices use accepted timestamp, then ID. Losing holds release at close. The winner's hold remains until confirmed cleanup.
 - The request specification, awarded offering revision, quote, and create idempotency key are frozen. Retries cannot silently start another auction or extend the rental clock.
 - Exactly one fixed-price demo invoice is issued after Wick confirms both running state and terminal capability. Failed, cancelled, or expired-before-ready environments incur no charge. Early termination after readiness retains the full fixed price. Every invoice says **No payment due**; there are no payments, payouts, or topups.
@@ -38,7 +38,7 @@ Seeded identities are `buyer@demo.wick.local`, `supplier-a@demo.wick.local`, `su
 - Muse has three bounded, validated uses: requirement translation; isolated supplier bid proposal/decline; and offering suggestions from recorded unmatched demand. Manual controls remain available after a visible model failure.
 - Admins approve existing catalog configurations, adjust the default two-VM admission limit, and retry unresolved cleanup reconciliation. No generated setup code or preparation jobs exist.
 
-The simulated inventory and customer demo quote are distinct from Wick's real operational costs, even when a real Wick adapter is selected.
+Configured provider allocations and customer demo quotes are distinct from Wick's actual operational costs. A configured slot is an operator allocation, not a measurement or guarantee of upstream free capacity.
 
 ## Real integrations
 
@@ -48,17 +48,17 @@ Broker earns a fixed **15% commission from the provider's gross rental price**. 
 
 Managed real offerings freeze the published micro-USD/second rate and retrieval time. New suggested quotes use `max(1, ceil(rate × durationSeconds / 8500))` USD cents so the provider's 85% share covers the estimated compute cost. Manual and Muse bids may differ within provider policy and buyer budget, but must meet that same cost floor. The old configurable 20% target markup is no longer used for new business. Each binding bid freezes the exact gross, 15% Broker share and 85% provider share in integer micro-USD; readiness copies the snapshot into exactly one demo invoice. This preserves the exact split even for sub-cent fees. Historical accepted quotes and invoices remain unchanged; absent historical commission records are explicitly labeled legacy rather than retroactively charged.
 
-New approvals, offerings, requests and bids still require a rate retrieved within 15 minutes, with at most 60 seconds of future clock skew. Historical quotes remain readable. The upstream full-term estimate is separate from the customer's fixed quote and provider share; none is settled Wick usage. Managed rates already include Wick's price. BYOK is unsupported. Suppliers are demo allocations backed by Wick, not independent provider firms. Providers can review gross, Broker commission and their net share on the paginated Earnings screen; totals cover the displayed commission records only.
+New approvals, offerings, requests and bids still require a rate retrieved within 15 minutes, with at most 60 seconds of future clock skew. Historical quotes remain readable. The upstream full-term estimate is separate from the customer's fixed quote and provider share; none is settled Wick usage. Managed rates already include Wick's price. BYOK is unsupported. E2B, Daytona, Baseten and Modal workspaces represent operator-managed Wick allocations, not accounts operated by those companies. The requested **Baseten** display name routes through **Blaxel**, whose actual Wick provider identifier is `provider-blaxel`; it does not assert that Baseten and Blaxel are the same service. Providers can review gross, Broker commission and their net share on the paginated Earnings screen; totals cover the displayed commission records only.
 
-Use the separate `scripts/configure-real.ts` command to review and explicitly approve selected real configurations for existing supplier accounts. It preserves passwords, sessions, reservations, and frozen quotes; do not rerun account seeding to change pricing. See [real Wick operation](docs/REAL_WICK.md) for setup and isolated scale-run commands.
+Use `scripts/configure-real.ts --list` to review current managed routes and `--apply-providers` to configure the four provider accounts with explicit credentials and native catalog IDs. Setup preserves existing passwords, sessions, reservations and frozen quotes; it retires explicitly selected legacy suppliers without deleting their history. Do not rerun account seeding to change pricing. See [provider marketplace setup and coverage](docs/provider-marketplace.md) and [real Wick operation](docs/REAL_WICK.md).
 
 Read [Wick contract evidence](docs/WICK_CONTRACT.md) and [Muse contract evidence](docs/MUSE.md) before enabling real modes. Public documentation and offline contract tests do not verify live allocations or live terminal behavior. Real catalog entries require administrator approval. Missing required rate or compute fields fails closed; optional upstream catalog version, currency, money unit, revision, and mode are not invented or required.
 
 ## Deploy shape
 
-Deploy the review branch as **one always-on Railway app and PostgreSQL**. The Dockerfile builds Node 24 without runtime credentials and includes production migration/seed/setup commands. [Railway configuration](.railway/railway.ts) declares the branch, database reference, migration hook, readiness check and one replica. Follow the [Railway deployment guide](docs/RAILWAY.md) for service variables, first-time accounts and real Wick setup.
+Deploy **`main`** as **one always-on Railway app and PostgreSQL**. The Dockerfile builds Node 24 without runtime credentials and includes production migration/seed/setup commands. [Railway configuration](.railway/railway.ts) declares the branch, database reference, migration hook, readiness check and one replica. Follow the [Railway deployment guide](docs/RAILWAY.md) for service variables, first-time accounts and real Wick setup. The four provider accounts each start with five configured slots, subject to the shared 20-VM admission limit.
 
-Migrations run separately before deployment and remain advisory-locked at startup. Active VM leases survive brief process overlap during redeploys; SIGTERM drains jobs. Account seeding is an explicit first-time action and never runs on a normal deployment.
+Migrations run separately before deployment and remain advisory-locked at startup. Active VM leases survive brief process overlap during redeploys; SIGTERM drains jobs. Account seeding and provider setup are explicit operator actions and never run on a normal deployment. Keep the permanent pre-deploy command migration-only.
 
 ## Verification
 

@@ -32,6 +32,8 @@ import { fixedQuote, managedPricing, revenueShare } from '../shared/pricing';
 import {
   ApiError,
   api,
+  cloudRouteName,
+  regionName,
   dateTime,
   money,
   moneyMicros,
@@ -121,8 +123,19 @@ export function ProviderCapacity() {
         title={`A little room for what’s next.`}
         description={`${provider.name} · Manage the supply you make available to the marketplace.`}
       >
-        <span className="quiet-badge">Simulated demo supply</span>
+        <span className="quiet-badge">
+          {provider.simulated ? 'Simulated demo supply' : 'Wick-managed allocation'}
+        </span>
       </PageHeader>
+      {provider.cloudProvider && (
+        <div className="info-note">
+          <Server size={18} />
+          <p>
+            Underlying Wick route: <strong>{cloudRouteName(provider.cloudProvider)}</strong>. This
+            account can offer only that provider’s approved configurations.
+          </p>
+        </div>
+      )}
       <div className="info-note">
         <CircleDollarSign size={18} />
         <p>
@@ -134,7 +147,7 @@ export function ProviderCapacity() {
         <StatCard
           label="Total capacity"
           value={capacity.total}
-          note="Configured demo VM slots"
+          note="Configured VM slots"
           icon={<Server size={18} />}
         />
         <StatCard
@@ -155,7 +168,7 @@ export function ProviderCapacity() {
         <section className="card">
           <div className="section-heading">
             <h2>Capacity overview</h2>
-            <span>Demo inventory</span>
+            <span>{provider.simulated ? 'Demo inventory' : 'Configured allocation'}</span>
           </div>
           <div className="capacity-slots">
             {capacity.total > 0 ? (
@@ -210,8 +223,8 @@ export function ProviderCapacity() {
             <Settings2 size={18} />
           </div>
           <p className="muted-text">
-            Publish the number of demo VM slots you want to offer. This is simulated inventory, not
-            measured provider capacity.
+            Publish the VM slots you make available for bids. These are configured allocations;
+            upstream availability and Wick admission still apply.
           </p>
           <p>
             <Link className="text-link" href="/provider/policy">
@@ -372,7 +385,11 @@ export function ProviderPolicy() {
   }
   if (loading || (!policy && !error)) return <Spinner label="Loading policy" />;
   if (!policy) return <ErrorBox error={error || 'Policy unavailable.'} retry={reload} />;
-  const allowed = policy.allowedCatalogIds ?? catalog.filter((c) => c.approved).map((c) => c.id);
+  const ownCatalog = catalog.filter(
+    (c) =>
+      c.approved && (!data?.provider.cloudProvider || c.provider === data.provider.cloudProvider),
+  );
+  const allowed = policy.allowedCatalogIds ?? ownCatalog.map((c) => c.id);
   const stale = baseRevision !== null && !!data && data.policyRevision > baseRevision;
   const spare = policy.reserveSlots ?? 0;
   const proposedAvailable = Math.max(
@@ -563,30 +580,28 @@ export function ProviderPolicy() {
                 Only administrator-approved existing Wick configurations can be offered.
               </p>
               <div className="catalog-checks">
-                {catalog
-                  .filter((c) => c.approved)
-                  .map((item) => (
-                    <label key={item.id}>
-                      <input
-                        type="checkbox"
-                        checked={allowed.includes(item.id)}
-                        disabled={!!applyAttempt}
-                        onChange={(e) =>
-                          update({
-                            allowedCatalogIds: e.target.checked
-                              ? [...allowed, item.id]
-                              : allowed.filter((id) => id !== item.id),
-                          })
-                        }
-                      />
-                      <div>
-                        <strong>{item.name}</strong>
-                        <span>
-                          {item.cpu} vCPU · {item.memoryGb} GiB · {item.region}
-                        </span>
-                      </div>
-                    </label>
-                  ))}
+                {ownCatalog.map((item) => (
+                  <label key={item.id}>
+                    <input
+                      type="checkbox"
+                      checked={allowed.includes(item.id)}
+                      disabled={!!applyAttempt}
+                      onChange={(e) =>
+                        update({
+                          allowedCatalogIds: e.target.checked
+                            ? [...allowed, item.id]
+                            : allowed.filter((id) => id !== item.id),
+                        })
+                      }
+                    />
+                    <div>
+                      <strong>{item.name}</strong>
+                      <span>
+                        {item.cpu} vCPU · {item.memoryGb} GiB · {item.region}
+                      </span>
+                    </div>
+                  </label>
+                ))}
               </div>
               <div className="form-actions">
                 <button
@@ -736,7 +751,10 @@ function ProviderRequestCard({
     setBusy('bid');
     setError('');
     try {
-      await post(`/api/provider/requests/${request.id}/bids`, { totalPriceCents: price });
+      await post(`/api/provider/requests/${request.id}/bids`, {
+        totalPriceCents: price,
+        offeringId: proposal?.offeringId,
+      });
       setSuccess(true);
       onBid();
     } catch (err) {
@@ -766,7 +784,7 @@ function ProviderRequestCard({
         </span>
         <span>
           <Globe2 size={13} />
-          {request.region}
+          {regionName(request.region)}
         </span>
         <span>
           <Clock3 size={13} />
@@ -930,6 +948,8 @@ export function ProviderOfferings() {
     approved = catalog.filter(
       (item) =>
         item.approved &&
+        (!dashboard.data?.provider.cloudProvider ||
+          item.provider === dashboard.data.provider.cloudProvider) &&
         (!dashboard.data?.policy.allowedCatalogIds ||
           dashboard.data.policy.allowedCatalogIds.includes(item.id)),
     );
@@ -1119,7 +1139,11 @@ export function ProviderOfferings() {
         <section className="card offering-form">
           <div className="section-heading">
             <h2>Review & publish an offering</h2>
-            <span className="quiet-badge">Simulated demo supply</span>
+            <span className="quiet-badge">
+              {dashboard.data?.provider.simulated === false
+                ? 'Wick-managed allocation'
+                : 'Simulated demo supply'}
+            </span>
           </div>
           <form onSubmit={create}>
             <div className="field-grid">
@@ -1735,7 +1759,11 @@ export function AdminConfig({ onUpdated }: { onUpdated: () => void }) {
                 </span>
                 <div>
                   <strong>{provider.name}</strong>
-                  <span>Simulated demo supplier</span>
+                  <span>
+                    {provider.simulated === false
+                      ? 'Wick-managed provider'
+                      : 'Simulated demo supplier'}
+                  </span>
                 </div>
               </div>
             ))}

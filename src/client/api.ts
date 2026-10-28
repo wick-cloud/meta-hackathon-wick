@@ -22,6 +22,7 @@ export interface EnvironmentRequest {
   description: string;
   catalogId: string;
   region: string;
+  matchAcrossProviders?: boolean;
   durationMinutes: number;
   maxPriceCents: number;
   requirements: Requirements;
@@ -39,6 +40,11 @@ export interface Bid {
   totalPriceCents: number;
   status: string;
   createdAt: string;
+  catalogId?: string;
+  catalogName?: string;
+  cloudProvider?: string;
+  region?: string;
+  simulated?: boolean;
 }
 export interface VM {
   id: string;
@@ -108,7 +114,7 @@ export interface Activity {
   modelCalled?: boolean;
 }
 export interface Dashboard {
-  provider: { id: string; name: string; simulated: boolean };
+  provider: { id: string; name: string; simulated: boolean; cloudProvider?: string | null };
   policy: SupplierPolicy;
   policyRevision: number;
   capacity: {
@@ -138,6 +144,7 @@ export interface Draft {
   description: string;
   catalogId: string;
   region: string;
+  matchAcrossProviders?: boolean;
   durationMinutes: number;
   maxPriceCents: number;
   requirements: Requirements;
@@ -238,3 +245,17 @@ export const loadDraft = (): Draft | null => {
 };
 export const saveDraft = (draft: Draft) =>
   sessionStorage.setItem('wick-draft', JSON.stringify(draft));
+
+export const cloudRouteName = (provider: string) =>
+  (
+    ({ e2b: 'E2B', daytona: 'Daytona', modal: 'Modal', 'provider-blaxel': 'Blaxel' }) as Record<
+      string,
+      string
+    >
+  )[provider] || provider;
+export const regionName = (region: string) =>
+  region === 'any'
+    ? 'Any available region'
+    : region === 'auto'
+      ? 'Provider-selected region'
+      : region;

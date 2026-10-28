@@ -15,6 +15,7 @@ import { activity, transaction } from './db.js';
 import { awardHeldBid, globalAdmissionAvailable } from './auction.js';
 import { integer, positiveNumber, shortText, uuid, offeringView, iso, type Row } from './data.js';
 import { availableForBids } from './policy.js';
+import { assertProviderCatalog } from './provider-identity.js';
 
 type Desired = {
   cpu: number;
@@ -416,8 +417,21 @@ async function generateCounteroffers(
     await ctx.pool.query(
       `WITH candidates AS (
     SELECT p.*,(SELECT count(*)::int FROM broker_holds h WHERE h.provider_id=p.id AND h.released_at IS NULL) AS held
-    FROM broker_providers p WHERE p.policy->>'autoBid'='true' AND EXISTS(SELECT 1 FROM broker_offerings o JOIN broker_catalog c ON c.id=o.catalog_id WHERE o.provider_id=p.id AND o.active AND c.approved AND c.source_mode=$1) ORDER BY p.id LIMIT 4)
-    SELECT row_to_json(p) AS provider,row_to_json(o) AS offering,c.item FROM candidates p CROSS JOIN LATERAL(SELECT * FROM broker_offerings o WHERE o.provider_id=p.id AND o.active ORDER BY o.id LIMIT 12)o JOIN broker_catalog c ON c.id=o.catalog_id AND c.approved AND c.source_mode=$1 ORDER BY p.id,o.id LIMIT 48`,
+    FROM broker_providers p WHERE p.policy->>'autoBid'='true' AND EXISTS(
+      SELECT 1 FROM broker_catalog c JOIN LATERAL(
+        SELECT 1 FROM broker_offerings o WHERE o.provider_id=p.id AND o.catalog_id=c.id AND o.active ORDER BY o.price_cents,o.id LIMIT 1
+      ) published ON true WHERE c.approved AND c.source_mode=$1
+        AND (p.cloud_provider IS NULL OR c.item->>'provider'=p.cloud_provider)
+        AND (p.policy->'allowedCatalogIds' IS NULL OR p.policy->'allowedCatalogIds'='null'::jsonb OR p.policy->'allowedCatalogIds' ? c.id)
+    ) ORDER BY p.id LIMIT 4)
+    SELECT row_to_json(p) AS provider,row_to_json(o) AS offering,c.item FROM candidates p CROSS JOIN LATERAL(
+      SELECT published.* FROM broker_catalog c JOIN LATERAL(
+        SELECT o.* FROM broker_offerings o WHERE o.provider_id=p.id AND o.catalog_id=c.id AND o.active ORDER BY o.price_cents,o.id LIMIT 1
+      ) published ON true WHERE c.approved AND c.source_mode=$1
+        AND (p.cloud_provider IS NULL OR c.item->>'provider'=p.cloud_provider)
+        AND (p.policy->'allowedCatalogIds' IS NULL OR p.policy->'allowedCatalogIds'='null'::jsonb OR p.policy->'allowedCatalogIds' ? c.id)
+      ORDER BY published.price_cents,published.id LIMIT 12
+    ) o JOIN broker_catalog c ON c.id=o.catalog_id AND c.approved AND c.source_mode=$1 ORDER BY p.id,o.id LIMIT 48`,
       [ctx.wick.mode],
     )
   ).rows;
@@ -427,6 +441,7 @@ async function generateCounteroffers(
       offering = row.offering,
       item = row.item as CatalogItem;
     if (ctx.wick.mode === 'real' && item.provider === 'boat') continue;
+    if (p.cloud_provider && p.cloud_provider !== item.provider) continue;
     if (
       p.policy.autoBid !== true ||
       availableForBids(p.total_capacity, p.held, p.policy) < 1 ||
@@ -469,7 +484,8 @@ async function generateCounteroffers(
         after,
         public: {
           providerName: p.name,
-          simulated: true,
+          simulated: p.simulated,
+          cloudProvider: item.provider,
           catalogId: item.id,
           catalogName: item.name,
           offeringId: offering.id,
@@ -711,6 +727,7 @@ export async function acceptCounteroffer(
       );
     if (ctx.wick.mode === 'real' && catalog.item.provider === 'boat')
       throw new HttpError(409, 'This provider is unavailable for customer rentals.');
+    assertProviderCatalog(p, catalog.item);
     if (p.policy.allowedCatalogIds && !p.policy.allowedCatalogIds.includes(catalog.item.id))
       throw new HttpError(409, 'The provider no longer permits this configuration.');
     if (
@@ -807,6 +824,9 @@ export async function acceptCounteroffer(
           offering.id,
           {
             ...offeringView(offering),
+            simulated: p.simulated,
+            cloudProvider: p.cloud_provider,
+            catalog: request.catalog_snapshot,
             revenueShare: revenueShare(snap.totalPriceCents),
             ...(quote.pricing ? { pricing: quote.pricing } : {}),
           },

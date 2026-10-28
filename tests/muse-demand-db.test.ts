@@ -8,6 +8,9 @@ import { recentUnmetDemand, offeringPriceCandidates } from '../src/server/muse/d
 import type { CatalogItem } from '../src/shared/types.js';
 import { registerMarketplace } from '../src/server/marketplace/index.js';
 import type { AppContext } from '../src/server/context.js';
+import { registerMuse } from '../src/server/muse/index.js';
+import { createMuseAdapter } from '../src/server/integrations/muse.js';
+import { MAX_MATCH_CATALOGS } from '../src/server/marketplace/matching.js';
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const schema = `muse_demand_${randomUUID().replaceAll('-', '')}`;
@@ -48,12 +51,28 @@ describe.skipIf(!databaseUrl)('bounded unresolved Muse demand using isolated Pos
       await admin.end();
     }
   });
-  async function request(mode = 'fixture', age = '0 seconds') {
+  async function request(
+    mode = 'fixture',
+    age = '0 seconds',
+    overrides: { region?: string; gpu?: string; eligibleCatalogs?: unknown } = {},
+  ) {
     return (
       await pool.query(
         `INSERT INTO broker_requests(buyer_id,description,catalog_id,catalog_snapshot,region,duration_minutes,max_price_cents,requirements,status,created_at)
-      VALUES('private-buyer','private free text',$1,$2,'test-us',30,500,$3,'no_offers',now()-$4::interval) RETURNING id`,
-        [item.id, { ...item, sourceMode: mode }, { cpu: 2, memoryGb: 4 }, age],
+      VALUES('private-buyer','private free text',$1,$2,$5,30,500,$3,'no_offers',now()-$4::interval) RETURNING id`,
+        [
+          item.id,
+          {
+            ...item,
+            sourceMode: mode,
+            ...(overrides.eligibleCatalogs !== undefined
+              ? { matchMode: 'compatible', eligibleCatalogs: overrides.eligibleCatalogs }
+              : {}),
+          },
+          { cpu: 2, memoryGb: 4, ...(overrides.gpu ? { gpu: overrides.gpu } : {}) },
+          age,
+          overrides.region ?? 'test-us',
+        ],
       )
     ).rows[0].id;
   }
@@ -101,6 +120,126 @@ describe.skipIf(!databaseUrl)('bounded unresolved Muse demand using isolated Pos
       [item.id, { ...item, sourceMode: 'fixture' }, { cpu: 2, memoryGb: 4 }],
     );
     expect((await recentUnmetDemand(pool, 'fixture', [item.id]))[0].count).toBe(200);
+  });
+
+  it('attributes compatible unmet requests to another frozen cloud, keeping legacy exact matching and private aggregation', async () => {
+    const target = { ...item, id: 'daytona-small', provider: 'daytona', region: 'us-pdx-1' };
+    const unreviewed = { ...target, id: 'daytona-unreviewed' };
+    for (const candidate of [target, unreviewed])
+      await pool.query(
+        "INSERT INTO broker_catalog(id,item,approved,source_mode) VALUES($1,$2,true,'fixture')",
+        [candidate.id, candidate],
+      );
+    await request('fixture', '0 seconds', { region: 'any', eligibleCatalogs: [item, target] });
+    await request();
+    const groups = await recentUnmetDemand(pool, 'fixture', [target.id]);
+    expect(groups).toEqual([
+      { region: 'any', durationMinutes: 30, requirements: { cpu: 2, memoryGb: 4 }, count: 1 },
+    ]);
+    expect(await recentUnmetDemand(pool, 'fixture', [unreviewed.id])).toEqual([]);
+    expect(JSON.stringify(groups)).not.toMatch(/private|buyer|description|eligibleCatalogs/);
+  });
+
+  it('bounds compatible books and aggregation without falling back from malformed books to their reference', async () => {
+    await request('fixture', '0 seconds', { region: 'any', eligibleCatalogs: { id: item.id } });
+    await request('fixture', '0 seconds', {
+      region: 'any',
+      eligibleCatalogs: Array.from({ length: MAX_MATCH_CATALOGS + 1 }, () => item),
+    });
+    expect(await recentUnmetDemand(pool, 'fixture', [item.id])).toEqual([]);
+    const book = {
+      ...item,
+      sourceMode: 'fixture',
+      matchMode: 'compatible',
+      eligibleCatalogs: [item],
+    };
+    await pool.query(
+      `INSERT INTO broker_requests(buyer_id,description,catalog_id,catalog_snapshot,region,duration_minutes,max_price_cents,requirements,status)
+       SELECT 'private-'||n,'private prose',$1,$2,'any',30,500,$3,'no_offers' FROM generate_series(1,205) n`,
+      [item.id, book, { cpu: 2, memoryGb: 4 }],
+    );
+    const groups = await recentUnmetDemand(pool, 'fixture', [item.id]);
+    expect(groups).toEqual([
+      { region: 'any', durationMinutes: 30, requirements: { cpu: 2, memoryGb: 4 }, count: 200 },
+    ]);
+  });
+
+  it('supports explicit any-region/GPU intent demand without broadening other native regions or GPU names', async () => {
+    const gpu = { ...item, id: 'modal-gpu', provider: 'modal', region: 'auto', gpu: 'H100' };
+    await pool.query(
+      "INSERT INTO broker_catalog(id,item,approved,source_mode) VALUES($1,$2,true,'fixture')",
+      [gpu.id, gpu],
+    );
+    await intent('open', undefined, { region: 'any', gpu: 'any' });
+    await intent('open', undefined, { region: 'us', gpu: 'any' });
+    await intent('open', undefined, { region: 'any', gpu: 'L4' });
+    expect(await recentUnmetDemand(pool, 'fixture', [gpu.id])).toEqual([
+      {
+        region: 'any',
+        durationMinutes: 30,
+        requirements: { cpu: 2, memoryGb: 4, gpu: 'any' },
+        count: 1,
+      },
+    ]);
+    expect(await recentUnmetDemand(pool, 'fixture', [item.id])).toEqual([]);
+  });
+
+  it('passes compatible any-region demand through the fixture adapter and prices only the owning cloud offering', async () => {
+    const gpu = {
+      ...item,
+      id: 'daytona-reviewed-gpu',
+      provider: 'daytona',
+      region: 'us-pdx-1',
+      gpu: 'H100',
+    };
+    await pool.query(
+      "INSERT INTO broker_catalog(id,item,approved,source_mode) VALUES($1,$2,true,'fixture')",
+      [gpu.id, gpu],
+    );
+    await request('fixture', '0 seconds', {
+      region: 'any',
+      gpu: 'any',
+      eligibleCatalogs: [item, gpu],
+    });
+    const userId = randomUUID();
+    await pool.query(
+      "INSERT INTO broker_providers(user_id,name,total_capacity,policy,cloud_provider) VALUES($1,'Owned Daytona',5,$2,'daytona')",
+      [userId, { ...policy, allowedCatalogIds: [gpu.id] }],
+    );
+    const app = Fastify();
+    app.setErrorHandler((error: Error & { statusCode?: number }, _request, reply) =>
+      reply.code(error.statusCode ?? 500).send({ error: error.message }),
+    );
+    await registerMuse(app, {
+      pool,
+      wick: { mode: 'fixture' },
+      muse: createMuseAdapter(
+        { museMode: 'fixture' },
+        {
+          fetch: () => {
+            throw Error('No Meta calls permitted');
+          },
+        },
+      ),
+      requireActor: async () => ({ id: userId, role: 'provider' }),
+    } as unknown as AppContext);
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/provider/offerings/propose',
+        payload: {},
+      });
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.json()).toMatchObject({
+        mode: 'fixture',
+        modelCalled: false,
+        proposals: [{ catalogId: gpu.id, durationMinutes: 30, priceCents: 5 }],
+      });
+      expect(response.json().proposals).toHaveLength(1);
+      expect(JSON.stringify(response.json())).not.toMatch(/private-buyer|private free text/);
+    } finally {
+      await app.close();
+    }
   });
 
   it('publishes the reviewed real 30-minute floor price and rejects changed prices or policy exclusions atomically', async () => {

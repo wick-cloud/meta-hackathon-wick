@@ -71,6 +71,7 @@ export interface BidProposal {
   decision: 'bid' | 'decline';
   totalPriceCents?: number;
   catalogId?: string;
+  offeringId?: string;
   receipt: Receipt;
   modelCalled?: boolean;
 }

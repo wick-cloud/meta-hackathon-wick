@@ -1,7 +1,11 @@
 import { loadConfig } from '../src/server/config.js';
 import { createPool, migrate } from '../src/server/db.js';
 import { createWickAdapter } from '../src/server/integrations/wick.js';
-import { configureRealMarketplace } from '../src/server/marketplace/configure-real.js';
+import {
+  configureRealMarketplace,
+  configureProviderMarketplace,
+} from '../src/server/marketplace/configure-real.js';
+import type { CloudProvider } from '../src/server/marketplace/provider-identity.js';
 import { fixedQuote, managedPricing } from '../src/shared/pricing.js';
 
 async function main() {
@@ -9,9 +13,9 @@ async function main() {
   if (config.wickMode !== 'real' || config.museMode !== 'fixture')
     throw new Error('Setup requires explicit WICK_MODE=real and MUSE_MODE=fixture.');
   const command = process.argv[2];
-  if (!['--list', '--apply'].includes(command ?? ''))
+  if (!['--list', '--apply', '--apply-providers'].includes(command ?? ''))
     throw new Error(
-      'Use --list for a public rate preview, or --apply with explicit REAL_CATALOG_IDS and REAL_SUPPLIER_EMAILS.',
+      'Use --list for a public rate preview, --apply for existing demo suppliers, or --apply-providers for explicitly configured provider accounts.',
     );
   const pool = createPool(config.databaseUrl);
   try {
@@ -49,6 +53,29 @@ async function main() {
         .split(',')
         .map((value) => value.trim())
         .filter(Boolean);
+    if (command === '--apply-providers') {
+      const identities: [CloudProvider, string, string][] = [
+        ['e2b', 'E2B', 'E2B'],
+        ['daytona', 'DAYTONA', 'Daytona'],
+        ['provider-blaxel', 'BLAXEL', 'Baseten'],
+        ['modal', 'MODAL', 'Modal'],
+      ];
+      await migrate(pool);
+      const summary = await configureProviderMarketplace(pool, catalog, {
+        providers: identities.map(([cloudProvider, key, name]) => ({
+          cloudProvider,
+          name,
+          email: process.env[`REAL_PROVIDER_${key}_EMAIL`] ?? '',
+          password: process.env[`REAL_PROVIDER_${key}_PASSWORD`] ?? '',
+          catalogIds: list(`REAL_PROVIDER_${key}_CATALOG_IDS`),
+          capacity: Number(process.env.REAL_PROVIDER_CAPACITY ?? '5'),
+          autoBid: true,
+        })),
+        retireSupplierEmails: list('REAL_RETIRED_SUPPLIER_EMAILS'),
+      });
+      console.log(JSON.stringify({ ...summary, mode: 'real' }));
+      return;
+    }
     const catalogIds = list('REAL_CATALOG_IDS');
     const supplierEmails = list('REAL_SUPPLIER_EMAILS').map((email) => email.toLowerCase());
     if (!catalogIds.length || !supplierEmails.length)

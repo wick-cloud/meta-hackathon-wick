@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { HttpError, type AppContext } from '../context.js';
 import { getCatalog, getProvider } from '../marketplace/data.js';
 import { offeringPriceCandidates, recentUnmetDemand } from './demand.js';
+import { catalogSatisfiesRequest } from '../marketplace/matching.js';
 
 /** A small per-user limit also bounds paid calls; no model loop or automatic retry. */
 export async function registerMuse(app: FastifyInstance, ctx: AppContext) {
@@ -46,6 +47,7 @@ export async function registerMuse(app: FastifyInstance, ctx: AppContext) {
     const allowed = catalog.filter(
       (item) =>
         item.approved &&
+        (!provider.cloud_provider || item.provider === provider.cloud_provider) &&
         (!provider.policy.allowedCatalogIds || provider.policy.allowedCatalogIds.includes(item.id)),
     );
     const demand = await recentUnmetDemand(
@@ -59,13 +61,12 @@ export async function registerMuse(app: FastifyInstance, ctx: AppContext) {
       ctx.wick.mode,
     ).filter((candidate) => {
       const item = allowed.find((entry) => entry.id === candidate.catalogId)!;
-      return demand.some(
-        (group) =>
-          item.region === group.region &&
-          item.durationMinutes.includes(group.durationMinutes) &&
-          item.cpu >= group.requirements.cpu &&
-          item.memoryGb >= group.requirements.memoryGb &&
-          (!group.requirements.gpu || item.gpu === group.requirements.gpu),
+      return demand.some((group) =>
+        catalogSatisfiesRequest(item, {
+          region: group.region,
+          duration_minutes: group.durationMinutes,
+          requirements: group.requirements,
+        }),
       );
     });
     // Buyer identity, free text, credentials and other suppliers' policies never leave this route.

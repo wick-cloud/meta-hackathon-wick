@@ -8,6 +8,7 @@ import { createRequest, submitBid, closeAuction, proposeBid } from './auction.js
 import { provisionVm, cleanupVm, terminateVm } from './lifecycle.js';
 import { startCatalogRefresh } from './catalog-refresh.js';
 import { availableForBids, normalizedPolicy, validatePolicy } from './policy.js';
+import { assertProviderCatalog, assertProviderCatalogIds } from './provider-identity.js';
 import {
   requestView,
   bidView,
@@ -218,7 +219,7 @@ export async function registerMarketplace(app: FastifyInstance, ctx: AppContext)
       )
     ).rows;
     return {
-      provider: { id: p.id, name: p.name, simulated: true },
+      provider: { id: p.id, name: p.name, simulated: p.simulated, cloudProvider: p.cloud_provider },
       policy: normalizedPolicy(p.policy),
       policyRevision: p.policy_revision,
       capacity: {
@@ -233,7 +234,7 @@ export async function registerMarketplace(app: FastifyInstance, ctx: AppContext)
   app.put('/api/provider/capacity', async (request) => {
     const actor = await ctx.requireActor(request, ['provider']);
     const body = request.body as Row;
-    const total = integer(body?.total, 'Total simulated capacity', 0, 10000);
+    const total = integer(body?.total, 'Total configured capacity', 0, 10000);
     const expectedRevision =
       body?.expectedRevision === undefined
         ? undefined
@@ -259,7 +260,7 @@ export async function registerMarketplace(app: FastifyInstance, ctx: AppContext)
         p.id,
         null,
         'capacity_changed',
-        `Simulated capacity set to ${total}. Existing reservations retained.`,
+        `Configured capacity set to ${total}. Existing reservations retained.`,
       );
       return { total, policyRevision: updated.policy_revision };
     });
@@ -298,8 +299,9 @@ export async function registerMarketplace(app: FastifyInstance, ctx: AppContext)
       await ctx.pool.query(
         `SELECT id FROM broker_catalog WHERE approved AND source_mode=$1
        AND ($2::text[] IS NULL OR id=ANY($2))
+       AND ($3::text IS NULL OR item->>'provider'=$3)
        AND ($1 <> 'real' OR COALESCE(item->>'provider','') <> 'boat') ORDER BY id LIMIT 100`,
-        [ctx.wick.mode, policy.allowedCatalogIds ?? null],
+        [ctx.wick.mode, policy.allowedCatalogIds ?? null, p.cloud_provider ?? null],
       )
     ).rows.map((row) => row.id as string);
     const proposal = await ctx.muse.proposeCapacityPolicy({
@@ -365,6 +367,7 @@ export async function registerMarketplace(app: FastifyInstance, ctx: AppContext)
           'Capacity or policy changed. Reload and review the current limits before applying.',
         );
       const policy = validatePolicy(body, p.policy);
+      await assertProviderCatalogIds(db, p, policy.allowedCatalogIds, ctx.wick.mode);
       if ((policy.reserveSlots ?? 0) > p.total_capacity)
         throw new HttpError(400, 'Reserved spare slots cannot exceed your current total capacity.');
       // The provider lock and revision trigger make each new Apply consume exactly
@@ -435,7 +438,7 @@ export async function registerMarketplace(app: FastifyInstance, ctx: AppContext)
         )
       ).rows,
       limit,
-      offeringView,
+      (r) => offeringView({ ...r, simulated: p.simulated, cloud_provider: p.cloud_provider }),
     );
   });
   app.post('/api/provider/offerings', async (request) => {
@@ -466,6 +469,7 @@ export async function registerMarketplace(app: FastifyInstance, ctx: AppContext)
           400,
           'Offerings must use an administrator-approved existing Wick configuration.',
         );
+      assertProviderCatalog(p, c.item);
       let pricing;
       if (ctx.wick.mode === 'real') {
         try {
@@ -509,21 +513,46 @@ export async function registerMarketplace(app: FastifyInstance, ctx: AppContext)
         'offering_published',
         'Published an offering using an existing administrator-approved configuration.',
       );
-      return offeringView(r);
+      return offeringView({ ...r, simulated: p.simulated, cloud_provider: p.cloud_provider });
     });
   });
   app.patch<{ Params: { id: string } }>('/api/provider/offerings/:id', async (request) => {
-    const p = await getProvider(ctx.pool, await ctx.requireActor(request, ['provider']));
+    const actor = await ctx.requireActor(request, ['provider']);
     const active = (request.body as Row)?.active;
     if (typeof active !== 'boolean') throw new HttpError(400, 'Active must be true or false.');
-    const row = (
-      await ctx.pool.query(
-        'UPDATE broker_offerings SET active=$3,revision=revision+1 WHERE id=$1 AND provider_id=$2 RETURNING *',
-        [uuid(request.params.id), p.id, active],
-      )
-    ).rows[0];
-    if (!row) throw new HttpError(404, 'Offering not found.');
-    return offeringView(row);
+    return transaction(ctx.pool, async (db) => {
+      const p = (
+        await db.query('SELECT * FROM broker_providers WHERE user_id=$1 FOR UPDATE', [actor.id])
+      ).rows[0];
+      if (!p) throw new HttpError(403, 'Provider access is not configured.');
+      const row = (
+        await db.query('SELECT * FROM broker_offerings WHERE id=$1 AND provider_id=$2 FOR UPDATE', [
+          uuid(request.params.id),
+          p.id,
+        ])
+      ).rows[0];
+      if (!row) throw new HttpError(404, 'Offering not found.');
+      if (active) {
+        const catalog = (
+          await db.query(
+            'SELECT item,approved FROM broker_catalog WHERE id=$1 AND source_mode=$2 FOR SHARE',
+            [row.catalog_id, ctx.wick.mode],
+          )
+        ).rows[0];
+        if (!catalog?.approved)
+          throw new HttpError(409, 'This configuration is no longer approved.');
+        assertProviderCatalog(p, catalog.item);
+        if (p.policy.allowedCatalogIds && !p.policy.allowedCatalogIds.includes(row.catalog_id))
+          throw new HttpError(403, 'Provider policy excludes this configuration.');
+      }
+      const updated = (
+        await db.query(
+          'UPDATE broker_offerings SET active=$2,revision=revision+1 WHERE id=$1 RETURNING *',
+          [row.id, active],
+        )
+      ).rows[0];
+      return offeringView({ ...updated, simulated: p.simulated, cloud_provider: p.cloud_provider });
+    });
   });
   app.get('/api/provider/activity', async (request) => {
     const p = await getProvider(ctx.pool, await ctx.requireActor(request, ['provider']));
@@ -543,14 +572,15 @@ export async function registerMarketplace(app: FastifyInstance, ctx: AppContext)
     await ctx.requireActor(request, ['admin']);
     const providers = (
       await ctx.pool.query(
-        `SELECT p.id,p.name,p.total_capacity,(SELECT count(*)::int FROM broker_holds h WHERE h.provider_id=p.id AND h.released_at IS NULL) AS held FROM broker_providers p ORDER BY p.name`,
+        `SELECT p.id,p.name,p.total_capacity,p.simulated,p.cloud_provider,(SELECT count(*)::int FROM broker_holds h WHERE h.provider_id=p.id AND h.released_at IS NULL) AS held FROM broker_providers p ORDER BY p.name`,
       )
     ).rows.map((r) => ({
       id: r.id,
       name: r.name,
       total: r.total_capacity,
       held: r.held,
-      simulated: true,
+      simulated: r.simulated,
+      cloudProvider: r.cloud_provider,
     }));
     const max =
       (await ctx.pool.query("SELECT value FROM broker_settings WHERE key='maxConcurrentVms'"))
@@ -731,7 +761,7 @@ export async function startMarketplaceWorkers(ctx: AppContext) {
               ctx,
               actor,
               requestId,
-              { totalPriceCents: proposal.totalPriceCents! },
+              { totalPriceCents: proposal.totalPriceCents!, offeringId: proposal.offeringId },
               'auto',
             );
           else

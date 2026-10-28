@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { PoolClient } from 'pg';
+import type { Pool, PoolClient } from 'pg';
 import { availableForBids } from './policy.js';
 import {
   acceptedBidQuote,
@@ -13,6 +13,15 @@ import {
 import type { Actor, CatalogItem } from '../../shared/types.js';
 import { HttpError, type AppContext } from '../context.js';
 import { transaction, enqueue, activity, QUEUES } from './db.js';
+import { assertProviderCatalog, CLOUD_PROVIDERS } from './provider-identity.js';
+import {
+  assertManagedCustomerRoute,
+  catalogSatisfiesRequest,
+  compatibleRequest,
+  MAX_MATCH_CATALOGS,
+  requestCatalogs,
+  sameCatalogAllocation,
+} from './matching.js';
 import {
   bidView,
   getProvider,
@@ -35,6 +44,11 @@ export async function createRequest(
   const description = shortText(body.description, 'Description', 4000);
   const catalogId = shortText(body.catalogId, 'Catalog configuration', 160);
   const region = shortText(body.region, 'Region', 120);
+  if (body.matchAcrossProviders !== undefined && typeof body.matchAcrossProviders !== 'boolean')
+    throw new HttpError(400, 'Provider matching must be explicitly enabled or disabled.');
+  const matchAcrossProviders = body.matchAcrossProviders === true;
+  if (region === 'any' && !matchAcrossProviders)
+    throw new HttpError(400, 'Any region requires explicit matching across providers.');
   const durationMinutes = integer(body.durationMinutes ?? 30, 'Rental duration', 15, 60);
   if (![15, 30, 60].includes(durationMinutes))
     throw new HttpError(400, 'Choose exactly 15, 30 or 60 minutes.');
@@ -88,6 +102,7 @@ export async function createRequest(
     let pricing;
     if (ctx.wick.mode === 'real') {
       try {
+        assertManagedCustomerRoute(catalog);
         requireFreshManagedRate(catalog);
         pricing = managedPricing(catalog);
       } catch (error) {
@@ -100,15 +115,75 @@ export async function createRequest(
         'This configuration does not support the exact selected rental duration.',
       );
     if (
-      catalog.region !== region ||
+      (region !== 'any' && catalog.region !== region) ||
       catalog.cpu < cpu ||
       catalog.memoryGb < memoryGb ||
-      (gpu && catalog.gpu !== gpu)
+      (gpu && (gpu === 'any' ? !catalog.gpu : catalog.gpu !== gpu))
     )
       throw new HttpError(
         400,
         'The configuration does not satisfy the requested region and resources.',
       );
+    const frozen = {
+      ...catalog,
+      approved: true,
+      sourceMode: ctx.wick.mode,
+      ...(pricing ? { pricing } : {}),
+    };
+    let eligibleCatalogs: Row[] | undefined;
+    if (matchAcrossProviders) {
+      const rows = (
+        await db.query(
+          `SELECT id,item FROM broker_catalog WHERE approved AND source_mode=$1
+           AND ($1 <> 'real' OR item->>'provider'=ANY($2::text[]))
+           AND (item->>'cpu')::numeric >= $3 AND (item->>'memoryGb')::numeric >= $4
+           AND ($5='any' OR item->>'region'=$5)
+           AND item->'durationMinutes' @> $6::jsonb
+           ORDER BY id LIMIT $7 FOR SHARE`,
+          [
+            ctx.wick.mode,
+            [...CLOUD_PROVIDERS],
+            cpu,
+            memoryGb,
+            region,
+            JSON.stringify([durationMinutes]),
+            MAX_MATCH_CATALOGS + 1,
+          ],
+        )
+      ).rows;
+      if (rows.length > MAX_MATCH_CATALOGS)
+        throw new HttpError(
+          400,
+          'Too many matching configurations. Choose a region or narrower resources.',
+        );
+      eligibleCatalogs = rows
+        .map((row) => ({ ...row.item, id: row.id }) as CatalogItem)
+        .filter((item) =>
+          catalogSatisfiesRequest(item, {
+            requirements: { cpu, memoryGb, ...(gpu ? { gpu } : {}) },
+            region,
+            duration_minutes: durationMinutes,
+          }),
+        )
+        .map((item) => {
+          try {
+            if (ctx.wick.mode === 'real') {
+              assertManagedCustomerRoute(item);
+              requireFreshManagedRate(item);
+            }
+            return {
+              ...item,
+              approved: true,
+              sourceMode: ctx.wick.mode,
+              ...(ctx.wick.mode === 'real' ? { pricing: managedPricing(item) } : {}),
+            };
+          } catch (error) {
+            throw new HttpError(400, (error as Error).message);
+          }
+        });
+      if (!eligibleCatalogs.length)
+        throw new HttpError(400, 'No approved configuration satisfies the reviewed requirements.');
+    }
     const r = await db.query(
       `INSERT INTO broker_requests(buyer_id,description,catalog_id,catalog_snapshot,region,duration_minutes,max_price_cents,requirements,prior_request_id)
       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
@@ -116,7 +191,10 @@ export async function createRequest(
         actor.id,
         description,
         catalogId,
-        { ...catalog, approved: true, sourceMode: ctx.wick.mode, ...(pricing ? { pricing } : {}) },
+        {
+          ...frozen,
+          ...(eligibleCatalogs ? { matchMode: 'compatible', eligibleCatalogs } : {}),
+        },
         region,
         durationMinutes,
         maxPriceCents,
@@ -137,12 +215,119 @@ export async function createRequest(
     }
     await enqueue(ctx, db, QUEUES.close, { requestId: request.id }, 30);
     const providers = await db.query(
-      "SELECT id FROM broker_providers WHERE policy->>'autoBid'='true'",
+      `SELECT p.id FROM broker_providers p WHERE p.policy->>'autoBid'='true'
+       AND ($3::boolean=false OR $4 <> 'real' OR p.cloud_provider IS NOT NULL)
+       AND EXISTS(SELECT 1 FROM broker_catalog c
+         JOIN LATERAL(SELECT 1 FROM broker_offerings o WHERE o.provider_id=p.id
+           AND o.catalog_id=c.id AND o.active ORDER BY o.price_cents,o.id LIMIT 1) published ON true
+         WHERE c.approved AND c.source_mode=$4 AND c.id=ANY($1::text[])
+         AND (p.cloud_provider IS NULL OR p.cloud_provider=c.item->>'provider')
+         AND (p.policy->'allowedCatalogIds' IS NULL OR p.policy->'allowedCatalogIds'='null'::jsonb
+              OR p.policy->'allowedCatalogIds' ? c.id))
+       ORDER BY (p.cloud_provider IS NOT NULL) DESC,p.id LIMIT $2`,
+      [
+        (eligibleCatalogs ?? [frozen]).map((item) => item.id),
+        8,
+        matchAcrossProviders,
+        ctx.wick.mode,
+      ],
     );
     for (const p of providers.rows)
       await enqueue(ctx, db, QUEUES.auto, { requestId: request.id, providerId: p.id });
     return requestView(request);
   });
+}
+
+interface PublishedMatch {
+  offering: Row;
+  catalog: CatalogItem;
+  frozen: CatalogItem;
+  minimumPriceCents: number;
+}
+
+/** At most one published offering per frozen configuration; no history-wide book load. */
+async function publishedMatches(
+  ctx: AppContext,
+  db: Pool | PoolClient,
+  request: Row,
+  provider: Row,
+  offeringId?: string,
+): Promise<PublishedMatch[]> {
+  if (ctx.wick.mode === 'real' && compatibleRequest(request) && !provider.cloud_provider)
+    throw new HttpError(
+      403,
+      'An operator-assigned provider route is required for provider matching.',
+    );
+  const frozen = requestCatalogs(request).filter(
+    (item) =>
+      !provider.policy.allowedCatalogIds || provider.policy.allowedCatalogIds.includes(item.id),
+  );
+  if (!frozen.length)
+    throw new HttpError(400, 'Provider policy excludes every reviewed configuration.');
+  const rows = (
+    await db.query(
+      `SELECT o.*,c.item AS catalog_item FROM broker_catalog c
+       JOIN LATERAL(SELECT o.* FROM broker_offerings o WHERE o.provider_id=$1
+         AND o.catalog_id=c.id AND o.active AND ($4::uuid IS NULL OR o.id=$4)
+         ORDER BY o.price_cents,o.id LIMIT 1 FOR SHARE) o ON true
+       WHERE c.id=ANY($2::text[]) AND c.approved AND c.source_mode=$3
+         AND ($5::text IS NULL OR c.item->>'provider'=$5)
+       ORDER BY o.price_cents,o.id LIMIT $6 FOR SHARE OF c`,
+      [
+        provider.id,
+        frozen.map((item) => item.id),
+        ctx.wick.mode,
+        offeringId ?? null,
+        provider.cloud_provider ?? null,
+        MAX_MATCH_CATALOGS,
+      ],
+    )
+  ).rows;
+  const matches: PublishedMatch[] = [];
+  let invalid: Error | undefined;
+  for (const row of rows) {
+    const catalog = { ...row.catalog_item, id: row.catalog_id, approved: true } as CatalogItem;
+    const selected = frozen.find((item) => item.id === catalog.id)!;
+    try {
+      assertProviderCatalog(provider, catalog);
+      if (!sameCatalogAllocation(selected, catalog) || !catalogSatisfiesRequest(catalog, request))
+        throw new HttpError(409, 'The reviewed configuration changed. Start a new request.');
+      let minimumPriceCents = provider.policy.minimumPriceCents;
+      if (ctx.wick.mode === 'real') {
+        assertManagedCustomerRoute(catalog);
+        if ((request.catalog_snapshot.sourceMode ?? 'fixture') !== 'real' || !row.pricing)
+          throw new HttpError(
+            409,
+            'A real request and a published managed-rate offering are required.',
+          );
+        requireCurrentRate(row.pricing, catalog);
+        requireCurrentRate(row.pricing, selected);
+        minimumPriceCents = Math.max(
+          minimumPriceCents,
+          fixedQuote(commissionPricing(row.pricing), request.duration_minutes)
+            .upstreamCostFloorCents!,
+        );
+      }
+      matches.push({ offering: row, catalog, frozen: selected, minimumPriceCents });
+    } catch (error) {
+      invalid ??= error as Error;
+    }
+  }
+  if (!matches.length) {
+    if (invalid instanceof HttpError) throw invalid;
+    if (invalid) throw new HttpError(409, invalid.message);
+    throw new HttpError(
+      400,
+      'Publish an active offering for a reviewed configuration before bidding.',
+    );
+  }
+  return matches.sort(
+    (a, b) =>
+      Math.max(a.minimumPriceCents, provider.policy.basePriceCents) -
+        Math.max(b.minimumPriceCents, provider.policy.basePriceCents) ||
+      a.offering.price_cents - b.offering.price_cents ||
+      a.offering.id.localeCompare(b.offering.id),
+  );
 }
 
 export async function submitBid(
@@ -178,36 +363,11 @@ export async function submitBid(
       (policy.maxPriceCents !== undefined && price > policy.maxPriceCents)
     )
       throw new HttpError(400, 'Price is outside the customer budget or provider pricing policy.');
-    if (policy.allowedCatalogIds && !policy.allowedCatalogIds.includes(request.catalog_id))
-      throw new HttpError(400, 'Provider policy excludes this configuration.');
-    const offering = (
-      await db.query(
-        `SELECT * FROM broker_offerings WHERE provider_id=$1 AND catalog_id=$2 AND active=true ${input.offeringId ? 'AND id=$3' : ''} ORDER BY price_cents,id LIMIT 1 FOR SHARE`,
-        input.offeringId
-          ? [p.id, request.catalog_id, input.offeringId]
-          : [p.id, request.catalog_id],
-      )
-    ).rows[0];
-    if (!offering)
-      throw new HttpError(400, 'Publish an active offering for this configuration before bidding.');
-    const currentCatalog = (
-      await db.query(
-        'SELECT approved,item FROM broker_catalog WHERE id=$1 AND source_mode=$2 FOR SHARE',
-        [request.catalog_id, ctx.wick.mode],
-      )
-    ).rows[0];
-    if (!currentCatalog?.approved)
-      throw new HttpError(409, 'This configuration is no longer approved for new bids.');
+    const match = (await publishedMatches(ctx, db, request, p, input.offeringId))[0]!;
+    const offering = match.offering;
     let pricing;
     if (ctx.wick.mode === 'real') {
-      if ((request.catalog_snapshot.sourceMode ?? 'fixture') !== 'real' || !offering.pricing)
-        throw new HttpError(
-          409,
-          'A real request and a published managed-rate offering are required.',
-        );
       try {
-        requireCurrentRate(offering.pricing, currentCatalog.item);
-        requireCurrentRate(offering.pricing, request.catalog_snapshot);
         pricing = acceptedBidQuote(offering.pricing, request.duration_minutes, price);
       } catch (error) {
         throw new HttpError(409, (error as Error).message);
@@ -239,6 +399,9 @@ export async function submitBid(
           offering.id,
           {
             ...offeringView(offering),
+            catalog: { ...match.frozen, sourceMode: ctx.wick.mode },
+            simulated: p.simulated,
+            cloudProvider: p.cloud_provider,
             revenueShare: revenueShare(price),
             ...(pricing ? { pricing } : {}),
           },
@@ -339,6 +502,25 @@ export async function globalAdmissionAvailable(ctx: AppContext, db: PoolClient) 
 
 /** Shared frozen quote + VM + provision-job owner; does not call Wick or run workloads. */
 export async function awardHeldBid(ctx: AppContext, db: PoolClient, request: Row, winner: Row) {
+  const winnerCatalog = winner.offering_snapshot?.catalog as CatalogItem | undefined;
+  if (compatibleRequest(request) && !winnerCatalog)
+    throw new HttpError(409, 'The winning bid has no frozen provider configuration.');
+  const catalog = winnerCatalog ?? request.catalog_snapshot;
+  const reviewed = requestCatalogs(request).find((item) => item.id === catalog.id);
+  if (
+    !reviewed ||
+    !sameCatalogAllocation(reviewed, catalog) ||
+    !catalogSatisfiesRequest(catalog, request)
+  )
+    throw new HttpError(409, 'The winning configuration is outside the reviewed request.');
+  if (
+    compatibleRequest(request) &&
+    ctx.wick.mode === 'real' &&
+    winner.offering_snapshot?.cloudProvider !== catalog.provider
+  )
+    throw new HttpError(409, 'The winning provider route does not match the frozen configuration.');
+  assertProviderCatalog({ cloud_provider: winner.offering_snapshot?.cloudProvider }, catalog);
+  if (ctx.wick.mode === 'real') assertManagedCustomerRoute(catalog);
   if (!(await globalAdmissionAvailable(ctx, db)))
     throw new HttpError(409, 'The concurrent VM limit is reached.');
   const requestId = request.id;
@@ -350,7 +532,6 @@ export async function awardHeldBid(ctx: AppContext, db: PoolClient, request: Row
     "UPDATE broker_holds SET released_at=now(),release_reason='Auction lost' WHERE bid_id IN(SELECT id FROM broker_bids WHERE request_id=$1 AND id<>$2) AND released_at IS NULL",
     [requestId, winner.id],
   );
-  const catalog = request.catalog_snapshot;
   const vmId = randomUUID();
   const config = ctx.config as unknown as Record<string, unknown>;
   const createInput = {
@@ -439,35 +620,8 @@ export async function proposeBid(ctx: AppContext, actor: Actor, requestId: strin
       )
     ).rows[0].n,
   );
-  const catalog = (
-    await ctx.pool.query(
-      'SELECT item,approved FROM broker_catalog WHERE approved=true AND source_mode=$1',
-      [ctx.wick.mode],
-    )
-  ).rows.map((r) => ({ ...r.item, approved: r.approved }));
-  let realPricing;
-  if (ctx.wick.mode === 'real') {
-    const offering = (
-      await ctx.pool.query(
-        'SELECT * FROM broker_offerings WHERE provider_id=$1 AND catalog_id=$2 AND active=true ORDER BY price_cents,id LIMIT 1',
-        [provider.id, request.catalog_id],
-      )
-    ).rows[0];
-    const item = catalog.find((c) => c.id === request.catalog_id);
-    try {
-      if (!offering?.pricing || !item)
-        throw new Error('Publish a current managed-rate offering first.');
-      requireCurrentRate(offering.pricing, item);
-      requireCurrentRate(offering.pricing, request.catalog_snapshot);
-      realPricing = fixedQuote(commissionPricing(offering.pricing), request.duration_minutes);
-    } catch (error) {
-      throw new HttpError(409, (error as Error).message);
-    }
-  }
-  const minimumPriceCents = Math.max(
-    provider.policy.minimumPriceCents,
-    realPricing?.upstreamCostFloorCents ?? 0,
-  );
+  const match = (await publishedMatches(ctx, ctx.pool, request, provider))[0]!;
+  const minimumPriceCents = match.minimumPriceCents;
   if (
     minimumPriceCents > request.max_price_cents ||
     (provider.policy.maxPriceCents !== undefined &&
@@ -486,20 +640,20 @@ export async function proposeBid(ctx: AppContext, actor: Actor, requestId: strin
   const proposal = await ctx.muse.proposeBid({
     request: {
       description: request.description,
-      catalogId: request.catalog_id,
+      catalogId: match.catalog.id,
       durationMinutes: request.duration_minutes,
       maxPriceCents: request.max_price_cents,
       requirements: request.requirements,
-      region: request.region,
+      region: match.catalog.region,
     },
     policy: { ...provider.policy, minimumPriceCents },
     availableCapacity: availableForBids(provider.total_capacity, held, provider.policy),
     suggestedTotalPriceCents: Math.max(minimumPriceCents, provider.policy.basePriceCents),
-    catalog,
+    catalog: [match.catalog],
   });
   if (proposal.decision === 'bid') {
     integer(proposal.totalPriceCents, 'Proposed price');
-    if (proposal.catalogId && proposal.catalogId !== request.catalog_id)
+    if (proposal.catalogId && proposal.catalogId !== match.catalog.id)
       throw new HttpError(422, 'Muse proposed a different configuration.');
     if (
       proposal.totalPriceCents! > request.max_price_cents ||
@@ -509,5 +663,5 @@ export async function proposeBid(ctx: AppContext, actor: Actor, requestId: strin
     )
       throw new HttpError(422, 'Muse proposal violates the fixed-price policy or request budget.');
   }
-  return { ...proposal, mode: ctx.muse.mode };
+  return { ...proposal, offeringId: match.offering.id as string, mode: ctx.muse.mode };
 }

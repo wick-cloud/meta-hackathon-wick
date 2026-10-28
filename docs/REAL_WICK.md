@@ -1,6 +1,6 @@
 # Real Wick configuration and validation
 
-The app uses the exact published `@wick-cloud/sdk@0.1.0-rc.0`. Real compute requires explicit `WICK_MODE=real`; keep `MUSE_MODE=fixture` for this baseline. All real catalog configurations start unapproved. Supplier accounts represent demo allocations backed by Wick, not independent provider firms. BYOK is unsupported.
+The app uses the exact published `@wick-cloud/sdk@0.1.0-rc.0`. Real compute requires explicit `WICK_MODE=real`; keep `MUSE_MODE=fixture` for this baseline. All real catalog configurations start unapproved. Provider accounts represent operator-managed allocations backed by Wick, not accounts operated by independent provider firms. BYOK is unsupported. Native route IDs are `e2b`, `daytona`, `provider-blaxel` and `modal`. The requested Baseten account display name uses the underlying Blaxel route; it is not a separate Baseten API integration.
 
 ## Preserve an existing preview
 
@@ -10,12 +10,16 @@ After credentials and catalog selections have been reviewed, the following setup
 
 ```sh
 npx tsx scripts/configure-real.ts --list
-npx tsx scripts/configure-real.ts --apply
+npx tsx scripts/configure-real.ts --apply-providers
 ```
 
 Required environment names: `DATABASE_URL`, `BETTER_AUTH_SECRET`, `WICK_MODE`, `MUSE_MODE`, `WICK_API_KEY`, `WICK_ORGANIZATION_ID`, `WICK_GROUP_ID`. Use the appropriate `APP_URL` and `NODE_ENV` for the existing preview. `WICK_API_BASE` defaults to the public Wick API.
 
-`--apply` also requires comma-separated `REAL_CATALOG_IDS` and `REAL_SUPPLIER_EMAILS`, identifying explicitly approved managed catalog configurations and existing provider accounts. Optional `REAL_SUPPLIER_CAPACITY` defaults to 1 per selected demo supplier, `REAL_SUPPLIER_AUTO_BID` defaults to true. Broker commission is fixed at 15% of the provider's gross rental total; there is no configurable target markup. The command updates only selected catalog configurations and demo supplier allocations/offerings. Repeated application is idempotent. It preserves users, passwords, sessions, existing reservations, invoices, fixture prices, and accepted quote snapshots. Applying configuration does not restart or publish the app.
+`--apply-providers` requires the four `REAL_PROVIDER_<KEY>_EMAIL`, `_PASSWORD` and `_CATALOG_IDS` sets, with keys `E2B`, `DAYTONA`, `BLAXEL` and `MODAL`. Select each account's native IDs from `--list`; the command rejects a cross-cloud selection. Capacity defaults to five per workspace through `REAL_PROVIDER_CAPACITY`. `REAL_RETIRED_SUPPLIER_EMAILS` explicitly identifies legacy accounts whose automatic bidding and active real offerings are retired. The shared 20-VM admission limit remains separate.
+
+The operation hashes supplied new passwords before its transaction, creates missing accounts, and preserves existing credential hashes and sessions on retries. A collision with another role or upstream binding fails without repurposing the account. It preserves existing reservations, invoices, fixture records and accepted quote snapshots. Repeated application is idempotent; applying configuration does not restart or publish the app. Keep setup outside normal startup and permanent pre-deploy hooks. See [provider marketplace setup and coverage](provider-marketplace.md).
+
+The older `--apply` command still supports explicitly chosen unbound demo suppliers through `REAL_CATALOG_IDS`, `REAL_SUPPLIER_EMAILS`, `REAL_SUPPLIER_CAPACITY` and `REAL_SUPPLIER_AUTO_BID`. It refuses the cloud-bound provider accounts. Broker commission remains fixed at 15% of provider gross rental revenue; there is no configurable target markup.
 
 ## Price semantics
 
@@ -33,7 +37,11 @@ For a gross price of `g` cents, the frozen Broker commission is `g × 1500` micr
 
 New binding bids and accepted counteroffers freeze their revenue split, which is copied into the invoice only on readiness. Historical accepted bids, VM quotes and invoices retain their original economics. Existing records without a commission snapshot display as legacy; they are not assigned a new fee retroactively. New business uses the commission model, including bids against older active offerings. Published rates remain subject to freshness and change checks. Preview/create carry the frozen `maximumPriceMicrosPerSecond`. Managed rates already include Wick pricing; BYOK remains unsupported.
 
-New requests, approvals, offerings, and bids require catalog retrieval within 15 minutes, allowing at most 60 seconds of future clock skew. Historical quotes remain readable unchanged. Refresh the catalog when stale. Boat customer allocations are excluded by explicit user choice. The live test selects `e2b:micro:us`; setup still requires explicit catalog IDs. E2B advertises BYOK capability, so capability alone cannot prove the selected billing route. For each E2B candidate, the official SDK performs a bounded, read-only execution preview in the configured organization/group and requires exact provider/profile/region, `billingMode=wick_managed`, no provider key, `externalCompute=false`, and no fallback offers. Unsupported, BYOK, or ambiguous selected routes remain unavailable. A bounded read-only E2B Micro/us preview passed with these checks; it did not allocate an environment. Catalog rates remain dynamic. Actual create has no extra asynchronous preflight between the safety gate and SDK transport; the catalog proof is frozen alongside its retrieval time, and the actual environment must pass the independent billing check. Actual environment ownership and `billingMode=wick_managed` with no provider key must be verified before invoicing; unexpected owned BYOK resources are quarantined for cleanup without a charge.
+New requests, approvals, offerings, and bids require catalog retrieval within 15 minutes, allowing at most 60 seconds of future clock skew. Historical quotes remain readable unchanged. Refresh the catalog when stale. Boat customer allocations remain excluded. For each candidate from E2B, Daytona, Blaxel or Modal, the official SDK performs a bounded, read-only execution preview in the configured organization/group and requires exact provider/profile/region, `billingMode=wick_managed`, no provider key, `externalCompute=false`, and no fallback offers. Capability advertising alone cannot prove the selected billing route. Unsupported, BYOK, or ambiguous routes remain unavailable.
+
+At **2026-10-28 18:33 UTC**, the read-only catalog/execution-preview check passed for all **12** current routes across the four upstream providers. It allocated no VMs and did not test a real terminal connection. Rates and availability remain dynamic; this result is not a four-provider live allocation or scale claim. The [provider coverage record](provider-marketplace.md) separates implementation, offline verification and this read-only observation.
+
+Actual create has no extra asynchronous preflight between the safety gate and SDK transport; the catalog proof is frozen alongside its retrieval time, and the actual environment must pass the independent billing check. Actual environment ownership and `billingMode=wick_managed` with no provider key must be verified before invoicing; unexpected owned BYOK resources are quarantined for cleanup without a charge.
 
 Cleanup never calls create, even with the original key. Uncertain admission is discovered through bounded exact-name/scope/time environment listings. Absence remains UNKNOWN; native TTL is only a backstop, and holds are not falsely released.
 

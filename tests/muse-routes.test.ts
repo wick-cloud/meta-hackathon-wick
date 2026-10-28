@@ -4,6 +4,7 @@ import { registerMuse } from '../src/server/muse/index.js';
 import { createMuseAdapter } from '../src/server/integrations/muse.js';
 import { HttpError, type AppContext } from '../src/server/context.js';
 import type { Mode, Role } from '../src/shared/types.js';
+import { MAX_MATCH_CATALOGS } from '../src/server/marketplace/matching.js';
 
 const apps: ReturnType<typeof Fastify>[] = [];
 afterEach(async () => {
@@ -247,7 +248,7 @@ describe('Muse route authorization and input boundaries', () => {
     expect(JSON.stringify(suggestionInput)).not.toContain('other-provider');
     expect(JSON.stringify(suggestionInput)).not.toContain('untrusted-body');
     const demandQuery = query.mock.calls.find(([sql]) => sql.includes('WITH recent_requests'));
-    expect(demandQuery?.[1]).toEqual(['fixture', ['small']]);
+    expect(demandQuery?.[1]).toEqual(['fixture', ['small'], MAX_MATCH_CATALOGS]);
     expect(demandQuery?.[0]).toContain("interval '7 days'");
     expect(demandQuery?.[0]).toContain('resolution_request_id IS NULL');
     expect(suggestionInput).toMatchObject({

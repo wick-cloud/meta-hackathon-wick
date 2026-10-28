@@ -4,7 +4,7 @@ import { defineRailway, github, postgres, preserve, project, service } from 'rai
 export default defineRailway(() => {
   const db = postgres('Postgres');
   const broker = service('wick-broker', {
-    source: github('wick-cloud/meta-hackathon-wick', { branch: 'codex/broker-real-wick' }),
+    source: github('wick-cloud/meta-hackathon-wick', { branch: 'main' }),
     build: { builder: 'DOCKERFILE', dockerfilePath: 'Dockerfile' },
     deploy: {
       startCommand: 'node dist/src/server/index.js',
@@ -49,6 +49,20 @@ export default defineRailway(() => {
       REAL_SUPPLIER_EMAILS: preserve(),
       REAL_SUPPLIER_CAPACITY: preserve(),
       REAL_SUPPLIER_AUTO_BID: preserve(),
+      REAL_PROVIDER_CAPACITY: preserve(),
+      REAL_RETIRED_SUPPLIER_EMAILS: preserve(),
+      REAL_PROVIDER_E2B_EMAIL: preserve(),
+      REAL_PROVIDER_E2B_PASSWORD: preserve(),
+      REAL_PROVIDER_E2B_CATALOG_IDS: preserve(),
+      REAL_PROVIDER_DAYTONA_EMAIL: preserve(),
+      REAL_PROVIDER_DAYTONA_PASSWORD: preserve(),
+      REAL_PROVIDER_DAYTONA_CATALOG_IDS: preserve(),
+      REAL_PROVIDER_BLAXEL_EMAIL: preserve(),
+      REAL_PROVIDER_BLAXEL_PASSWORD: preserve(),
+      REAL_PROVIDER_BLAXEL_CATALOG_IDS: preserve(),
+      REAL_PROVIDER_MODAL_EMAIL: preserve(),
+      REAL_PROVIDER_MODAL_PASSWORD: preserve(),
+      REAL_PROVIDER_MODAL_CATALOG_IDS: preserve(),
     },
   });
   return project('meta-hackathon-wick', { resources: [broker, db] });

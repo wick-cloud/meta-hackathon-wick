@@ -14,13 +14,14 @@ export const requestView = (r: Row) => ({
   region: r.region,
   durationMinutes: r.duration_minutes,
   maxPriceCents: r.max_price_cents,
+  matchAcrossProviders: r.catalog_snapshot?.matchMode === 'compatible',
   requirements: r.requirements,
   status: r.status,
   closesAt: iso(r.closes_at),
   createdAt: iso(r.created_at),
   winningBidId: r.winning_bid_id,
   failureReason: r.failure_reason,
-  ...(r.catalog_snapshot?.pricing
+  ...(r.catalog_snapshot?.pricing && r.catalog_snapshot?.matchMode !== 'compatible'
     ? { pricing: fixedQuote(r.catalog_snapshot.pricing, r.duration_minutes) }
     : {}),
 });
@@ -31,7 +32,11 @@ export const bidView = (r: Row) => ({
   totalPriceCents: r.total_price_cents,
   status: r.status,
   createdAt: iso(r.created_at),
-  simulated: true,
+  simulated: r.offering_snapshot?.simulated ?? true,
+  catalogId: r.offering_snapshot?.catalog?.id ?? r.offering_snapshot?.catalogId,
+  catalogName: r.offering_snapshot?.catalog?.name,
+  cloudProvider: r.offering_snapshot?.catalog?.provider,
+  region: r.offering_snapshot?.catalog?.region,
   ...(r.offering_snapshot?.pricing ? { pricing: r.offering_snapshot.pricing } : {}),
   ...(r.offering_snapshot?.revenueShare ? { revenueShare: r.offering_snapshot.revenueShare } : {}),
 });
@@ -46,7 +51,8 @@ export const offeringView = (r: Row) => ({
   revision: r.revision,
   ...(r.pricing ? { pricing: r.pricing, priceDurationMinutes: 30 } : {}),
   createdAt: iso(r.created_at),
-  simulated: true,
+  simulated: r.simulated ?? true,
+  cloudProvider: r.cloud_provider ?? null,
 });
 export const vmView = (r: Row) => ({
   id: r.id,
