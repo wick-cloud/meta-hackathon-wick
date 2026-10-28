@@ -206,6 +206,9 @@ describe.skipIf(!databaseUrl)('PostgreSQL marketplace concurrency and invariants
       session: async () => {
         throw new Error('These tests never open terminal sessions.');
       },
+      terminal: async () => {
+        throw new Error('These tests never open terminal connections.');
+      },
       terminate: vi.fn(async () => {}),
     };
     return { state, wick, lifecycle: { ...ctx, wick } };
@@ -388,6 +391,198 @@ describe.skipIf(!databaseUrl)('PostgreSQL marketplace concurrency and invariants
           .count,
       ),
     ).toBe(2);
+  });
+
+  it('admits only 20 of 21 simultaneous auctions, invoices readiness once, and retains all holds until confirmed cleanup', async () => {
+    const adminActor: Actor = {
+      id: randomUUID(),
+      email: 'scale-admin@test.invalid',
+      name: 'Scale test administrator',
+      role: 'admin',
+    };
+    const app = Fastify();
+    await registerMarketplace(app, { ...ctx, requireActor: async () => adminActor });
+    try {
+      const configured = await app.inject({
+        method: 'PUT',
+        url: '/api/admin/config',
+        payload: { maxConcurrentVms: 20 },
+      });
+      expect(configured.statusCode).toBe(200);
+      expect(configured.json()).toEqual({ maxConcurrentVms: 20 });
+    } finally {
+      await app.close();
+    }
+
+    const supplier = await provider(21);
+    const buyerId = randomUUID();
+    const requestIds = await Promise.all(Array.from({ length: 21 }, () => request(true, buyerId)));
+    await Promise.all(requestIds.map((id, index) => acceptedBid(id, supplier, 200 + index)));
+    // The persisted administrator limit must override a lower environment default.
+    const limited = { ...ctx, config: { ...ctx.config, maxConcurrentVms: 1 } };
+    await Promise.all(requestIds.map((id) => closeAuction(limited, id)));
+    const vms = (await pool.query('SELECT * FROM broker_vms ORDER BY id')).rows;
+    expect(vms).toHaveLength(20);
+    expect(new Set(vms.map((vm) => vm.create_key)).size).toBe(20);
+    const rejected = (
+      await pool.query("SELECT id,failure_reason FROM broker_requests WHERE status='failed'")
+    ).rows;
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0].failure_reason).toMatch(/concurrent VM limit/i);
+    expect(Number((await pool.query('SELECT count(*) FROM broker_invoices')).rows[0].count)).toBe(
+      0,
+    );
+    expect(
+      Number(
+        (await pool.query('SELECT count(*) FROM broker_holds WHERE released_at IS NULL')).rows[0]
+          .count,
+      ),
+    ).toBe(20);
+    expect(
+      Number(
+        (
+          await pool.query(`SELECT count(*) FROM ${queueSchema}.job WHERE name=$1`, [
+            QUEUES.provision,
+          ])
+        ).rows[0].count,
+      ),
+    ).toBe(20);
+
+    const { lifecycle, state, wick } = lifecycleContext(
+      { id: 'unused', status: 'running', expiresAt: null },
+      false,
+    );
+    const environments = new Map<string, WickEnvironment>();
+    vi.mocked(wick.create).mockImplementation(async (_input, key) => {
+      const id = `offline-${key}`;
+      const environment: WickEnvironment = {
+        id,
+        status: 'running',
+        expiresAt: new Date(Date.now() + 900_000).toISOString(),
+      };
+      environments.set(id, environment);
+      return { environment: { ...environment } };
+    });
+    vi.mocked(wick.get).mockImplementation(async (id) => {
+      const environment = environments.get(id);
+      if (!environment) throw new Error('Unknown offline environment');
+      return { ...environment };
+    });
+    vi.mocked(wick.terminate).mockImplementation(async (id) => {
+      const environment = environments.get(id);
+      if (!environment) throw new Error('Unknown offline environment');
+      environment.status = 'terminating';
+    });
+
+    await Promise.all(vms.map((vm) => provisionVm(lifecycle, vm.id)));
+    expect(wick.create).toHaveBeenCalledTimes(20);
+    expect(environments.size).toBe(20);
+    expect(Number((await pool.query('SELECT count(*) FROM broker_invoices')).rows[0].count)).toBe(
+      0,
+    );
+
+    state.terminal = true;
+    await Promise.all(
+      vms.flatMap((vm) => [provisionVm(lifecycle, vm.id), provisionVm(lifecycle, vm.id)]),
+    );
+    await Promise.all(vms.map((vm) => markReady(lifecycle, vm.id)));
+    expect(wick.create).toHaveBeenCalledTimes(20);
+    expect(
+      Number(
+        (await pool.query("SELECT count(*) FROM broker_vms WHERE status='running'")).rows[0].count,
+      ),
+    ).toBe(20);
+    const invoices = (
+      await pool.query(
+        `SELECT i.vm_id,i.total_cents,i.fee_cents,i.status,v.quote_snapshot
+         FROM broker_invoices i JOIN broker_vms v ON v.id=i.vm_id`,
+      )
+    ).rows;
+    expect(invoices).toHaveLength(20);
+    expect(new Set(invoices.map((invoice) => invoice.vm_id)).size).toBe(20);
+    for (const invoice of invoices) {
+      expect(invoice.total_cents).toBe(invoice.quote_snapshot.totalPriceCents);
+      expect(invoice.fee_cents).toBe(0);
+      expect(invoice.status).toBe('demo');
+    }
+
+    await Promise.all(vms.map((vm) => terminateVm(lifecycle, buyerId, vm.id)));
+    await Promise.all(vms.map((vm) => cleanupVm(lifecycle, vm.id)));
+    expect(wick.terminate).toHaveBeenCalledTimes(20);
+    expect(
+      Number(
+        (await pool.query('SELECT count(*) FROM broker_vms WHERE cleanup_confirmed_at IS NULL'))
+          .rows[0].count,
+      ),
+    ).toBe(20);
+    expect(
+      Number(
+        (await pool.query('SELECT count(*) FROM broker_holds WHERE released_at IS NULL')).rows[0]
+          .count,
+      ),
+    ).toBe(20);
+
+    for (const environment of environments.values()) environment.status = 'terminated';
+    await Promise.all(vms.map((vm) => cleanupVm(lifecycle, vm.id)));
+    expect(
+      Number(
+        (await pool.query('SELECT count(*) FROM broker_vms WHERE cleanup_confirmed_at IS NULL'))
+          .rows[0].count,
+      ),
+    ).toBe(0);
+    expect(
+      Number(
+        (await pool.query('SELECT count(*) FROM broker_holds WHERE released_at IS NULL')).rows[0]
+          .count,
+      ),
+    ).toBe(0);
+    expect(Number((await pool.query('SELECT count(*) FROM broker_invoices')).rows[0].count)).toBe(
+      20,
+    );
+    expect(wick.create).toHaveBeenCalledTimes(20);
+  });
+
+  it('rejects the 21st simultaneous manual reservation at supplier capacity 20, then accepts it with explicit spare capacity', async () => {
+    const supplier = await provider(20);
+    const requestIds = await Promise.all(Array.from({ length: 21 }, () => request()));
+    const outcomes = await Promise.allSettled(
+      requestIds.map((id) =>
+        submitBid(ctx, supplier.actor, id, {
+          totalPriceCents: 200,
+          offeringId: supplier.offeringId,
+        }),
+      ),
+    );
+    expect(outcomes.filter((outcome) => outcome.status === 'fulfilled')).toHaveLength(20);
+    expect(outcomes.filter((outcome) => outcome.status === 'rejected')).toHaveLength(1);
+    const rejectedIndex = outcomes.findIndex((outcome) => outcome.status === 'rejected');
+    const rejected = outcomes[rejectedIndex];
+    expect(rejected?.status === 'rejected' && rejected.reason.message).toMatch(/reserved/i);
+
+    const app = Fastify();
+    await registerMarketplace(app, { ...ctx, requireActor: async () => supplier.actor });
+    try {
+      expect(
+        (await app.inject({ method: 'GET', url: '/api/provider/dashboard' })).json().capacity,
+      ).toEqual({ total: 20, held: 20, available: 0 });
+      expect(
+        (await app.inject({ method: 'PUT', url: '/api/provider/capacity', payload: { total: 21 } }))
+          .statusCode,
+      ).toBe(200);
+      await submitBid(ctx, supplier.actor, requestIds[rejectedIndex]!, {
+        totalPriceCents: 200,
+        offeringId: supplier.offeringId,
+      });
+      expect(
+        (await app.inject({ method: 'GET', url: '/api/provider/dashboard' })).json().capacity,
+      ).toEqual({ total: 21, held: 21, available: 0 });
+    } finally {
+      await app.close();
+    }
+    expect(Number((await pool.query('SELECT count(*) FROM broker_vms')).rows[0].count)).toBe(0);
+    expect(Number((await pool.query('SELECT count(*) FROM broker_invoices')).rows[0].count)).toBe(
+      0,
+    );
   });
 
   it('cannot mutate an accepted environment specification in SQL', async () => {
@@ -797,6 +992,68 @@ describe.skipIf(!databaseUrl)('PostgreSQL marketplace concurrency and invariants
       (await pool.query('SELECT released_at FROM broker_holds WHERE bid_id=$1', [bidId])).rows[0]
         .released_at,
     ).toBeNull();
+  });
+
+  it('cannot allocate or terminate a legacy fixture rental through the real adapter after a mode switch', async () => {
+    const { vm, bidId } = await awardedVm();
+    const { lifecycle, wick } = lifecycleContext({
+      id: 'must-not-be-created',
+      status: 'running',
+      expiresAt: new Date(Date.now() + 1_800_000).toISOString(),
+    });
+    wick.mode = 'real';
+    await provisionVm(lifecycle, vm.id);
+    await cleanupVm(lifecycle, vm.id);
+    expect(await markReady(lifecycle, vm.id)).toBe(false);
+    expect(wick.create).not.toHaveBeenCalled();
+    expect(wick.get).not.toHaveBeenCalled();
+    expect(wick.connections).not.toHaveBeenCalled();
+    expect(wick.terminate).not.toHaveBeenCalled();
+    expect(
+      (
+        await pool.query(
+          'SELECT status,environment_id,poll_attempts,cleanup_attempts,lease_until FROM broker_vms WHERE id=$1',
+          [vm.id],
+        )
+      ).rows[0],
+    ).toEqual({
+      status: 'provisioning',
+      environment_id: null,
+      poll_attempts: 0,
+      cleanup_attempts: 0,
+      lease_until: null,
+    });
+    expect(Number((await pool.query('SELECT count(*) FROM broker_invoices')).rows[0].count)).toBe(
+      0,
+    );
+    expect(
+      (await pool.query('SELECT released_at FROM broker_holds WHERE bid_id=$1', [bidId])).rows[0]
+        .released_at,
+    ).toBeNull();
+  });
+
+  it('releases unawarded fixture bids after a real-mode switch without admitting or invoicing a VM', async () => {
+    const supplier = await provider();
+    const requestId = await request(true);
+    const bidId = await acceptedBid(requestId, supplier, 200);
+    const real = { ...ctx, wick: { ...ctx.wick, mode: 'real' as const } };
+    await closeAuction(real, requestId);
+    const stored = (
+      await pool.query('SELECT status,failure_reason FROM broker_requests WHERE id=$1', [requestId])
+    ).rows[0];
+    expect(stored.status).toBe('failed');
+    expect(stored.failure_reason).toMatch(/integration mode changed/i);
+    expect(
+      (await pool.query('SELECT status FROM broker_bids WHERE id=$1', [bidId])).rows[0].status,
+    ).toBe('lost');
+    expect(
+      (await pool.query('SELECT released_at FROM broker_holds WHERE bid_id=$1', [bidId])).rows[0]
+        .released_at,
+    ).not.toBeNull();
+    expect(Number((await pool.query('SELECT count(*) FROM broker_vms')).rows[0].count)).toBe(0);
+    expect(Number((await pool.query('SELECT count(*) FROM broker_invoices')).rows[0].count)).toBe(
+      0,
+    );
   });
 
   it('removes approval from vanished catalog items and excludes fixture configurations in real mode', async () => {
