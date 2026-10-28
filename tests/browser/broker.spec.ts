@@ -37,11 +37,14 @@ test('buyer manually reviews an immutable request, receives a VM and one demo in
   await page.getByRole('button', { name: 'Review manually', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Start 30-second auction', exact: true })).toBeVisible();
   await page.getByLabel('Maximum total price (USD)').fill('10.00');
+  const submitted = page.waitForResponse(response => new URL(response.url()).pathname === '/api/requests' && response.request().method() === 'POST');
   await page.getByRole('button', { name: 'Start 30-second auction', exact: true }).click();
-  await page.waitForURL(/\/requests\/[^/]+$/);
-  const requestId = new URL(page.url()).pathname.split('/').at(-1)!;
+  const submission = await submitted;
+  expect(submission.ok()).toBe(true);
+  const requestId: string = (await submission.json()).id;
   let vmId: string | undefined;
   try {
+    await page.waitForURL(new RegExp(`/requests/${requestId}$`));
     const created = await (await page.request.get(`/api/requests/${requestId}`)).json();
     expect(created.request.description).toBe('A small Linux environment for an interactive command line.');
     expect(created.request.maxPriceCents).toBe(1000);
@@ -107,7 +110,7 @@ test('buyer Muse fixture prepares an editable review with an honest receipt', as
   await expect(page.getByLabel('Minimum memory (GB)')).toHaveValue('4');
   await expect(page.getByText(/no Meta model call was made/i)).toBeVisible();
   await page.getByLabel('Maximum total price (USD)').fill('7.50');
-  await expect(page.getByLabel('Maximum total price (USD)')).toHaveValue('7.50');
+  await expect(page.getByLabel('Maximum total price (USD)')).toHaveValue(/^7\.50?$/);
   await expect(page.getByRole('button', { name: 'Start 30-second auction', exact: true })).toBeEnabled();
 });
 

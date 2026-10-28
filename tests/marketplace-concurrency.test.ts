@@ -13,6 +13,7 @@ import { closeAuction, createRequest, submitBid } from '../src/server/marketplac
 import { cleanupVm, markReady, provisionVm, terminateVm } from '../src/server/marketplace/lifecycle.js';
 import type { WickAdapter, WickEnvironment } from '../src/server/integrations/types.js';
 import { registerMarketplace } from '../src/server/marketplace/index.js';
+import { getCatalog, syncCatalog } from '../src/server/marketplace/data.js';
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const schema = `broker_test_${randomUUID().replaceAll('-', '')}`;
@@ -418,5 +419,40 @@ describe.skipIf(!databaseUrl)('PostgreSQL marketplace concurrency and invariants
     expect(wick.terminate).not.toHaveBeenCalled();
     expect((await pool.query('SELECT released_at FROM broker_holds WHERE bid_id=$1', [bidId])).rows[0].released_at).not.toBeNull();
     expect(Number((await pool.query('SELECT count(*) FROM broker_invoices')).rows[0].count)).toBe(0);
+  });
+
+  it('cannot observe or charge a real rental through a fixture adapter after a mode switch', async () => {
+    const { vm, bidId } = await awardedVm();
+    await pool.query(`UPDATE broker_vms SET catalog_snapshot=jsonb_set(catalog_snapshot,'{sourceMode}','"real"'),environment_id='real-environment',expires_at=now()+interval '30 minutes' WHERE id=$1`, [vm.id]);
+    const { lifecycle, wick } = lifecycleContext({ id: 'real-environment', status: 'running', expiresAt: new Date(Date.now() + 1_800_000).toISOString() });
+    await provisionVm(lifecycle, vm.id);
+    await cleanupVm(lifecycle, vm.id);
+    expect(await markReady(lifecycle, vm.id)).toBe(false);
+    expect(wick.create).not.toHaveBeenCalled();
+    expect(wick.get).not.toHaveBeenCalled();
+    expect(wick.terminate).not.toHaveBeenCalled();
+    expect(Number((await pool.query('SELECT count(*) FROM broker_invoices')).rows[0].count)).toBe(0);
+    expect((await pool.query('SELECT released_at FROM broker_holds WHERE bid_id=$1', [bidId])).rows[0].released_at).toBeNull();
+  });
+
+  it('removes approval from vanished catalog items and excludes fixture configurations in real mode', async () => {
+    const real = { ...ctx, wick: { ...ctx.wick, mode: 'real' as const } };
+    expect(await getCatalog(real)).toEqual([]);
+    const buyer: Actor = { id: randomUUID(), email: 'mode-buyer@test.invalid', name: 'Mode buyer', role: 'buyer' };
+    await expect(createRequest(real, buyer, { description: 'Must not allocate fixture ID', catalogId: catalog.id, region: catalog.region, durationMinutes: 30, maxPriceCents: 1000, requirements: { cpu: 2, memoryGb: 4 } })).rejects.toThrow(/approved/i);
+    await syncCatalog({ ...ctx, wick: { ...ctx.wick, catalog: async () => [] } });
+    expect((await pool.query('SELECT approved FROM broker_catalog WHERE id=$1', [catalog.id])).rows[0].approved).toBe(false);
+  });
+
+  it('uses the configured concurrency limit when no administrator override exists', async () => {
+    await pool.query("DELETE FROM broker_settings WHERE key='maxConcurrentVms'");
+    const limited = { ...ctx, config: { ...ctx.config, maxConcurrentVms: 1 } };
+    const supplier = await provider(2);
+    const requests = await Promise.all([request(true), request(true)]);
+    for (const id of requests) await acceptedBid(id, supplier, 200);
+    const outcomes = await Promise.allSettled(requests.map(id => closeAuction(limited, id)));
+    expect(outcomes.filter(result => result.status === 'rejected')).toEqual([]);
+    expect(Number((await pool.query('SELECT count(*) FROM broker_vms')).rows[0].count)).toBe(1);
+    expect(Number((await pool.query('SELECT count(*) FROM broker_holds WHERE released_at IS NULL')).rows[0].count)).toBe(1);
   });
 });

@@ -51,7 +51,9 @@ The application must already be running; the suite does not create additional ap
 - Owner-scoped HTTP reads, lists, cancellation, and retry prevent another buyer accessing a rental.
 - Tuple pagination retains records sharing the same exact PostgreSQL timestamp.
 - Cancellation before any create attempt releases capacity without allocating an environment.
+- Fixture adapters cannot reconcile, charge, or release holds for a rental admitted under real mode. Fixture catalog IDs cannot enter real-mode requests, and catalog sync revokes approval for vanished configurations.
+- The configured VM concurrency limit applies when no administrator override exists.
 
 ## Evidence from this build
 
-At 2026-10-28 06:28 UTC, `npm run test:db` passed all **23** marketplace tests against local PostgreSQL 16 with Node 24.22.1 and Vitest 5.0.5. This is local fixture/domain evidence, not verification of Wick's production API or the real Meta service. Final project-wide checks and browser results are recorded in `HANDOFF.md`.
+At 2026-10-28 06:32 UTC, `npm run test:db` passed all **26** marketplace tests against local PostgreSQL 16 with Node 24.22.1 and Vitest 5.0.5. The six distinct Playwright cases passed across the 06:34 full run and 06:35 targeted buyer rerun; the first full run exposed two test-harness assumptions that were corrected (review URL matching and numeric-input formatting). The full buyer workflow took 36.7 seconds, including the real 30-second auction and an authenticated fixture WebSocket connection/reconnection. This is local fixture/domain evidence, not verification of Wick's production API or the real Meta service. Final project-wide checks and browser results are recorded in `HANDOFF.md`.
