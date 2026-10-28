@@ -190,7 +190,7 @@ export function replayIntents(records: JournalRecord[], header: Header): Map<str
   return entries;
 }
 
-/** flock is released by the OS on process death; all runner/watchdog retries share this gate. */
+/** flock is released by the OS on process death; every active create attempt shares this gate. */
 async function creationGate<T>(journal: Journal, action: () => Promise<T>): Promise<T> {
   const lock = spawn(
     'flock',
@@ -242,7 +242,6 @@ export async function closeAdmission(
 
 async function sharedCreate<T>(
   journal: Journal,
-  kind: 'create-start' | 'cleanup-replay',
   fields: Record<string, unknown>,
   check: () => void,
   operation: () => Promise<T>,
@@ -250,13 +249,14 @@ async function sharedCreate<T>(
   const pending = await creationGate(journal, async () => {
     const starts = journal
       .read()
-      .filter((record) => ['create-start', 'cleanup-replay'].includes(record.kind))
+      .filter((record) => record.kind === 'create-start')
       .map((record) => Date.parse(record.at))
       .filter((at) => Date.now() - at < 1000);
     if (starts.length >= 5)
       await delay(Math.max(1, 1001 - (Date.now() - starts[starts.length - 5])));
     check();
-    journal.append(kind, fields);
+    journal.append('create-start', fields);
+    check(); // Recheck after durable writes, immediately before invoking transport.
     // Invoke transport while holding the gate, then release without waiting for its response.
     const result = operation();
     void result.catch(() => undefined);
@@ -266,9 +266,10 @@ async function sharedCreate<T>(
 }
 
 function guardError() {
-  return Object.assign(
-    new Error('Independent live-scale admission guard rejected the allocation.'),
-    { admissionRejected: true },
+  // A guard failure may occur after dispatch or after a lost journal write. Never claim
+  // conclusive upstream rejection: lifecycle must retain the hold until reconciliation.
+  return new Error(
+    'Independent live-scale guard stopped the allocation; admission may be uncertain.',
   );
 }
 export function createScaleGuard(options: {
@@ -284,12 +285,6 @@ export function createScaleGuard(options: {
   const { adapter, journal, header } = options;
   assert.equal(adapter.mode, 'real');
   const intents = replayIntents(journal.read(), header);
-  const startedKeys = new Set(
-    journal
-      .read()
-      .filter((r) => r.kind === 'create-start')
-      .map((r) => r.key),
-  );
   let stopped = false;
   function stop() {
     stopped = true;
@@ -317,47 +312,51 @@ export function createScaleGuard(options: {
     async create(input, key) {
       try {
         const owner = await options.owns(key);
-        const body = { ...input, name: `broker-scale-${header.runId}-${owner.vmId.slice(0, 8)}` };
+        const body = { ...input };
+        assert.equal(
+          body.name,
+          `broker-scale-${header.runId}-${owner.vmId.slice(0, 8)}`,
+          'Scale name must match the durable Broker create input.',
+        );
         validateCreate(body, header.approval, header.runId);
         assert.equal(
           String((body as unknown as Record<string, unknown>).maximumPriceMicrosPerSecond),
           String(options.approvedRate()),
           'Guard rate differs from the approved offering.',
         );
-        const prior = intents.get(key);
-        if (prior)
-          assert.equal(
-            canonical(prior.body),
-            canonical(body),
-            'Same create key cannot change body.',
-          );
-        else {
-          assert(
-            !stopped && Date.now() < options.deadline && options.watchdogReady(),
-            'Admission barrier is closed.',
-          );
-          assert(intents.size < MAX_CREATES, 'Independent allocation ceiling reached.');
-          // Synchronous durable write and reservation happen before awaiting transport.
-          const intent = { key, body, ...owner };
-          journal.append('create-intent', intent);
-          intents.set(key, intent);
-        }
         const result = await sharedCreate(
           journal,
-          'create-start',
           { key },
           () => {
-            // A failure while waiting must stop queued calls whose first attempt never started.
-            if (!startedKeys.has(key))
-              assert(
-                !stopped && Date.now() < options.deadline && options.watchdogReady(),
-                'Admission barrier is closed.',
+            // This check is inside the cross-process gate AFTER the rate wait and applies
+            // to every dispatch, including retries of a previously started exact key.
+            assert(
+              !stopped &&
+                Date.now() < options.deadline &&
+                options.watchdogReady() &&
+                !journal
+                  .read()
+                  .some((record) => ['watchdog-triggered', 'stop-requested'].includes(record.kind)),
+              'Admission barrier is closed.',
+            );
+            const persisted = replayIntents(journal.read(), header);
+            const prior = persisted.get(key);
+            if (prior)
+              assert.equal(
+                canonical(prior.body),
+                canonical(body),
+                'Same create key cannot change body.',
               );
+            else {
+              assert(persisted.size < MAX_CREATES, 'Independent allocation ceiling reached.');
+              const intent = { key, body, ...owner };
+              journal.append('create-intent', intent);
+              persisted.set(key, intent);
+            }
+            intents.clear();
+            for (const [persistedKey, intent] of persisted) intents.set(persistedKey, intent);
           },
-          () => {
-            startedKeys.add(key);
-            return adapter.create(prior?.body ?? body, key);
-          },
+          () => adapter.create(body, key),
         );
         const observed = journal.read().filter((r) => r.kind === 'create-result' && r.key === key);
         assert(
@@ -403,18 +402,14 @@ export function percentiles(values: number[]) {
   };
 }
 
-/** No list/delete sweep. Only exact IDs discovered through this run's durable create keys. */
+/** Read-only discovery is bounded and requires exact run ownership; cleanup never invokes create. */
 export async function cleanupJournal(journal: Journal, adapter: WickAdapter, timeoutMs = 120_000) {
+  await closeAdmission(journal, 'stop-requested', { reason: 'cleanup-only-fence' });
   const header = journal.header();
-  const intents = replayIntents(journal.read(), header);
-  const started = new Set(
-    journal
-      .read()
-      .filter((r) => r.kind === 'create-start')
-      .map((r) => r.key),
-  );
+  const records = journal.read();
+  const intents = replayIntents(records, header);
   const deadline = Date.now() + timeoutMs;
-  const unresolved: string[] = [];
+  const unresolved = new Set<string>();
   const owned: {
     key: string;
     id: string;
@@ -430,42 +425,94 @@ export async function cleanupJournal(journal: Journal, adapter: WickAdapter, tim
       }),
     );
   }
-  await bounded([...intents], async ([key, intent]) => {
-    if (!started.has(key)) return; // Never replay an intent whose SDK call did not start.
-    const outcomes = journal.read().filter((r) => r.kind === 'create-result' && r.key === key);
-    const ids = [...new Set(outcomes.map((r) => r.environmentId))];
-    assert(
-      ids.length <= 1 && ids.every((value) => typeof value === 'string'),
-      'Ambiguous environment ownership; manual reconciliation required.',
-    );
-    let id = ids[0] as string | undefined;
-    for (let retry = 0; !id && retry < 3 && Date.now() < deadline; retry++) {
-      try {
-        const result = await sharedCreate(
-          journal,
-          'cleanup-replay',
-          { key, body: intent.body },
-          () => assert(Date.now() < deadline),
-          () => adapter.create(intent.body, key),
-        );
-        id = result.environment.id;
-        journal.append('create-result', {
-          key,
-          environmentId: id,
-          status: result.environment.status,
-          expiresAt: result.environment.expiresAt,
-        });
-      } catch {
-        await delay(100);
+  // This list is for recovery only: at most three pages in each of the active and
+  // archived views. A missing match is UNKNOWN, never proof that no VM was admitted.
+  const discovered: Awaited<ReturnType<NonNullable<WickAdapter['list']>>>['items'] = [];
+  const needsDiscovery = [...intents.keys()].some(
+    (key) => !records.some((record) => record.kind === 'create-result' && record.key === key),
+  );
+  if (needsDiscovery && adapter.list) {
+    for (const archived of [false, true]) {
+      let cursor: string | undefined;
+      for (let page = 0; page < 3 && Date.now() < deadline; page++) {
+        try {
+          const response = await adapter.list({
+            organizationId: header.approval.organizationId,
+            groupId: header.approval.groupId,
+            search: `broker-scale-${header.runId}-`,
+            provider: header.approval.provider,
+            limit: 50,
+            newest: true,
+            archived,
+            ...(cursor ? { cursor } : {}),
+          });
+          assert(response.items.length <= 50, 'Environment page exceeded recovery bound.');
+          discovered.push(...response.items);
+          if (!response.nextCursor || response.nextCursor === cursor) break;
+          cursor = response.nextCursor;
+        } catch {
+          break;
+        }
       }
     }
-    if (!id) {
-      unresolved.push(key);
+  }
+  await bounded([...intents], async ([key, intent]) => {
+    const outcomes = records.filter(
+      (record) => record.kind === 'create-result' && record.key === key,
+    );
+    let ids = [...new Set(outcomes.map((record) => record.environmentId))];
+    assert(
+      ids.every((value) => typeof value === 'string' && value.length > 0),
+      'Invalid environment receipt.',
+    );
+    if (!ids.length) {
+      const intentAt = Math.min(
+        ...records
+          .filter((record) => record.kind === 'create-intent' && record.key === key)
+          .map((record) => Date.parse(record.at)),
+      );
+      const starts = records.filter(
+        (record) => record.kind === 'create-start' && record.key === key,
+      );
+      const latestStartAt = Math.max(intentAt, ...starts.map((record) => Date.parse(record.at)));
+      const matches = discovered.filter(
+        (environment) =>
+          environment.name === intent.body.name &&
+          environment.organizationId === intent.body.organizationId &&
+          environment.groupId === intent.body.groupId &&
+          environment.provider === intent.body.provider &&
+          environment.profile === intent.body.profile &&
+          (environment.providerKeyId ?? undefined) === intent.body.providerKeyId &&
+          typeof environment.createdAt === 'string' &&
+          Date.parse(environment.createdAt) >= intentAt - 5000 &&
+          Date.parse(environment.createdAt) <= latestStartAt + 120_000,
+      );
+      ids = [...new Set(matches.map((environment) => environment.id))];
+      if (ids.length === 1) {
+        const match = matches.find((environment) => environment.id === ids[0])!;
+        journal.append('create-result', {
+          key,
+          environmentId: match.id,
+          status: match.status,
+          expiresAt: match.expiresAt,
+          discovery: 'bounded-exact-run-list',
+        });
+      }
+    }
+    // Multiple exact matches cannot establish which ID belongs to this create.
+    // Do not delete any ambiguous match, and retain every intent in the accounting.
+    if (ids.length !== 1) {
+      unresolved.add(key);
+      journal.append('cleanup-intent-unresolved', {
+        key,
+        classification: 'unknown-admission',
+        ttlSeconds: 900,
+      });
       return;
     }
+    const id = ids[0] as string;
     const ownedItem = { key, id, confirmed: false, terminateAttempts: 0, lastTerminateAt: 0 };
     owned.push(ownedItem);
-    // Terminate each discovered ID immediately; a stuck first VM cannot starve later cleanup.
     try {
       const environment = await adapter.get(id);
       assert.equal(environment.id, id);
@@ -478,7 +525,7 @@ export async function cleanupJournal(journal: Journal, adapter: WickAdapter, tim
       ownedItem.lastTerminateAt = Date.now();
       await adapter.terminate(id);
     } catch {
-      /* Preserve uncertainty and keep progressing through the remaining exact IDs. */
+      /* Uncertain reads never authorize releasing a hold. */
     }
   });
   while (owned.some((item) => !item.confirmed) && Date.now() < deadline) {
@@ -506,20 +553,16 @@ export async function cleanupJournal(journal: Journal, adapter: WickAdapter, tim
   for (const item of owned) {
     if (item.confirmed)
       journal.append('upstream-cleanup-confirmed', { key: item.key, environmentId: item.id });
-    else unresolved.push(item.id);
+    else unresolved.add(item.id);
   }
-  // A call already crossing the admission barrier when the watchdog fired may append
-  // create-start during cleanup. Reconcile those exact newly observed keys as well.
-  const latestStarts = new Set(
-    journal
-      .read()
-      .filter((r) => r.kind === 'create-start')
-      .map((r) => r.key),
-  );
-  if ([...latestStarts].some((key) => !started.has(key)))
-    unresolved.push(
-      ...(await cleanupJournal(journal, adapter, Math.max(5000, deadline - Date.now()))),
-    );
-  journal.append('cleanup-summary', { unresolved });
-  return unresolved;
+  // The admission gate is already closed by callers. Still account for any intent
+  // written at the boundary instead of letting an empty result list imply success.
+  const latest = replayIntents(journal.read(), header);
+  for (const key of latest.keys()) if (!intents.has(key)) unresolved.add(key);
+  journal.append('cleanup-summary', {
+    intents: latest.size,
+    confirmed: owned.filter((item) => item.confirmed).length,
+    unresolved: [...unresolved],
+  });
+  return [...unresolved];
 }

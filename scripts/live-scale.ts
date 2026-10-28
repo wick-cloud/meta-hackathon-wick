@@ -22,9 +22,9 @@ import {
   closeAdmission,
   createScaleGuard,
   percentiles,
-  replayIntents,
   type Header,
 } from './live-scale/safety.js';
+import { TerminalMarkerProof } from './live-scale/terminal-proof.js';
 
 async function main() {
   type Json = Record<string, any>;
@@ -184,7 +184,7 @@ async function main() {
       triggered,
       reason: 'runner-stopped-stale-or-deadline',
     });
-    // Every cleanup replay uses only an already-started exact key/body; no replacement allocation exists.
+    // Cleanup only discovers exact run-owned environments and terminates them; it never creates.
     const unresolved = await cleanupJournal(journal, wick, 180_000);
     console.log(
       JSON.stringify({
@@ -283,6 +283,7 @@ async function main() {
     let holdsReleased = false;
     const cookies = new Map<string, string>();
     const terminals: WebSocket[] = [];
+    let intentionalTerminalCleanup = false;
     const requests: Json[] = [];
     const observedRunning = new Set<string>();
     const stop = () => {
@@ -435,12 +436,15 @@ async function main() {
         output = false,
         pong = false,
         completed = false,
-        tail = '';
+        intentionalClose = false,
+        lastPongAt = 0;
+      const markerProof = new TerminalMarkerProof(marker);
       let rejectReady!: (error: Error) => void;
       const proof = new Promise<void>((resolve, reject) => {
         rejectReady = reject;
         const timer = setTimeout(() => reject(new Error('Terminal proof timed out.')), 30_000);
         ws.on('message', (raw) => {
+          if (intentionalClose || intentionalTerminalCleanup) return;
           try {
             const frame = JSON.parse(raw.toString());
             if (frame.type === 'ready') {
@@ -460,17 +464,17 @@ async function main() {
             } else if (frame.type === 'output') {
               assert.equal(typeof frame.data, 'string');
               const bytes = Buffer.from(frame.data, 'base64');
-              tail = (tail + bytes.toString('utf8')).slice(-8192);
-              // Require the marker as its own output line, not merely the echoed shell command.
-              if (tail.replaceAll('\r', '').split('\n').includes(marker)) output = true;
+              // ANSI controls can span frames; only an exact decoded complete line proves output.
+              if (markerProof.push(bytes)) output = true;
               ws.send(JSON.stringify({ type: 'ack', bytes: bytes.length }));
-            } else if (frame.type === 'pong') pong = true;
-            else if (frame.type === 'error' || frame.type === 'exit')
+            } else if (frame.type === 'pong') {
+              pong = true;
+              lastPongAt = Date.now();
+            } else if (frame.type === 'error' || frame.type === 'exit')
               throw new Error('Terminal ended before the diagnostic completed.');
             if (ready && output && pong && !completed) {
               completed = true;
               clearTimeout(timer);
-              tail = '';
               resolve();
             }
           } catch {
@@ -480,14 +484,14 @@ async function main() {
           }
         });
         ws.on('error', () => {
-          stop();
+          if (!intentionalClose && !intentionalTerminalCleanup) stop();
           clearTimeout(timer);
           reject(new Error('Broker terminal transport failed.'));
         });
         ws.on('close', () => {
           if (ready) terminalConnections--;
+          if (!intentionalClose && !intentionalTerminalCleanup) stop();
           if (!completed) {
-            stop();
             clearTimeout(timer);
             reject(new Error('Terminal closed before proof.'));
           }
@@ -495,7 +499,18 @@ async function main() {
       });
       // Ensure early failures remain handled while other sockets are being constructed.
       void proof.catch(() => undefined);
-      return { ws, proof, cancel: () => rejectReady(new Error('Terminal cancelled.')) };
+      return {
+        ws,
+        proof,
+        get lastPongAt() {
+          return lastPongAt;
+        },
+        close() {
+          intentionalClose = true;
+          ws.close();
+        },
+        cancel: () => rejectReady(new Error('Terminal cancelled.')),
+      };
     }
     try {
       journal.append('database-bootstrap-intent', { isolated: true, freshOnly: true });
@@ -563,30 +578,33 @@ async function main() {
         LOG_LEVEL: 'silent',
         MAX_CONCURRENT_VMS: '20',
       });
-      instance = await buildApp(config, {
-        clientRoot: '.verify-dist/client',
-        wrapWick(adapter) {
-          original = adapter;
-          guard = createScaleGuard({
-            adapter,
-            journal,
-            header,
-            deadline,
-            watchdogReady,
-            approvedRate: () => approvedRate,
-            onFailure: stop,
-            async owns(key) {
-              const rows = await pool.query(
-                'SELECT v.id,v.request_id FROM broker_vms v JOIN broker_requests r ON r.id=v.request_id WHERE v.create_key=$1 AND v.buyer_id=$2 AND r.description LIKE $3',
-                [key, buyerId, `Broker live scale ${header.runId} item %`],
-              );
-              assert.equal(rows.rowCount, 1, 'Create key is outside this test run.');
-              return { vmId: rows.rows[0].id, requestId: rows.rows[0].request_id };
-            },
-          });
-          return guard.adapter;
+      instance = await buildApp(
+        { ...config, environmentNamePrefix: `broker-scale-${header.runId}` },
+        {
+          clientRoot: '.verify-dist/client',
+          wrapWick(adapter) {
+            original = adapter;
+            guard = createScaleGuard({
+              adapter,
+              journal,
+              header,
+              deadline,
+              watchdogReady,
+              approvedRate: () => approvedRate,
+              onFailure: stop,
+              async owns(key) {
+                const rows = await pool.query(
+                  'SELECT v.id,v.request_id FROM broker_vms v JOIN broker_requests r ON r.id=v.request_id WHERE v.create_key=$1 AND v.buyer_id=$2 AND r.description LIKE $3',
+                  [key, buyerId, `Broker live scale ${header.runId} item %`],
+                );
+                assert.equal(rows.rowCount, 1, 'Create key is outside this test run.');
+                return { vmId: rows.rows[0].id, requestId: rows.rows[0].request_id };
+              },
+            });
+            return guard.adapter;
+          },
         },
-      });
+      );
       await instance.app.listen({ port: Number(appUrl.port), host: '127.0.0.1' });
       for (const role of ['buyer', 'provider', 'admin']) {
         journal.append('sign-in-intent', { role });
@@ -680,7 +698,7 @@ async function main() {
           clearTimeout(timer);
           resolve();
         });
-        canaryTerminal.ws.close();
+        canaryTerminal.close();
       });
       journal.append('canary-running-terminal-confirmed');
       await Promise.all(
@@ -712,6 +730,15 @@ async function main() {
         await runningSample();
         await delay(1000);
       }
+      const finalPingAt = Date.now();
+      for (const proof of proofs) proof.ws.send(JSON.stringify({ type: 'ping' }));
+      await until(
+        async () => (proofs.every((proof) => proof.lastPongAt >= finalPingAt) ? true : undefined),
+        5000,
+      );
+      requireRunning();
+      assert.equal(terminalConnections, 20);
+      assert(proofs.every((proof) => proof.ws.readyState === WebSocket.OPEN));
       terminalHoldMs = Date.now() - holdStarted;
       journal.append('terminal-checkpoint', {
         decodedOutputAndPong: 20,
@@ -795,6 +822,7 @@ async function main() {
       process.exitCode = 1;
     } finally {
       guard?.stop();
+      intentionalTerminalCleanup = true;
       for (const ws of terminals) ws.close();
       journal.append('normal-cleanup-start');
       // Cancel all still-open run requests before closing the app/worker process.
@@ -822,22 +850,7 @@ async function main() {
           const dashboard = await api('provider', '/api/provider/dashboard');
           assert.equal(dashboard.capacity.held, 0);
           holdsReleased = true;
-          const intents = replayIntents(journal.read(), header);
-          const outcomes = journal.read().filter((r) => r.kind === 'create-result');
-          const ids = [
-            ...new Set(
-              outcomes
-                .filter((r) => intents.has(String(r.key)))
-                .map((r) => String(r.environmentId)),
-            ),
-          ];
-          const statuses = await Promise.all(ids.map((id) => original!.get(id)));
-          assert(statuses.every((vm) => vm.status === 'terminated'));
-          upstreamConfirmed = true;
-          journal.append('broker-cleanup-confirmed', {
-            environments: ids.length,
-            providerHolds: 0,
-          });
+          journal.append('broker-holds-confirmed', { providerHolds: 0 });
         } catch {
           failed = true;
           journal.append('broker-cleanup-unresolved');
@@ -845,9 +858,10 @@ async function main() {
       }
       // A separate watchdog remains responsible after process death. This fallback uses exact run-owned IDs only.
       let unresolved: string[] = [];
-      if (!upstreamConfirmed && original) {
+      if (original) {
         try {
           unresolved = await cleanupJournal(journal, original, 120_000);
+          // Every intent, including lost-response and pre-transport crashes, is accounted for.
           upstreamConfirmed = unresolved.length === 0;
         } catch {
           unresolved = ['journal-reconciliation-required'];
