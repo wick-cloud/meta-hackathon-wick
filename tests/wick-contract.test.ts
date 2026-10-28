@@ -52,6 +52,29 @@ describe('public Wick REST contract', () => {
     expect(options.headers).toMatchObject({ Authorization: 'Bearer test-service-key', 'Idempotency-Key': 'persisted-key-123' });
     expect(JSON.parse(String(options.body))).toEqual(create);
   });
+  it('pins organization provider keys and bounds catalog pagination without inventing GPU metadata', async () => {
+    const offer = { provider: 'boat', profile: 'small', region: 'us-east', maxTtlSeconds: 3600, available: true };
+    const responses = [
+      { profiles: [{ id: 'small', name: 'Small', cpu: 2, memoryMiB: 4096 }], offers: [offer] },
+      { data: [{ id: 'private-connection', scope: 'organization', available: true, providerKeyId: 'key_exact_target', offers: [offer] }], nextCursor: 'next' },
+      { data: [{ id: 'unproven-private-target', scope: 'organization', available: true, offers: [offer] }], nextCursor: null },
+    ];
+    const fetcher = vi.fn(async () => new Response(JSON.stringify(responses.shift()), { status: 200 }));
+    vi.stubGlobal('fetch', fetcher);
+    const items = await createWickAdapter(config).catalog();
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ id: 'key_exact_target:small:us-east', provider: 'boat', providerKeyId: 'key_exact_target', durationMinutes: [15, 30, 60], approved: false });
+    expect(items[0]).not.toHaveProperty('gpu');
+    const thirdUrl = (fetcher.mock.calls[2]! as unknown as [URL])[0];
+    expect(thirdUrl.searchParams.get('cursor')).toBe('next');
+  });
+  it('includes an administrator-approved provider key in the narrow ordinary-create body', async () => {
+    const fetcher = vi.fn(async () => new Response(JSON.stringify(mutation), { status: 202 }));
+    vi.stubGlobal('fetch', fetcher);
+    await createWickAdapter(config).create({ ...create, providerKeyId: 'approved-target' }, 'stable-key-123');
+    const options = (fetcher.mock.calls[0]! as unknown as [URL, RequestInit])[1];
+    expect(JSON.parse(String(options.body))).toEqual({ ...create, providerKeyId: 'approved-target' });
+  });
   it('replays the same key without generating a replacement and preserves upstream replay flag', async () => {
     const fetcher = vi.fn(async () => new Response(JSON.stringify({ ...mutation, replayed: true }), { status: 202 }));
     vi.stubGlobal('fetch', fetcher);
