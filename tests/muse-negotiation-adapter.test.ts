@@ -108,6 +108,20 @@ describe('explicit buyer facts without flexibility inference', () => {
     await expect(
       adapter.translate('1 CPU in unsupported-east for $0.05', catalog),
     ).rejects.toMatchObject({ code: 'unsupported' });
+    await expect(adapter.translate('2 CPU in tokyo for 15 minutes', catalog)).rejects.toMatchObject(
+      { code: 'unsupported' },
+    );
+    expect(parseExplicitBuyerDescription('2 CPU in tokyo for 15 minutes')).toMatchObject({
+      region: 'tokyo',
+      durationMinutes: 15,
+    });
+    expect(parseExplicitBuyerDescription('Linux in a terminal')).not.toHaveProperty('region');
+    expect(parseExplicitBuyerDescription('budget $0.05; a previous rental cost $5')).toMatchObject({
+      maxPriceCents: 5,
+    });
+    expect(parseExplicitBuyerDescription('budget $5, never above $0.05')).toMatchObject({
+      maxPriceCents: 5,
+    });
     expect((await adapter.translate('1 CPU in us for $0.05', catalog)).proposal.maxPriceCents).toBe(
       5,
     );
