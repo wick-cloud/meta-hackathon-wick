@@ -82,11 +82,18 @@ async function main() {
   const approval = {
     organizationId: required('WICK_ORGANIZATION_ID'),
     groupId: required('WICK_GROUP_ID'),
-    provider: process.env.SCALE_APPROVED_PROVIDER ?? 'boat',
-    profile: process.env.SCALE_APPROVED_PROFILE ?? 'small',
-    region: process.env.SCALE_APPROVED_REGION ?? 'auto',
-    catalogId: process.env.SCALE_APPROVED_CATALOG_ID ?? 'boat:small:auto',
+    provider: process.env.SCALE_APPROVED_PROVIDER ?? 'e2b',
+    profile: process.env.SCALE_APPROVED_PROFILE ?? 'micro',
+    region: process.env.SCALE_APPROVED_REGION ?? 'us',
+    catalogId: process.env.SCALE_APPROVED_CATALOG_ID ?? 'e2b:micro:us',
   };
+
+  if (command === 'prepare' || command === 'run')
+    assert.notEqual(
+      approval.provider,
+      'boat',
+      'Boat customer allocations are excluded from this integration.',
+    );
 
   if (command === 'prepare') {
     assert(!existsSync(journalPath), 'Use a new journal path for every run.');

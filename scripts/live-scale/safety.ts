@@ -137,6 +137,7 @@ export function validateCreate(body: CreateEnvironmentInput, approval: Approval,
     'ttlSeconds',
     'visibility',
     'maximumPriceMicrosPerSecond',
+    'providerKeyId',
   ]);
   assert(
     Object.keys(body).every((key) => allowed.has(key)),
@@ -146,6 +147,13 @@ export function validateCreate(body: CreateEnvironmentInput, approval: Approval,
     assert.equal(body[field], approval[field], `Scale guard rejected ${field}.`);
   assert.equal(body.ttlSeconds, 900, 'Scale guard permits only the approved 15-minute TTL.');
   assert.equal(body.visibility, 'private');
+  assert(
+    body.providerKeyId === undefined ||
+      (typeof body.providerKeyId === 'string' &&
+        body.providerKeyId.length > 0 &&
+        body.providerKeyId.length <= 200),
+    'Invalid provider key identity.',
+  );
   assert(
     body.name.startsWith(`broker-scale-${runId}-`),
     'Scale environment name must be scoped to the run.',
@@ -217,6 +225,7 @@ function environmentOwned(
     environment.groupId === body.groupId &&
     environment.provider === body.provider &&
     environment.profile === body.profile &&
+    (body.providerKeyId === undefined || environment.providerKeyId === body.providerKeyId) &&
     typeof environment.createdAt === 'string' &&
     Date.parse(environment.createdAt) >= times.earliest &&
     Date.parse(environment.createdAt) <= times.latest &&
@@ -352,6 +361,7 @@ export function createScaleGuard(options: {
           `broker-scale-${header.runId}-${owner.vmId.slice(0, 8)}`,
           'Scale name must match the durable Broker create input.',
         );
+        assert(!body.providerKeyId, 'Scale guard permits only managed offerings.');
         validateCreate(body, header.approval, header.runId);
         assert.equal(
           String((body as unknown as Record<string, unknown>).maximumPriceMicrosPerSecond),

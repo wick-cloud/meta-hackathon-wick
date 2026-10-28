@@ -4,7 +4,7 @@ This runner allocates paid real Wick VMs only after the parent authorizes execut
 
 The runner starts exactly one Broker process itself. Use a **fresh local PostgreSQL database** named, for example, `broker_scale_<unique_suffix>`. The selected database must have no existing users or requests and must differ from the private preview `DATABASE_URL`. A runner advisory lock and a peer-connection check reject competing applications. Never launch another Broker against this database: normal worker startup clears leases.
 
-The parent must supply a reviewed managed configuration. Defaults pin Boat / small / auto and `boat:small:auto`; the runner will fail rather than choose a fallback. The real catalog is read dynamically, explicitly approved through the admin HTTP API, and a demo supplier allocation is created. This account does not represent an independent real provider. The fixed 15-minute quote uses the offering's frozen rate and configured markup. Invoices are unique, quote-matching records labeled **No payment due**; they do not assert settled Wick usage.
+The parent must supply a reviewed managed configuration. Defaults pin E2B / micro / us and `e2b:micro:us`; the runner will fail rather than choose a fallback. Boat customer allocations are excluded; the existing Boat development VM remains only the application host. The real catalog is read dynamically, explicitly approved through the admin HTTP API, and a demo supplier allocation is created. This account does not represent an independent real provider. The fixed 15-minute quote uses the offering's frozen rate and configured markup. Invoices are unique, quote-matching records labeled **No payment due**; they do not assert settled Wick usage.
 
 Prerequisites: Node 24, installed dependencies, local PostgreSQL, and the Linux `flock` executable (util-linux). Do not invoke `db:seed` or `seed:production`. Build output for review is `.verify-dist`, preserving the preview's existing `dist` files.
 
@@ -27,7 +27,16 @@ Supply values privately; never paste credentials into commands, reports, Git, or
 
 ## Review and launch commands
 
-Run all commands from the repository. The parent creates the isolated database and supplies the environment first. The journal directory must already exist with private permissions. `prepare` writes only a private journal header and allocates nothing:
+Run all commands from the repository. The parent creates the isolated database and supplies the private environment first. The reviewed scale configuration is:
+
+```bash
+export SCALE_APPROVED_PROVIDER=e2b
+export SCALE_APPROVED_PROFILE=micro
+export SCALE_APPROVED_REGION=us
+export SCALE_APPROVED_CATALOG_ID=e2b:micro:us
+```
+
+Explicit `SCALE_APPROVED_*` values remain supported for other parent-approved non-Boat configurations. The journal directory must already exist with private permissions. `prepare` writes only a private journal header and allocates nothing:
 
 ```bash
 npx tsx scripts/live-scale.ts prepare
@@ -54,7 +63,7 @@ After a crash or unresolved exit, retain the test database and journal. Stop the
 npx tsx scripts/live-scale.ts cleanup
 ```
 
-Cleanup **never calls create**, including same-key replay. A durable intent or start record cannot prove the original request reached Wick. Create-result IDs are journaled only after name, organization, group, provider, profile, and creation-time ownership checks. Known IDs are checked against that same ownership evidence again before termination or accepting terminated status; an unrelated response never authorizes cleanup. Owned unexpected BYOK environments can still be terminated. Missing receipts are discovered only through the official SDK environment list, scoped to the approved organization/group/provider and unique run prefix, with at most three 50-item pages each for active and archived environments. A candidate must exactly match journaled name, organization, group, provider, profile and provider-key identity; its creation timestamp must fall between five seconds before intent and 120 seconds after the last recorded start (or intent if no start exists). Duplicate matches remain unresolved. No broad deletion is permitted.
+Cleanup **never calls create**, including same-key replay. A durable intent or start record cannot prove the original request reached Wick. Create-result IDs are journaled only after name, organization, group, provider, profile, and creation-time ownership checks. Known IDs are checked against that same ownership evidence again before termination or accepting terminated status; an unrelated response never authorizes cleanup. An explicit provider-key identity in the create input must also match. If no key was specified, owned unexpected BYOK environments can still be terminated. Missing receipts are discovered only through the official SDK environment list, scoped to the approved organization/group/provider and unique run prefix, with at most three 50-item pages each for active and archived environments. A candidate must exactly match journaled name, organization, group, provider, profile and provider-key identity; its creation timestamp must fall between five seconds before intent and 120 seconds after the last recorded start (or intent if no start exists). Duplicate matches remain unresolved. No broad deletion is permitted.
 
 Every intent is accounted for, even if a crash occurred before transport or no native ID was recorded. An absent match stays **UNKNOWN** with the finite 900-second native TTL as a backstop. Only exact-ID confirmed termination clears uncertainty; an empty list of recorded results cannot claim success. Cleanup reports unresolved keys/IDs only in the private journal. The independent cleanup command reports upstream termination separately from **unverified Broker hold release**; it does not start a second application or modify holds in SQL. If the app died, Broker hold release remains a parent-coordinated recovery blocker. **Never restart an unguarded real Broker (including ordinary `npm start`) against this test database**: pending jobs could allocate fresh keys. Any recovery process must stop open auctions and reject every create, including retries, before one isolated process/admin reconciliation checks hold release. Native TTL is never a claimed cleanup confirmation.
 

@@ -18,10 +18,10 @@ const directories: string[] = [];
 const approval = {
   organizationId: 'org_fixture',
   groupId: 'group_fixture',
-  provider: 'boat',
-  profile: 'small',
-  region: 'auto',
-  catalogId: 'boat:small:auto',
+  provider: 'e2b',
+  profile: 'micro',
+  region: 'us',
+  catalogId: 'e2b:micro:us',
 };
 const unscopedInput: CreateEnvironmentInput = {
   ...approval,
@@ -138,6 +138,7 @@ describe('offline live-scale admission safety; all adapters are local fakes', ()
     for (const bad of [
       { ...unscopedInput, ttlSeconds: 1800 },
       { ...unscopedInput, provider: 'other' },
+      { ...unscopedInput, providerKeyId: 'unapproved-byok-key' },
       { ...unscopedInput, organizationId: 'foreign' },
       { ...unscopedInput, command: 'whoami' },
       { ...unscopedInput, maximumPriceMicrosPerSecond: 6 },
@@ -408,7 +409,7 @@ describe('offline exact-resource cleanup journal', () => {
       organizationId: approval.organizationId,
       groupId: approval.groupId,
       search: `broker-scale-${header.runId}-`,
-      provider: 'boat',
+      provider: 'e2b',
       limit: 50,
       newest: true,
       archived: false,
@@ -500,6 +501,38 @@ describe('offline exact-resource cleanup journal', () => {
       ).toEqual([]);
     },
   );
+  it('requires an explicitly journaled provider key but allows owned unexpected BYOK when none was specified', async () => {
+    for (const expectedKey of ['expected-key', undefined]) {
+      const { journal, header, adapter, input } = setup();
+      journal.append('create-intent', {
+        key: 'fixture-provider-key',
+        body: {
+          ...input,
+          ...(expectedKey ? { providerKeyId: expectedKey } : {}),
+          name: `broker-scale-${header.runId}-provider-key`,
+        },
+        vmId: 'vm',
+        requestId: 'request',
+      });
+      journal.append('create-start', { key: 'fixture-provider-key' });
+      journal.append('create-result', {
+        key: 'fixture-provider-key',
+        environmentId: 'fixture_byok',
+      });
+      vi.mocked(adapter.get).mockImplementation(async (id) => ({
+        ...ownedFixture(journal, id),
+        providerKeyId: 'other-key',
+        billingMode: 'byok',
+        id,
+        status: vi.mocked(adapter.terminate).mock.calls.length ? 'terminated' : 'running',
+        expiresAt: null,
+      }));
+      expect(await cleanupJournal(journal, adapter, 30)).toEqual(
+        expectedKey ? ['fixture_byok'] : [],
+      );
+      expect(adapter.terminate).toHaveBeenCalledTimes(expectedKey ? 0 : 1);
+    }
+  });
   it('rejects conflicting bodies and ambiguity instead of broad environment deletion', () => {
     const { journal, header, input } = setup();
     for (const rate of [5, 6])
