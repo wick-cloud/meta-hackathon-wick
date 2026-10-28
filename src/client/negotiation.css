@@ -1,0 +1,47 @@
+.negotiation-choice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 12px 0;
+  font-size: 13px;
+  line-height: 1.6;
+  cursor: pointer;
+}
+
+.negotiation-choice input {
+  flex: 0 0 auto;
+  margin-top: 4px;
+  accent-color: #28745d;
+}
+
+.negotiation-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
+  gap: 20px;
+  margin: 24px 0;
+}
+
+.negotiation-cards .card,
+[aria-label='Final counteroffer review'] {
+  padding: 24px;
+}
+
+.negotiation-cards .card h2 {
+  overflow-wrap: anywhere;
+  font-size: 17px;
+  margin-bottom: 12px;
+}
+
+.negotiation-cards .card p {
+  line-height: 1.7;
+  margin: 12px 0;
+}
+
+[aria-label='Final counteroffer review'] .table-scroll {
+  margin: 20px 0;
+}
+
+[aria-label='Final counteroffer review'] li {
+  margin: 8px 0;
+  line-height: 1.6;
+}

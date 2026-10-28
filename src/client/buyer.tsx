@@ -1,5 +1,7 @@
 import { lazy, Suspense, useEffect, useState, type FormEvent } from 'react';
 import { fixedQuote, managedPricing } from '../shared/pricing';
+import { parseExplicitBuyerDescription } from '../shared/muse-contracts';
+import { seedAlternativeDraft } from './negotiation';
 import {
   ArrowDownToLine,
   ArrowRight,
@@ -66,13 +68,32 @@ const TerminalPanel = lazy(() =>
 );
 
 export function NewEnvironment() {
-  const { catalog, modes } = useSession(),
+  const { catalog, modes, user } = useSession(),
     navigate = useNavigate();
   const [description, setDescription] = useState(loadDraft()?.description || ''),
     [busy, setBusy] = useState(false),
-    [error, setError] = useState('');
+    [error, setError] = useState(''),
+    [budget, setBudget] = useState(loadDraft()?.maxPriceCents ?? 500),
+    [budgetEdited, setBudgetEdited] = useState(false);
   const approved = catalog.filter((item) => item.approved),
     first = approved[0];
+  function changeDescription(value: string) {
+    setDescription(value);
+    const explicit = parseExplicitBuyerDescription(value);
+    if (!budgetEdited && explicit.maxPriceCents !== undefined) setBudget(explicit.maxPriceCents);
+  }
+  function alternatives() {
+    const explicit = parseExplicitBuyerDescription(description);
+    seedAlternativeDraft(user!.id, description.trim(), {
+      cpu: explicit.requirements.cpu ?? first?.cpu ?? 2,
+      memoryGb: explicit.requirements.memoryGb ?? first?.memoryGb ?? 4,
+      ...(explicit.requirements.gpu ? { gpu: explicit.requirements.gpu } : {}),
+      region: explicit.region ?? first?.region ?? '',
+      durationMinutes: explicit.durationMinutes ?? 30,
+      maxPriceCents: budget,
+    });
+    navigate('/alternatives/new');
+  }
   function manual() {
     if (!first) {
       setError(
@@ -85,7 +106,7 @@ export function NewEnvironment() {
       catalogId: first.id,
       region: first.region,
       durationMinutes: first.durationMinutes.includes(30) ? 30 : first.durationMinutes[0]!,
-      maxPriceCents: 500,
+      maxPriceCents: budget,
       requirements: {
         cpu: first.cpu,
         memoryGb: first.memoryGb,
@@ -108,7 +129,7 @@ export function NewEnvironment() {
       saveDraft({
         ...result.proposal,
         description: description.trim(),
-        maxPriceCents: 500,
+        maxPriceCents: budget,
         receipt: result.receipt,
         museMode: result.mode,
       });
@@ -150,7 +171,7 @@ export function NewEnvironment() {
               rows={6}
               placeholder="I need a small Linux environment with 2 vCPUs and 4 GB of memory for 30 minutes…"
               value={description}
-              onChange={(e) => setDescription(e.target.value)}
+              onChange={(e) => changeDescription(e.target.value)}
             />
             <span className="field-hint">
               Include the resources, region, and rental length you need. You’ll review everything
@@ -169,7 +190,7 @@ export function NewEnvironment() {
                   key={text}
                   className="suggestion-chip"
                   onClick={() =>
-                    setDescription(
+                    changeDescription(
                       [
                         `A lightweight Linux environment with 2 vCPUs and 4 GB memory for 30 minutes.`,
                         `A Linux environment with at least 8 GB memory for a 30-minute session.`,
@@ -184,6 +205,20 @@ export function NewEnvironment() {
               ))}
             </div>
           </div>
+          <MoneyInput
+            id="initial-budget"
+            label="Your maximum total (USD)"
+            value={budget}
+            min={1}
+            onChange={(value) => {
+              setBudget(value);
+              setBudgetEdited(true);
+            }}
+          />
+          <p className="field-hint">
+            Explicit budgets in your description fill this field. Your edits take precedence; review
+            the amount before continuing.
+          </p>
           <ErrorBox error={error} />
           <div className="composer-actions">
             <button className="button secondary" onClick={manual} disabled={busy || !first}>
@@ -205,6 +240,10 @@ export function NewEnvironment() {
               )}
             </button>
           </div>
+          <button className="button secondary full-width" onClick={alternatives} disabled={busy}>
+            Review unsupported needs and alternatives
+            <ArrowRight size={16} />
+          </button>
           <div className="composer-note">
             <LockKeyhole size={13} />
             Only your environment requirements go to Muse. Never credentials or terminal contents.
@@ -789,6 +828,12 @@ export function AuctionPage({ id }: { id: string }) {
               <Link href="/new" className="button secondary">
                 Change requirements
               </Link>
+              {request.status === 'no_offers' && (
+                <Link href={`/alternatives/from/${request.id}`} className="button secondary">
+                  Review flexible alternatives
+                  <ArrowRight size={16} />
+                </Link>
+              )}
             </div>
           )}
         </div>

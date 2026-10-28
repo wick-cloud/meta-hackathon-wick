@@ -19,6 +19,7 @@ import {
 import { api, post, type Session } from './api';
 import { ErrorBox, Link, NavigationContext, SessionContext, Spinner } from './components';
 import { NewEnvironment, RequestReview, AuctionPage, MyVMs, VMDetail, Invoices } from './buyer';
+import { AlternativeComposer, AlternativeDetail, AlternativeList } from './negotiation';
 import {
   ProviderCapacity,
   ProviderPolicy,
@@ -30,6 +31,7 @@ import {
 
 const buyerNavigation = [
   { path: '/new', label: 'New environment', icon: Plus },
+  { path: '/alternatives', label: 'Alternatives', icon: Sparkles },
   { path: '/vms', label: 'My VMs', icon: LayoutGrid },
   { path: '/invoices', label: 'Invoices', icon: CircleDollarSign },
 ];
@@ -289,6 +291,12 @@ export default function App() {
   let content;
   if (user.role === 'buyer') {
     if (path === '/requests/review') content = <RequestReview />;
+    else if (path === '/alternatives/new') content = <AlternativeComposer key={path} />;
+    else if (path.startsWith('/alternatives/from/'))
+      content = <AlternativeComposer key={path} sourceRequestId={path.split('/')[3]!} />;
+    else if (path === '/alternatives') content = <AlternativeList />;
+    else if (path.startsWith('/alternatives/'))
+      content = <AlternativeDetail key={path} id={path.split('/')[2]!} />;
     else if (path.startsWith('/requests/')) content = <AuctionPage id={path.split('/')[2]!} />;
     else if (path.startsWith('/vms/')) content = <VMDetail id={path.split('/')[2]!} />;
     else if (path === '/vms') content = <MyVMs />;
@@ -416,7 +424,7 @@ export default function App() {
               <div className="topbar-account">
                 <span className="environment-badge">
                   <span className="demo-dot" />
-                  Simulated supply
+                  {session.modes.wick === 'real' ? 'Wick-backed demo supply' : 'Simulated supply'}
                 </span>
                 <div className="account-avatar">
                   {user.name
