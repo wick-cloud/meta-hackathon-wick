@@ -57,6 +57,15 @@ test('reviewed provider limits and explicit buyer counteroffer acceptance create
   const providerContext = await browser.newContext({ baseURL: process.env.E2E_BASE_URL });
   const providerPage = await providerContext.newPage();
   await signIn(providerPage, providerEmail!, providerPassword!);
+  // The preceding browser rental terminates asynchronously. Start this fixture-only
+  // scenario after its provider holds are released, rather than snapshotting a transient hold.
+  await expect
+    .poll(
+      async () =>
+        (await (await providerPage.request.get('/api/provider/dashboard')).json()).capacity.held,
+      { timeout: 30000, intervals: [250, 500, 1000] },
+    )
+    .toBe(0);
   const original = await (await providerPage.request.get('/api/provider/dashboard')).json();
   const baselineVms = (await (await page.request.get('/api/vms')).json()).items.length;
   let vmId: string | undefined;
@@ -189,27 +198,33 @@ test('reviewed provider limits and explicit buyer counteroffer acceptance create
     expect(resolved.intent.desired).toEqual(intent.desired);
     expect((await (await page.request.get('/api/vms')).json()).items.length).toBe(baselineVms + 1);
   } finally {
-    if (vmId) {
-      await page.request.post(`/api/vms/${vmId}/terminate`);
-      await expect
-        .poll(async () => (await (await page.request.get(`/api/vms/${vmId}`)).json()).status, {
-          timeout: 30000,
-        })
-        .toBe('terminated');
-      await expect
-        .poll(
-          async () =>
-            (await (await providerPage.request.get('/api/provider/dashboard')).json()).capacity
-              .held,
-        )
-        .toBe(original.capacity.held);
+    try {
+      if (vmId) {
+        await page.request.post(`/api/vms/${vmId}/terminate`);
+        await expect
+          .poll(async () => (await (await page.request.get(`/api/vms/${vmId}`)).json()).status, {
+            timeout: 30000,
+          })
+          .toBe('terminated');
+        await expect
+          .poll(
+            async () =>
+              (await (await providerPage.request.get('/api/provider/dashboard')).json()).capacity
+                .held,
+          )
+          .toBe(original.capacity.held);
+      }
+    } finally {
+      try {
+        const current = await (await providerPage.request.get('/api/provider/dashboard')).json();
+        const restored = await providerPage.request.put('/api/provider/policy', {
+          data: { ...original.policy, expectedRevision: current.policyRevision },
+        });
+        expect(restored.ok()).toBe(true);
+      } finally {
+        await providerContext.close();
+      }
     }
-    const current = await (await providerPage.request.get('/api/provider/dashboard')).json();
-    const restored = await providerPage.request.put('/api/provider/policy', {
-      data: { ...original.policy, expectedRevision: current.policyRevision },
-    });
-    expect(restored.ok()).toBe(true);
-    await providerContext.close();
   }
 });
 
