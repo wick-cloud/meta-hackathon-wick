@@ -1,6 +1,6 @@
 import type { Pool } from 'pg';
 import type { CatalogItem } from '../../shared/types.js';
-import { fixedQuote, managedPricing } from '../../shared/pricing.js';
+import { fixedQuote, managedPricing, requireFreshManagedRate } from '../../shared/pricing.js';
 import { transaction } from './db.js';
 
 export interface RealSetupOptions {
@@ -32,6 +32,7 @@ export async function configureRealMarketplace(
   const selected = options.catalogIds.map((id) => {
     const item = catalog.find((entry) => entry.id === id);
     if (!item) throw new Error('A chosen real catalog configuration is no longer available.');
+    requireFreshManagedRate(item);
     const pricing = managedPricing(item, options.markupBps);
     return { item, pricing, price: fixedQuote(pricing, 30).totalPriceCents };
   });

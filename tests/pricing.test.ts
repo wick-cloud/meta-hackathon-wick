@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import type { CatalogItem } from '../src/shared/types.js';
-import { fixedQuote, managedPricing, requireCurrentRate } from '../src/shared/pricing.js';
+import {
+  acceptedBidQuote,
+  fixedQuote,
+  managedPricing,
+  requireCurrentRate,
+  requireFreshManagedRate,
+  MAX_RATE_AGE_MS,
+  MAX_RATE_FUTURE_SKEW_MS,
+} from '../src/shared/pricing.js';
 import { offeringView, requestView, vmView } from '../src/server/marketplace/data.js';
 
 const item: CatalogItem = {
@@ -15,9 +23,10 @@ const item: CatalogItem = {
   approved: true,
   durationMinutes: [15, 30, 60],
   pricingMode: 'managed',
+  managedRouteVerification: 'organization-catalog-byok-disabled',
   rateMicrosPerSecond: 5,
   rateSource: 'wick-customer-catalog',
-  rateRetrievedAt: '2026-10-28T00:00:00.000Z',
+  rateRetrievedAt: new Date().toISOString(),
 };
 
 describe('managed fixed quotes (offline)', () => {
@@ -67,9 +76,47 @@ describe('managed fixed quotes (offline)', () => {
       /changed/,
     );
     expect(() =>
-      requireCurrentRate(pricing, { ...item, rateRetrievedAt: '2026-10-28T01:00:00Z' }),
+      requireCurrentRate(pricing, { ...item, rateRetrievedAt: new Date().toISOString() }),
     ).not.toThrow();
     expect(pricing.rateRetrievedAt).toBe(item.rateRetrievedAt);
+  });
+  it('preserves competitive accepted prices while separately freezing target and compute floor', () => {
+    const pricing = managedPricing(item);
+    expect(acceptedBidQuote(pricing, 30, 1)).toMatchObject({
+      totalPriceCents: 1,
+      targetTotalPriceCents: 2,
+      upstreamCostFloorCents: 1,
+      upstreamEstimatedComputeMicros: '9000',
+      priceBasis: 'provider-bid',
+      markupBps: 2000,
+    });
+    expect(acceptedBidQuote(pricing, 30, 7).totalPriceCents).toBe(7);
+    const costlier = managedPricing({ ...item, rateMicrosPerSecond: 23 });
+    expect(acceptedBidQuote(costlier, 15, 3).upstreamCostFloorCents).toBe(3);
+    expect(() => acceptedBidQuote(costlier, 15, 2)).toThrow(/cost floor/);
+    expect(() => acceptedBidQuote(pricing, 15, 0)).toThrow(/cost floor/);
+    expect(() => acceptedBidQuote(pricing, 15, 1.5)).toThrow();
+  });
+  it('requires recent admission sources, bounds future skew and keeps historical snapshots readable', () => {
+    const now = Date.parse('2026-10-28T12:00:00Z');
+    const source = (delta: number) => ({
+      ...item,
+      rateRetrievedAt: new Date(now + delta).toISOString(),
+    });
+    expect(() => requireFreshManagedRate(source(-MAX_RATE_AGE_MS), now)).not.toThrow();
+    expect(() => requireFreshManagedRate(source(MAX_RATE_FUTURE_SKEW_MS), now)).not.toThrow();
+    expect(() => requireFreshManagedRate(source(-MAX_RATE_AGE_MS - 1), now)).toThrow(/stale/);
+    expect(() => requireFreshManagedRate(source(MAX_RATE_FUTURE_SKEW_MS + 1), now)).toThrow(
+      /future/,
+    );
+    expect(() => requireFreshManagedRate({ ...item, rateRetrievedAt: 'invalid' }, now)).toThrow();
+    const frozen = fixedQuote(managedPricing(source(-100 * MAX_RATE_AGE_MS)), 30);
+    expect(vmView({ quote_snapshot: { totalPriceCents: 2, pricing: frozen } }).pricing).toEqual(
+      frozen,
+    );
+    expect(() => managedPricing({ ...item, managedRouteVerification: undefined })).toThrow(
+      /verified/,
+    );
   });
   it('preserves old fixture views and frozen quote amounts without adding fabricated prices', () => {
     expect(offeringView({ price_cents: 120 }).priceCents).toBe(120);

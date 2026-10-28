@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import type { Pool } from 'pg';
-import { fixedQuote, managedPricing } from '../../shared/pricing.js';
+import { fixedQuote, managedPricing, requireFreshManagedRate } from '../../shared/pricing.js';
 import type { Actor, CatalogItem, SupplierPolicy, Mode } from '../../shared/types.js';
 import { HttpError, type AppContext } from '../context.js';
 import { transaction, enqueue, activity, QUEUES } from './db.js';
@@ -327,6 +327,7 @@ export async function registerMarketplace(app: FastifyInstance, ctx: AppContext)
       let pricing;
       if (ctx.wick.mode === 'real') {
         try {
+          requireFreshManagedRate(c.item);
           pricing = managedPricing(c.item, ctx.config.targetMarkupBps);
         } catch (error) {
           throw new HttpError(400, (error as Error).message);
@@ -441,6 +442,7 @@ export async function registerMarketplace(app: FastifyInstance, ctx: AppContext)
       ).rows[0];
       if (!row) throw new HttpError(404, 'Configuration not found.');
       try {
+        requireFreshManagedRate(row.item);
         managedPricing(row.item, ctx.config.targetMarkupBps);
       } catch (error) {
         throw new HttpError(400, (error as Error).message);

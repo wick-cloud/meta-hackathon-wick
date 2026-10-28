@@ -1,5 +1,11 @@
 import { randomUUID } from 'node:crypto';
-import { fixedQuote, managedPricing, requireCurrentRate } from '../../shared/pricing.js';
+import {
+  acceptedBidQuote,
+  fixedQuote,
+  managedPricing,
+  requireCurrentRate,
+  requireFreshManagedRate,
+} from '../../shared/pricing.js';
 import type { Actor, CatalogItem } from '../../shared/types.js';
 import { HttpError, type AppContext } from '../context.js';
 import { transaction, enqueue, activity, QUEUES } from './db.js';
@@ -7,6 +13,7 @@ import {
   bidView,
   getProvider,
   integer,
+  positiveNumber,
   offeringView,
   requestView,
   shortText,
@@ -29,7 +36,7 @@ export async function createRequest(
     throw new HttpError(400, 'Choose exactly 15, 30 or 60 minutes.');
   const maxPriceCents = integer(body.maxPriceCents, 'Maximum total price');
   const cpu = integer(body.requirements?.cpu, 'CPU requirement', 1, 1024);
-  const memoryGb = integer(body.requirements?.memoryGb, 'Memory requirement', 1, 16384);
+  const memoryGb = positiveNumber(body.requirements?.memoryGb, 'Memory requirement (GiB)', 16384);
   const gpu = body.requirements?.gpu
     ? shortText(body.requirements.gpu, 'GPU requirement', 120)
     : undefined;
@@ -47,6 +54,7 @@ export async function createRequest(
     let pricing;
     if (ctx.wick.mode === 'real') {
       try {
+        requireFreshManagedRate(catalog);
         pricing = managedPricing(catalog, ctx.config.targetMarkupBps);
       } catch (error) {
         throw new HttpError(400, (error as Error).message);
@@ -156,15 +164,10 @@ export async function submitBid(
       try {
         requireCurrentRate(offering.pricing, currentCatalog.item);
         requireCurrentRate(offering.pricing, request.catalog_snapshot);
-        pricing = fixedQuote(offering.pricing, request.duration_minutes);
+        pricing = acceptedBidQuote(offering.pricing, request.duration_minutes, price);
       } catch (error) {
         throw new HttpError(409, (error as Error).message);
       }
-      if (price !== pricing.totalPriceCents)
-        throw new HttpError(
-          400,
-          `The frozen managed-rate quote for this duration is ${pricing.totalPriceCents} USD cents.`,
-        );
     }
     const existing = (
       await db.query('SELECT id FROM broker_bids WHERE request_id=$1 AND provider_id=$2', [
@@ -381,7 +384,8 @@ export async function proposeBid(ctx: AppContext, actor: Actor, requestId: strin
       [ctx.wick.mode],
     )
   ).rows.map((r) => ({ ...r.item, approved: r.approved }));
-  if (ctx.wick.mode === 'real' && ctx.muse.mode === 'fixture') {
+  let realPricing;
+  if (ctx.wick.mode === 'real') {
     const offering = (
       await ctx.pool.query(
         'SELECT * FROM broker_offerings WHERE provider_id=$1 AND catalog_id=$2 AND active=true ORDER BY price_cents,id LIMIT 1',
@@ -389,43 +393,35 @@ export async function proposeBid(ctx: AppContext, actor: Actor, requestId: strin
       )
     ).rows[0];
     const item = catalog.find((c) => c.id === request.catalog_id);
-    let pricing;
     try {
       if (!offering?.pricing || !item)
         throw new Error('Publish a current managed-rate offering first.');
       requireCurrentRate(offering.pricing, item);
       requireCurrentRate(offering.pricing, request.catalog_snapshot);
-      pricing = fixedQuote(offering.pricing, request.duration_minutes);
+      realPricing = fixedQuote(offering.pricing, request.duration_minutes);
     } catch (error) {
       throw new HttpError(409, (error as Error).message);
     }
-    const eligible =
-      held < provider.total_capacity &&
-      pricing.totalPriceCents <= request.max_price_cents &&
-      pricing.totalPriceCents >= provider.policy.minimumPriceCents &&
-      (provider.policy.maxPriceCents === undefined ||
-        pricing.totalPriceCents <= provider.policy.maxPriceCents) &&
-      (!provider.policy.allowedCatalogIds ||
-        provider.policy.allowedCatalogIds.includes(request.catalog_id));
-    return {
-      decision: eligible ? ('bid' as const) : ('decline' as const),
-      ...(eligible
-        ? { totalPriceCents: pricing.totalPriceCents, catalogId: request.catalog_id }
-        : {}),
-      receipt: {
-        observed: ['Published Wick managed rate and finite rental duration.'],
-        decision: eligible
-          ? 'Deterministic fixture proposed the managed-rate fixed quote.'
-          : 'Capacity, budget or supplier policy excludes this quote.',
-        constraints: [
-          'Muse fixture; no model call.',
-          'Demo supplier allocation backed by Wick; no payment due.',
-        ],
-      },
-      mode: 'fixture' as const,
-      modelCalled: false,
-    };
   }
+  const minimumPriceCents = Math.max(
+    provider.policy.minimumPriceCents,
+    realPricing?.upstreamCostFloorCents ?? 0,
+  );
+  if (
+    minimumPriceCents > request.max_price_cents ||
+    (provider.policy.maxPriceCents !== undefined &&
+      minimumPriceCents > provider.policy.maxPriceCents)
+  )
+    return {
+      decision: 'decline' as const,
+      mode: ctx.muse.mode,
+      modelCalled: false,
+      receipt: {
+        observed: ['Supplier policy, buyer budget and frozen Wick cost floor.'],
+        decision: 'No price satisfies the cost floor, supplier policy and buyer budget.',
+        constraints: ['No model call or capacity reservation.', 'No payment due.'],
+      },
+    };
   const proposal = await ctx.muse.proposeBid({
     request: {
       description: request.description,
@@ -435,7 +431,7 @@ export async function proposeBid(ctx: AppContext, actor: Actor, requestId: strin
       requirements: request.requirements,
       region: request.region,
     },
-    policy: provider.policy,
+    policy: { ...provider.policy, minimumPriceCents },
     availableCapacity: Math.max(0, provider.total_capacity - held),
     catalog,
   });
@@ -445,7 +441,9 @@ export async function proposeBid(ctx: AppContext, actor: Actor, requestId: strin
       throw new HttpError(422, 'Muse proposed a different configuration.');
     if (
       proposal.totalPriceCents! > request.max_price_cents ||
-      proposal.totalPriceCents! < provider.policy.minimumPriceCents
+      proposal.totalPriceCents! < minimumPriceCents ||
+      (provider.policy.maxPriceCents !== undefined &&
+        proposal.totalPriceCents! > provider.policy.maxPriceCents)
     )
       throw new HttpError(422, 'Muse proposal violates the fixed-price policy or request budget.');
   }

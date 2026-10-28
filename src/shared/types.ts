@@ -27,6 +27,7 @@ export interface CatalogItem {
   rateRetrievedAt?: string;
   rateSource?: 'wick-customer-catalog';
   pricingMode?: 'managed' | 'byok';
+  managedRouteVerification?: 'organization-catalog-byok-disabled';
   resources?: { cpu: number; memoryGb: number; diskGb?: number; gpu?: string };
 }
 export interface ManagedPricing {
@@ -40,6 +41,10 @@ export interface FixedQuote extends ManagedPricing {
   durationSeconds: number;
   upstreamEstimatedComputeMicros: string;
   totalPriceCents: number;
+  /** Optional on historical snapshots. The target is a suggestion, not a mandatory bid. */
+  targetTotalPriceCents?: number;
+  upstreamCostFloorCents?: number;
+  priceBasis?: 'target-markup' | 'provider-bid';
   currency: 'USD';
   rounding: 'ceil-once-to-cent-minimum-one-cent';
 }
