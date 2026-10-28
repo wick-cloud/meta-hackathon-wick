@@ -170,6 +170,68 @@ describe('public Wick REST contract', () => {
     ]);
     expect(() => parseCatalog({ items: [] }, config)).toThrow('profiles and offers');
   });
+  it('excludes an available route with explicit terminal omission while retaining the other three providers', async () => {
+    const offers = managedProviders.map((provider) => ({
+      ...catalogOffer(provider),
+      capabilities:
+        provider === 'provider-blaxel'
+          ? ['command-execution', 'file-transfer']
+          : ['command-execution', 'interactive-terminal'],
+    }));
+    const raw = catalogResponse(offers);
+    const previewed: string[] = [];
+    const fetcher = vi.fn(async (url: URL, options?: RequestInit) => {
+      if (String(url).endsWith('/execution-preview')) {
+        const input = JSON.parse(String(options?.body)).input;
+        previewed.push(input.provider);
+        return new Response(JSON.stringify(routePreview(input)));
+      }
+      return new Response(JSON.stringify(raw));
+    });
+    vi.stubGlobal('fetch', fetcher);
+    const items = await createWickAdapter(config).catalog();
+    expect(items.map((item) => item.provider)).toEqual(['e2b', 'daytona', 'modal']);
+    expect(previewed).toEqual(['e2b', 'daytona', 'modal']);
+    expect(fetcher.mock.calls.every(([url]) => !String(url).endsWith('/environments'))).toBe(true);
+  });
+  it.each([
+    { capabilities: [], accepted: false },
+    { capabilities: ['command-execution'], accepted: false },
+    { capabilities: ['interactive-terminal'], accepted: true },
+    { capabilities: undefined, accepted: true },
+  ])(
+    'honors explicit selected-offer terminal capability while preserving legacy unknown: $accepted / $capabilities',
+    async ({ capabilities, accepted }) => {
+      const offer = catalogOffer('e2b');
+      const fetcher = vi.fn(async (url: URL, options?: RequestInit) => {
+        if (String(url).endsWith('/execution-preview')) {
+          const input = JSON.parse(String(options?.body)).input;
+          const preview = routePreview(input);
+          return new Response(
+            JSON.stringify({
+              ...preview,
+              selectedOffer: {
+                ...preview.selectedOffer,
+                ...(capabilities === undefined ? {} : { capabilities }),
+              },
+            }),
+          );
+        }
+        return new Response(JSON.stringify(catalogResponse([offer])));
+      });
+      vi.stubGlobal('fetch', fetcher);
+      const adapter = createWickAdapter(config);
+      expect(await adapter.catalog()).toHaveLength(accepted ? 1 : 0);
+      if (!accepted) {
+        await expect(adapter.preview({ ...create, region: 'auto' })).rejects.toThrow(
+          'managed billing route',
+        );
+        expect(
+          fetcher.mock.calls.every(([url]) => !String(url).endsWith('/environments/preview')),
+        ).toBe(true);
+      }
+    },
+  );
   it('uses Bearer auth, the persisted idempotency key, and only allowed create fields', async () => {
     const fetcher = vi.fn(async () => new Response(JSON.stringify(mutation), { status: 202 }));
     vi.stubGlobal('fetch', fetcher);

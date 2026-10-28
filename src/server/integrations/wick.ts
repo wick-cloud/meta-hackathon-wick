@@ -147,6 +147,10 @@ export function parseCatalog(
   for (const value of raw.offers) {
     const offer = object(value, 'offer');
     if (offer.available !== true) continue;
+    // Explicit capability omission is a known terminal blocker, even when compute is available.
+    // Older catalog shapes without capabilities remain subject to the existing readiness check.
+    if (Array.isArray(offer.capabilities) && !offer.capabilities.includes('interactive-terminal'))
+      continue;
     // Connection-specific BYOK offers have no approved complete cost semantics.
     if (
       offer.providerKeyId != null ||
@@ -232,6 +236,11 @@ function managedPreviewMatches(value: unknown, input: CreateEnvironmentInput): b
   )
     return false;
   const selected = object(preview.selectedOffer, 'selected managed offer');
+  if (
+    Array.isArray(selected.capabilities) &&
+    !selected.capabilities.includes('interactive-terminal')
+  )
+    return false;
   return (
     selected.provider === input.provider &&
     selected.profile === input.profile &&
