@@ -28,13 +28,13 @@ test('buyer review preserves explicit budget and unsupported region without gran
     .fill(
       'I need 999 vCPUs and 17.5 GiB RAM in region: moon-1 for 45 minutes, maximum total $0.05.',
     );
-  await expect(page.getByLabel('Your maximum total (USD)', { exact: true })).toHaveValue('0.05');
-  await page.getByLabel('Your maximum total (USD)', { exact: true }).fill('0.04');
+  await expect(page.getByLabel('Your maximum total (USD)')).toHaveValue('0.05');
+  await page.getByLabel('Your maximum total (USD)').fill('0.04');
   await page.getByRole('button', { name: 'Review unsupported needs and alternatives' }).click();
   await expect(page).toHaveURL(/\/alternatives\/new$/);
   await expect(page.getByLabel('Requested vCPUs', { exact: true })).toHaveValue('999');
   await expect(page.getByLabel('Requested memory (GiB)')).toHaveValue('17.5');
-  await expect(page.getByLabel('Requested region', { exact: true })).toHaveValue('moon-1');
+  await expect(page.getByLabel('Requested region')).toHaveValue('moon-1');
   await expect(page.getByLabel('Requested duration (minutes)')).toHaveValue('45');
   await expect(page.getByLabel('Original maximum total (USD)')).toHaveValue('0.04');
   await expect(page.getByLabel('Allow only the alternatives I specify below')).not.toBeChecked();
@@ -43,7 +43,7 @@ test('buyer review preserves explicit budget and unsupported region without gran
 test('reviewed provider limits and explicit buyer counteroffer acceptance create exactly one fixture rental', async ({
   browser,
   page,
-}) => {
+}, testInfo) => {
   test.skip(
     !buyerEmail || !buyerPassword || !providerEmail || !providerPassword,
     'Requires isolated fixture buyer and provider credentials.',
@@ -71,6 +71,10 @@ test('reviewed provider limits and explicit buyer counteroffer acceptance create
     await expect(
       providerPage.getByRole('heading', { name: 'Proposed limits · not active' }),
     ).toBeVisible();
+    await providerPage.screenshot({
+      path: testInfo.outputPath('provider-strategy-review.png'),
+      fullPage: true,
+    });
     const unchanged = await (await providerPage.request.get('/api/provider/dashboard')).json();
     expect(unchanged.policy).toEqual(original.policy);
     expect(unchanged.policyRevision).toEqual(original.policyRevision);
@@ -88,8 +92,8 @@ test('reviewed provider limits and explicit buyer counteroffer acceptance create
       (item: { active: boolean; catalogId: string }) =>
         item.active &&
         me.catalog.some(
-          (config: { id: string; approved: boolean }) =>
-            config.id === item.catalogId && config.approved,
+          (config: { id: string; approved: boolean; gpu?: string }) =>
+            config.id === item.catalogId && config.approved && !config.gpu,
         ),
     );
     expect(offering).toBeTruthy();
@@ -143,6 +147,10 @@ test('reviewed provider limits and explicit buyer counteroffer acceptance create
     await page.getByRole('button', { name: 'Review this exact offer' }).first().click();
     const finalReview = page.getByRole('region', { name: 'Final counteroffer review' });
     await expect(finalReview.getByRole('cell', { name: 'moon-1', exact: true })).toBeVisible();
+    await page.screenshot({
+      path: testInfo.outputPath('buyer-counteroffer-review.png'),
+      fullPage: true,
+    });
     await expect(
       page.getByRole('button', { name: 'Accept reviewed offer', exact: true }),
     ).toBeDisabled();
@@ -201,6 +209,112 @@ test('reviewed provider limits and explicit buyer counteroffer acceptance create
       data: { ...original.policy, expectedRevision: current.policyRevision },
     });
     expect(restored.ok()).toBe(true);
+    await providerContext.close();
+  }
+});
+
+test('provider reviews a server-priced unmet-demand suggestion before publishing', async ({
+  browser,
+  page,
+}, testInfo) => {
+  test.skip(
+    !buyerEmail || !buyerPassword || !providerEmail || !providerPassword,
+    'Requires isolated fixture buyer and provider credentials.',
+  );
+  await signIn(page, buyerEmail!, buyerPassword!);
+  const me = await (await page.request.get('/api/me')).json();
+  test.skip(
+    me.modes.wick !== 'fixture' || me.modes.muse !== 'fixture',
+    'Offline fixture only; no real compute or Meta calls.',
+  );
+  const providerContext = await browser.newContext({ baseURL: process.env.E2E_BASE_URL });
+  const providerPage = await providerContext.newPage();
+  await signIn(providerPage, providerEmail!, providerPassword!);
+  const dashboard = await (await providerPage.request.get('/api/provider/dashboard')).json();
+  const supported = me.catalog.find(
+    (item: { id: string; approved: boolean; durationMinutes: number[] }) =>
+      item.approved &&
+      item.durationMinutes.includes(30) &&
+      (!dashboard.policy.allowedCatalogIds || dashboard.policy.allowedCatalogIds.includes(item.id)),
+  );
+  expect(supported).toBeTruthy();
+  const createdIntent = await page.request.post('/api/intents', {
+    data: {
+      operationKey: crypto.randomUUID(),
+      description: `Unmet demand fixture ${Date.now()}`,
+      desired: {
+        cpu: supported.cpu,
+        memoryGb: supported.memoryGb,
+        ...(supported.gpu ? { gpu: supported.gpu } : {}),
+        region: supported.region,
+        durationMinutes: 30,
+        maxPriceCents: 0,
+      },
+    },
+  });
+  expect(createdIntent.ok()).toBe(true);
+  const baselineVms = (await (await page.request.get('/api/vms')).json()).items.length;
+  const baselineOfferings = (
+    await (await providerPage.request.get('/api/provider/offerings')).json()
+  ).items.length;
+  let offeringId: string | undefined;
+  try {
+    await providerPage.goto('/provider/offerings');
+    const proposed = providerPage.waitForResponse(
+      (response) => new URL(response.url()).pathname === '/api/provider/offerings/propose',
+    );
+    await providerPage.getByRole('button', { name: 'Suggest offerings', exact: true }).click();
+    const proposalResponse = await proposed;
+    expect(proposalResponse.ok()).toBe(true);
+    const result = await proposalResponse.json();
+    expect(result.mode).toBe('fixture');
+    expect(result.modelCalled).toBe(false);
+    expect(result.proposals.length).toBeGreaterThan(0);
+    expect(result.proposals[0].durationMinutes).toBe(30);
+    expect(result.proposals[0].priceBasis).toBe('server-priced-candidate');
+    expect(
+      (await (await providerPage.request.get('/api/provider/offerings')).json()).items.length,
+    ).toBe(baselineOfferings);
+    expect((await (await page.request.get('/api/vms')).json()).items.length).toBe(baselineVms);
+    await providerPage
+      .getByRole('button', { name: 'Review suggestion', exact: true })
+      .first()
+      .click();
+    await expect(
+      providerPage.getByRole('heading', { name: 'Review & publish an offering' }),
+    ).toBeVisible();
+    const name = `Reviewed demand ${Date.now()}`;
+    await providerPage.getByLabel('Offering name').fill(name);
+    await expect(providerPage.getByLabel('Fixed rental price (USD)')).toHaveValue(
+      String(result.proposals[0].priceCents / 100),
+    );
+    await providerPage.screenshot({
+      path: testInfo.outputPath('provider-unmet-demand-review.png'),
+      fullPage: true,
+    });
+    const published = providerPage.waitForResponse(
+      (response) =>
+        new URL(response.url()).pathname === '/api/provider/offerings' &&
+        response.request().method() === 'POST',
+    );
+    await providerPage.getByRole('button', { name: 'Publish offering', exact: true }).click();
+    const publishedResponse = await published;
+    expect(publishedResponse.ok()).toBe(true);
+    const offering = await publishedResponse.json();
+    offeringId = offering.id;
+    expect(offering.priceCents).toBe(result.proposals[0].priceCents);
+    expect(offering.catalogId).toBe(result.proposals[0].catalogId);
+    await expect(providerPage.getByRole('heading', { name, exact: true })).toBeVisible();
+    expect((await (await page.request.get('/api/vms')).json()).items.length).toBe(baselineVms);
+  } finally {
+    if (offeringId)
+      expect(
+        (
+          await providerPage.request.patch(`/api/provider/offerings/${offeringId}`, {
+            data: { active: false },
+          })
+        ).ok(),
+      ).toBe(true);
     await providerContext.close();
   }
 });
