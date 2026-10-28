@@ -11,6 +11,7 @@ On 2026-10-28, an unauthenticated, read-only GET of <https://app.wick-cloud.com/
 | `GET /v1/catalog?organizationId=…` | `{profiles,offers}`; profiles identify CPU/memory and offer metadata identifies provider/profile/region, availability, capabilities, and maximum TTL. |
 | Managed catalog selection | Available managed offers retain `rateMicrosPerSecond`, a local retrieval timestamp, provenance, and exact offering resources. BYOK/provider-key offers are unsupported and excluded. |
 | `POST /v1/environments/preview` | Ordinary create body; `{eligible,blockers,requiredReservationMicros,fallbackProviders,…}`. No allocation is performed by preview. |
+| `POST /v1/execution-preview` | Read-only SDK `executionPreview.create({body:{kind:'environment',input}})` verifies exact organization/group and selected E2B provider/profile/region, `wick_managed`, no provider key, no external compute, and no fallback. Catalog BYOK capability alone is not a billing-route decision. |
 | `POST /v1/environments` | Required `Idempotency-Key`; HTTP 202 `{environment,operation,replayed?}`. The normalized adapter result keeps the complete envelope in `raw`. |
 | `GET /v1/environments/{id}` | Direct `CustomerEnvironment`; lifecycle status and returned `expiresAt` are authoritative. Missing expiry remains null; an environment ID differing from the requested ID is rejected. |
 | `GET /v1/environments/{id}/connections` | `{provider,terminal,ssh}`. Only the explicit terminal boolean can satisfy terminal availability. |
@@ -22,6 +23,8 @@ The published create schema accepts integer `ttlSeconds` from 60 through 86400. 
 The only create fields sent are `organizationId`, `groupId`, `name`, `provider`, `profile`, optional `region`, `ttlSeconds`, `maximumPriceMicrosPerSecond`, and `visibility:'private'`. Provider, profile, region, organization, group, and maximum published rate are frozen and pinned in preview/create. A server-side price increase cannot silently increase the maximum accepted rate. The adapter enumerates these fields, so accidental extra `repository`, `agent`, `setup`, task, or secret properties cannot reach Wick. Snapshot fields are excluded from v1.
 
 The authenticated customer catalog can omit version, provider revision, currency, money unit, and mode; none is required or invented. The published rate is interpreted as micro-USD per second under the managed contract. The public resource schema has CPU, memory MiB, and disk MiB; it contains no GPU resource field. The adapter does not claim GPU availability in real catalog entries. The GPU demo offering is explicitly simulated. Real API responses and catalog failures never fall back to fixture values.
+
+Boat customer allocations are excluded by user choice. Current real catalogs expose only verified E2B routes; the reviewed scale default is Micro/us. A permitted read-only SDK execution preview confirmed that route selects managed billing. This evidence does not demonstrate a successful allocation or a 20-VM run. The actual returned environment must independently pass billing and ownership checks before invoicing.
 
 ## Terminal boundary
 
