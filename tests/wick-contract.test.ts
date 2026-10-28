@@ -184,6 +184,8 @@ describe('public Wick REST contract', () => {
             String(url).endsWith('/execution-preview')
               ? {
                   kind: 'environment',
+                  organizationId: config.wickOrganizationId,
+                  groupId: config.wickGroupId,
                   eligible: true,
                   selectedOffer: {
                     provider: 'e2b',
@@ -237,6 +239,8 @@ describe('public Wick REST contract', () => {
             String(url).endsWith('/execution-preview')
               ? {
                   kind: 'environment',
+                  organizationId: config.wickOrganizationId,
+                  groupId: config.wickGroupId,
                   eligible: true,
                   selectedOffer: {
                     provider: create.provider,

@@ -103,8 +103,8 @@ describe('read-only Wick discovery and managed route verification', () => {
     ).rejects.toThrow(/E2B/);
     expect(fetcher).not.toHaveBeenCalled();
   });
-  it.each(['wick_managed', 'byok', 'unknown'])(
-    'verifies E2B selected %s billing through the official read-only execution preview',
+  it.each(['wick_managed', 'byok', 'unknown', 'foreign-organization', 'foreign-group'])(
+    'verifies E2B selected %s route through the official read-only execution preview',
     async (billingMode) => {
       const offer = {
         provider: 'e2b',
@@ -123,13 +123,20 @@ describe('read-only Wick discovery and managed route verification', () => {
               String(url).endsWith('/execution-preview')
                 ? {
                     kind: 'environment',
+                    organizationId:
+                      billingMode === 'foreign-organization'
+                        ? 'foreign'
+                        : config.wickOrganizationId,
+                    groupId: billingMode === 'foreign-group' ? 'foreign' : config.wickGroupId,
                     eligible: true,
                     selectedOffer: {
                       provider: 'e2b',
                       profile: 'micro',
                       region: 'us',
-                      billingMode,
-                      externalCompute: billingMode !== 'wick_managed',
+                      billingMode: billingMode.startsWith('foreign-')
+                        ? 'wick_managed'
+                        : billingMode,
+                      externalCompute: billingMode === 'byok',
                       ...(billingMode === 'byok' ? { providerKeyId: 'organization-key' } : {}),
                     },
                     fallbackOffers: [],

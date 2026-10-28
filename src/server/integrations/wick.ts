@@ -207,6 +207,8 @@ function managedPreviewMatches(value: unknown, input: CreateEnvironmentInput): b
   const preview = object(value, 'execution preview');
   if (
     preview.kind !== 'environment' ||
+    preview.organizationId !== input.organizationId ||
+    preview.groupId !== input.groupId ||
     preview.eligible !== true ||
     !preview.selectedOffer ||
     !Array.isArray(preview.fallbackOffers) ||
