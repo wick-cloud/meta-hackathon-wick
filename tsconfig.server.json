@@ -9,14 +9,6 @@
     "declaration": false,
     "sourceMap": true
   },
-  "include": [
-    "src/server/**/*.ts",
-    "src/shared/**/*.ts",
-    "scripts/**/*.ts"
-  ],
-  "exclude": [
-    "node_modules",
-    "tests",
-    "src/client"
-  ]
+  "include": ["src/server/**/*.ts", "src/shared/**/*.ts", "scripts/**/*.ts"],
+  "exclude": ["node_modules", "tests", "src/client"]
 }
