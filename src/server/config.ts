@@ -1,0 +1,28 @@
+import 'dotenv/config';
+import { z } from 'zod';
+const envSchema=z.object({
+ NODE_ENV:z.enum(['development','test','production']).default('development'),
+ PORT:z.coerce.number().int().min(1).max(65535).default(3000),
+ HOST:z.string().default('0.0.0.0'),
+ APP_URL:z.string().url().default('http://localhost:3000'),
+ DATABASE_URL:z.string().min(1),
+ BETTER_AUTH_SECRET:z.string().min(32),
+ WICK_MODE:z.enum(['fixture','real']),
+ MUSE_MODE:z.enum(['fixture','real']),
+ WICK_API_BASE:z.string().url().default('https://app.wick-cloud.com/api'),
+ WICK_API_KEY:z.string().optional(),
+ WICK_ORGANIZATION_ID:z.string().default('demo-organization'),
+ WICK_GROUP_ID:z.string().default('demo-group'),
+ META_API_BASE:z.string().url().default('https://api.meta.ai/v1'),
+ META_API_KEY:z.string().optional(),
+ MAX_CONCURRENT_VMS:z.coerce.number().int().min(1).max(20).default(2),
+ LOG_LEVEL:z.enum(['fatal','error','warn','info','debug','trace','silent']).default('info')
+});
+export function loadConfig(env:NodeJS.ProcessEnv=process.env){
+ const e=envSchema.parse(env);
+ if(e.WICK_MODE==='real'&&(!e.WICK_API_KEY||e.WICK_ORGANIZATION_ID==='demo-organization'||e.WICK_GROUP_ID==='demo-group')) throw new Error('Real Wick mode requires API key, organization and group IDs.');
+ if(e.MUSE_MODE==='real'&&!e.META_API_KEY) throw new Error('Real Muse mode requires META_API_KEY.');
+ if(e.NODE_ENV==='production'&&!e.APP_URL.startsWith('https://')) throw new Error('Production APP_URL must use HTTPS.');
+ return {nodeEnv:e.NODE_ENV,port:e.PORT,host:e.HOST,appUrl:e.APP_URL,databaseUrl:e.DATABASE_URL,authSecret:e.BETTER_AUTH_SECRET,wickMode:e.WICK_MODE,museMode:e.MUSE_MODE,wickApiBase:e.WICK_API_BASE,wickApiKey:e.WICK_API_KEY,wickOrganizationId:e.WICK_ORGANIZATION_ID,wickGroupId:e.WICK_GROUP_ID,metaApiBase:e.META_API_BASE,metaApiKey:e.META_API_KEY,maxConcurrentVms:e.MAX_CONCURRENT_VMS,logLevel:e.LOG_LEVEL};
+}
+export type Config=ReturnType<typeof loadConfig>;

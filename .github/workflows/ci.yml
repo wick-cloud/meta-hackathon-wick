@@ -1,0 +1,53 @@
+name: Offline broker checks
+on: [push, pull_request]
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: wick
+          POSTGRES_PASSWORD: wick_ci_only
+          POSTGRES_DB: wick_broker
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U wick -d wick_broker"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgresql://wick:wick_ci_only@localhost:5432/wick_broker
+      TEST_DATABASE_URL: postgresql://wick:wick_ci_only@localhost:5432/wick_broker_test
+      BETTER_AUTH_SECRET: ci-only-auth-secret-not-for-any-real-environment
+      WICK_MODE: fixture
+      MUSE_MODE: fixture
+      APP_URL: http://localhost:3000
+      SEED_BUYER_PASSWORD: ci-buyer-only-password
+      SEED_SUPPLIER_A_PASSWORD: ci-supplier-a-only-password
+      SEED_SUPPLIER_B_PASSWORD: ci-supplier-b-only-password
+      SEED_SUPPLIER_C_PASSWORD: ci-supplier-c-only-password
+      SEED_ADMIN_PASSWORD: ci-admin-only-password
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: PGPASSWORD=wick_ci_only createdb -h localhost -U wick wick_broker_test
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - run: npm run db:seed
+      - run: npx playwright install --with-deps chromium
+      - run: |
+          npm start > /tmp/wick-broker.log 2>&1 &
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://localhost:3000/ready; then break; fi
+            sleep 1
+          done
+          npm run test:browser
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: browser-test-results
+          path: test-results/
