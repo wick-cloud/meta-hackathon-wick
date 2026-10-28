@@ -10,7 +10,15 @@ const safeError=(error:unknown)=>error instanceof Error?error.message.slice(0,30
 async function claim(ctx:AppContext,vmId:string,kind:'provision'|'cleanup'):Promise<Row|undefined>{
   const counter=kind==='provision'?'poll_attempts':'cleanup_attempts';
   const eligible=kind==='provision'?"status='provisioning'":"cleanup_confirmed_at IS NULL";
-  const row=(await ctx.pool.query(`UPDATE broker_vms SET lease_until=now()+interval '90 seconds',${counter}=${counter}+1 WHERE id=$1 AND ${eligible} AND COALESCE(catalog_snapshot->>'sourceMode','fixture')=$2 AND ${counter}<${kind==='provision'?MAX_PROVISION_POLLS:MAX_CLEANUP_POLLS} AND (lease_until IS NULL OR lease_until<now()) RETURNING *`,[vmId,ctx.wick.mode])).rows[0];
+  const max=kind==='provision'?MAX_PROVISION_POLLS:MAX_CLEANUP_POLLS;
+  const row=(await ctx.pool.query(`UPDATE broker_vms SET lease_until=now()+interval '90 seconds',${counter}=${counter}+1 WHERE id=$1 AND ${eligible} AND COALESCE(catalog_snapshot->>'sourceMode','fixture')=$2 AND ${counter}<${max} AND (lease_until IS NULL OR lease_until<now()) RETURNING *`,[vmId,ctx.wick.mode])).rows[0];
+  if(!row){
+    // A durable retry may arrive while a previous attempt's lease remains after
+    // a crash or database error. Preserve future work rather than consuming it.
+    const pending=(await ctx.pool.query(`SELECT ${counter} AS attempts,GREATEST(0,EXTRACT(EPOCH FROM(lease_until-clock_timestamp()))) AS delay FROM broker_vms WHERE id=$1 AND ${eligible} AND COALESCE(catalog_snapshot->>'sourceMode','fixture')=$2`,[vmId,ctx.wick.mode])).rows[0];
+    if(pending&&Number(pending.delay)>0&&pending.attempts<max)await transaction(ctx.pool,db=>enqueue(ctx,db,kind==='provision'?QUEUES.provision:QUEUES.cleanup,{vmId},Math.ceil(Number(pending.delay))+1));
+    else if(pending&&kind==='provision'&&pending.attempts>=max)await requestCleanup(ctx,vmId,'Provisioning confirmation exhausted its retry budget; cleanup requires confirmation.');
+  }
   return row;
 }
 
@@ -129,12 +137,13 @@ export async function cleanupVm(ctx:AppContext,vmId:string){
       // persisted key/input before trying termination; never issue a fresh key.
       const result=await ctx.wick.create(vm.create_input,vm.create_key);
       environment=result.environment;
-      await persistObservation(ctx,vmId,environment);
     }else environment=await ctx.wick.get(vm.environment_id);
+    await persistObservation(ctx,vmId,environment);
     if(environment.status==='terminated'){await confirmCleanup(ctx,vmId);return;}
     await ctx.wick.terminate(environment.id);
     // Termination acceptance is not cleanup confirmation.
     const observed=await ctx.wick.get(environment.id);
+    await persistObservation(ctx,vmId,observed);
     if(observed.status==='terminated'){await confirmCleanup(ctx,vmId);return;}
     await retryCleanup(ctx,vmId,vm.cleanup_attempts,'Waiting for Wick to confirm environment cleanup.');
   }catch(error){await retryCleanup(ctx,vmId,vm.cleanup_attempts,`Cleanup is not confirmed: ${safeError(error)}`);}
