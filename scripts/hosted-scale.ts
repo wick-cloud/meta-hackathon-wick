@@ -717,8 +717,10 @@ async function run(h: Header) {
         'AUCTION_OR_CREATE_FAILED',
       );
       await sample();
-      if (!details.every((d) => d.vm?.status === 'running')) return undefined;
-      await bounded(details, async (d, index) => {
+      const newlyReady = details
+        .map((d, index) => ({ detail: d, requestIndex: index }))
+        .filter(({ detail: d }) => d.vm?.status === 'running' && !observations.has(d.vm.id));
+      await bounded(newlyReady, async ({ detail: d, requestIndex: index }) => {
         const p = providerFor(d);
         if (expected) assert.equal(p.provider, expected[index].provider, 'CANARY_ROUTE_CHANGED');
         const vm = d.vm;
@@ -748,19 +750,52 @@ async function run(h: Header) {
         });
         if (!shells.some((s) => s.vmId === vm.id)) shell(vm);
       });
-      await until(
-        async () =>
-          shells
-            .filter((s) => details.some((d) => d.vm.id === s.vmId))
-            .every(
-              (s) =>
-                s.ready && s.t0.matched && s.lastPong > 0 && s.ws.readyState === WebSocket.OPEN,
-            )
-            ? true
-            : undefined,
-        35_000,
+      const newShells = shells.filter((shell) =>
+        newlyReady.some(({ detail: d }) => d.vm.id === shell.vmId),
       );
-      await fullProof(shells.filter((shell) => details.some((d) => d.vm.id === shell.vmId)));
+      if (newShells.length) {
+        await until(
+          async () =>
+            newShells.every(
+              (shell) =>
+                shell.ready &&
+                shell.t0.matched &&
+                shell.lastPong > 0 &&
+                shell.ws.readyState === WebSocket.OPEN,
+            )
+              ? true
+              : undefined,
+          35_000,
+        );
+        await fullProof(newShells);
+        for (const shell of newShells) {
+          const d = observations.get(shell.vmId)!;
+          journal.append('terminal-proof-confirmed', {
+            vmId: shell.vmId,
+            provider: providerFor(d).provider,
+            t0: true,
+            t1: true,
+            pty: true,
+            shellStateAndCwd: true,
+            resize: shell.resize.matched ? 'confirmed' : 'unavailable',
+          });
+        }
+      }
+      if (
+        !details.every(
+          (d) =>
+            d.vm?.status === 'running' &&
+            observations.has(d.vm.id) &&
+            shells.some(
+              (shell) =>
+                shell.vmId === d.vm.id &&
+                shell.t0.matched &&
+                shell.t1.matched &&
+                shell.ws.readyState === WebSocket.OPEN,
+            ),
+        )
+      )
+        return undefined;
       return details;
     }, 180_000);
   }
@@ -915,6 +950,7 @@ async function run(h: Header) {
       failure,
       peakRunning,
       provenT0Terminals: shells.filter((s) => s.t0.matched).length,
+      provenT1Terminals: shells.filter((s) => s.t1.matched).length,
     };
   } finally {
     intentional = true;
