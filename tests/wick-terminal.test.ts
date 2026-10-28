@@ -75,6 +75,17 @@ describe('same-origin terminal bridge', () => {
     const { connect } = await harness(); const one = connect(); await opened(one); const two = connect(); await opened(two);
     expect(await rejected(connect())).toBe(429);
   });
+  it('keeps output acknowledgements separate from the keystroke budget', async () => {
+    const { connect } = await harness(); const socket = connect(); await opened(socket);
+    const response = new Promise<void>(resolve => socket.on('message', raw => {
+      const frame = JSON.parse(raw.toString()) as { type: string; data?: string };
+      if (frame.type === 'output' && Buffer.from(frame.data!, 'base64').toString().includes('ack-budget-ok')) resolve();
+    }));
+    for (let i = 0; i < 200; i++) socket.send(JSON.stringify({ type: 'ack', bytes: 10 }));
+    socket.send(JSON.stringify({ type: 'input', data: 'echo ack-budget-ok\r' }));
+    await response;
+    expect(socket.readyState).toBe(WebSocket.OPEN);
+  });
   it('disconnects exactly at rental expiry while leaving lifecycle changes to the marketplace', async () => {
     const { connect, state } = await harness(); state.expiresAt = new Date(Date.now() + 150);
     const socket = connect(); const ended = closed(socket); await opened(socket);

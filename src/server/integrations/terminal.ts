@@ -77,6 +77,7 @@ export async function registerTerminal(app: FastifyInstance, ctx: AppContext): P
     let renewTimer: ReturnType<typeof setTimeout> | undefined;
     let windowStart = Date.now();
     let windowFrames = 0;
+    let windowAcks = 0;
     let line = ''; // Ephemeral fixture line editor only; no shell transcript is retained.
 
     const send = (value: object) => {
@@ -125,27 +126,32 @@ export async function registerTerminal(app: FastifyInstance, ctx: AppContext): P
       else output('Simulation only: this command was not executed. Type help for available demo interactions.\r\n');
     };
     const fixtureInput = (data: string) => {
+      let echo = '';
+      const flush = () => { if (echo) { output(echo); echo = ''; } };
       for (const character of data) {
         if (finished) return;
         if (character === '\r' || character === '\n') {
-          output('\r\n'); fixtureCommand(line); line = ''; if (!finished) output('\x1b[32mwick-demo\x1b[0m $ ');
-        } else if (character === '\x03') { line = ''; output('^C\r\n\x1b[32mwick-demo\x1b[0m $ '); }
-        else if (character === '\x04') { send({ type: 'exit', exitCode: 0 }); close(1000, 'Terminal disconnected'); }
-        else if (character === '\x7f' || character === '\b') { if (line.length) { line = line.slice(0, -1); output('\b \b'); } }
+          echo += '\r\n'; flush(); fixtureCommand(line); line = ''; if (!finished) output('\x1b[32mwick-demo\x1b[0m $ ');
+        } else if (character === '\x03') { line = ''; echo += '^C\r\n\x1b[32mwick-demo\x1b[0m $ '; }
+        else if (character === '\x04') { flush(); send({ type: 'exit', exitCode: 0 }); close(1000, 'Terminal disconnected'); }
+        else if (character === '\x7f' || character === '\b') { if (line.length) { line = line.slice(0, -1); echo += '\b \b'; } }
         else if (character >= ' ' && character !== '\x7f') {
           if (Buffer.byteLength(line) > 8192) { close(1009, 'Input line too long'); return; }
-          line += character; output(character);
+          line += character; echo += character;
         }
       }
+      flush();
     };
 
     // Attach message handlers synchronously so early browser resize/input frames cannot be lost.
     socket.on('message', (raw, binary) => {
       try {
         if (binary || Buffer.byteLength(decoded(raw)) > MAX_CLIENT_FRAME + 1024) throw new Error('Oversized terminal frame');
-        if (Date.now() - windowStart >= 1000) { windowStart = Date.now(); windowFrames = 0; }
-        if (++windowFrames > 150) { close(1008, 'Terminal input rate exceeded'); return; }
         const frame = parseTerminalInput(JSON.parse(decoded(raw)) as unknown);
+        if (Date.now() - windowStart >= 1000) { windowStart = Date.now(); windowFrames = 0; windowAcks = 0; }
+        // Output acknowledgements have a separate allowance so a busy shell does not consume
+        // the customer's keystroke/resize budget. Both directions remain bounded.
+        if ((frame.type === 'ack' ? ++windowAcks > 2000 : ++windowFrames > 150)) { close(1008, 'Terminal input rate exceeded'); return; }
         if (Date.now() >= new Date(rental.expires_at).getTime()) { close(1008, 'Rental expired'); return; }
         if (ctx.wick.mode === 'fixture') {
           if (frame.type === 'input') fixtureInput(frame.data);
