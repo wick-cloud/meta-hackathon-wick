@@ -10,20 +10,21 @@ const safeError=(error:unknown)=>error instanceof Error?error.message.slice(0,30
 async function claim(ctx:AppContext,vmId:string,kind:'provision'|'cleanup'):Promise<Row|undefined>{
   const counter=kind==='provision'?'poll_attempts':'cleanup_attempts';
   const eligible=kind==='provision'?"status='provisioning'":"cleanup_confirmed_at IS NULL";
-  const row=(await ctx.pool.query(`UPDATE broker_vms SET lease_until=now()+interval '90 seconds',${counter}=${counter}+1 WHERE id=$1 AND ${eligible} AND (lease_until IS NULL OR lease_until<now()) RETURNING *`,[vmId])).rows[0];
+  const row=(await ctx.pool.query(`UPDATE broker_vms SET lease_until=now()+interval '90 seconds',${counter}=${counter}+1 WHERE id=$1 AND ${eligible} AND COALESCE(catalog_snapshot->>'sourceMode','fixture')=$2 AND ${counter}<${kind==='provision'?MAX_PROVISION_POLLS:MAX_CLEANUP_POLLS} AND (lease_until IS NULL OR lease_until<now()) RETURNING *`,[vmId,ctx.wick.mode])).rows[0];
   return row;
 }
 
 async function persistObservation(ctx:AppContext,vmId:string,environment:WickEnvironment){
-  // Admission expiry is authoritative. COALESCE deliberately prevents retries/reconnects
-  // from extending the original lease, even if a later upstream response differs.
-  await ctx.pool.query(`UPDATE broker_vms SET environment_id=COALESCE(environment_id,$2),expires_at=COALESCE(expires_at,$3),admitted_at=COALESCE(admitted_at,$4,now()) WHERE id=$1`,[vmId,environment.id,environment.expiresAt,environment.createdAt||null]);
+  // Admission expiry is authoritative. Stored expiry prevents retries/reconnects
+  // from extending the original lease; an earlier upstream expiry shortens it.
+  const result=await ctx.pool.query(`UPDATE broker_vms SET environment_id=COALESCE(environment_id,$2),expires_at=CASE WHEN expires_at IS NULL THEN $3::timestamptz WHEN $3::timestamptz IS NULL THEN expires_at ELSE LEAST(expires_at,$3::timestamptz) END,admitted_at=COALESCE(admitted_at,$4::timestamptz) WHERE id=$1 AND COALESCE(catalog_snapshot->>'sourceMode','fixture')=$5 AND (environment_id IS NULL OR environment_id=$2)`,[vmId,environment.id,environment.expiresAt,environment.createdAt||null,ctx.wick.mode]);
+  if(!result.rowCount)throw new Error('Wick returned an unexpected environment identifier; lifecycle confirmation rejected.');
 }
 
 export async function markReady(ctx:AppContext,vmId:string){
   return transaction(ctx.pool,async db=>{
     const vm=(await db.query('SELECT * FROM broker_vms WHERE id=$1 FOR UPDATE',[vmId])).rows[0];
-    if(!vm||vm.status!=='provisioning'||vm.termination_requested_at)return false;
+    if(!vm||vm.status!=='provisioning'||vm.termination_requested_at||(vm.catalog_snapshot.sourceMode??'fixture')!==ctx.wick.mode)return false;
     const eligible=(await db.query('SELECT $1::timestamptz>clock_timestamp() AS eligible',[vm.expires_at])).rows[0].eligible;
     if(!eligible)return false;
     await db.query("UPDATE broker_vms SET status='running',ready_at=COALESCE(ready_at,now()),failure_reason=NULL,lease_until=NULL WHERE id=$1",[vmId]);
@@ -39,7 +40,7 @@ export async function markReady(ctx:AppContext,vmId:string){
 async function requestCleanup(ctx:AppContext,vmId:string,reason:string,expired=false){
   await transaction(ctx.pool,async db=>{
     const vm=(await db.query('SELECT * FROM broker_vms WHERE id=$1 FOR UPDATE',[vmId])).rows[0];
-    if(!vm||vm.cleanup_confirmed_at)return;
+    if(!vm||vm.cleanup_confirmed_at||(vm.catalog_snapshot.sourceMode??'fixture')!==ctx.wick.mode)return;
     await db.query(`UPDATE broker_vms SET status=$2,termination_requested_at=COALESCE(termination_requested_at,now()),failure_reason=COALESCE(failure_reason,$3),lease_until=NULL WHERE id=$1`,[vmId,expired?'expired':'terminating',reason]);
     if(!vm.ready_at)await db.query("UPDATE broker_requests SET status=CASE WHEN status='cancelled' THEN status ELSE 'failed' END,failure_reason=$2 WHERE id=$1",[vm.request_id,reason]);
     await enqueue(ctx,db,QUEUES.cleanup,{vmId});
@@ -85,7 +86,7 @@ export async function provisionVm(ctx:AppContext,vmId:string){
 async function retryProvision(ctx:AppContext,vmId:string,attempt:number,message:string){
   await transaction(ctx.pool,async db=>{
     const vm=(await db.query('SELECT * FROM broker_vms WHERE id=$1 FOR UPDATE',[vmId])).rows[0];
-    if(!vm||vm.cleanup_confirmed_at)return;
+    if(!vm||vm.cleanup_confirmed_at||(vm.catalog_snapshot.sourceMode??'fixture')!==ctx.wick.mode)return;
     await db.query('UPDATE broker_vms SET lease_until=NULL,failure_reason=$2 WHERE id=$1',[vmId,message]);
     if(vm.termination_requested_at||vm.status!=='provisioning'){
       await enqueue(ctx,db,QUEUES.cleanup,{vmId});return;
@@ -101,7 +102,7 @@ async function retryProvision(ctx:AppContext,vmId:string,attempt:number,message:
 export async function confirmCleanup(ctx:AppContext,vmId:string,message='Wick confirmed cleanup.',admissionRejected=false){
   await transaction(ctx.pool,async db=>{
     const vm=(await db.query('SELECT * FROM broker_vms WHERE id=$1 FOR UPDATE',[vmId])).rows[0];
-    if(!vm||vm.cleanup_confirmed_at)return;
+    if(!vm||vm.cleanup_confirmed_at||(vm.catalog_snapshot.sourceMode??'fixture')!==ctx.wick.mode)return;
     const expired=vm.expires_at&&new Date(vm.expires_at).getTime()<=Date.now();
     const status=expired?'expired':vm.ready_at?'terminated':'failed';
     await db.query('UPDATE broker_vms SET status=$2,cleanup_confirmed_at=now(),lease_until=NULL,failure_reason=CASE WHEN ready_at IS NULL THEN $3 ELSE failure_reason END WHERE id=$1',[vmId,status,message]);
@@ -113,12 +114,13 @@ export async function confirmCleanup(ctx:AppContext,vmId:string,message='Wick co
 
 export async function cleanupVm(ctx:AppContext,vmId:string){
   const current=(await ctx.pool.query('SELECT * FROM broker_vms WHERE id=$1',[vmId])).rows[0];
-  if(!current||current.cleanup_confirmed_at)return;
+  if(!current||current.cleanup_confirmed_at||(current.catalog_snapshot.sourceMode??'fixture')!==ctx.wick.mode)return;
   if(current.status==='running'&&!current.termination_requested_at&&current.expires_at&&new Date(current.expires_at).getTime()>Date.now()){
     await transaction(ctx.pool,db=>enqueue(ctx,db,QUEUES.cleanup,{vmId},Math.max(1,Math.ceil((new Date(current.expires_at).getTime()-Date.now())/1000))));return;
   }
   const vm=await claim(ctx,vmId,'cleanup');
   if(!vm)return;
+  if(!vm.environment_id&&vm.poll_attempts===0){await confirmCleanup(ctx,vmId,'Cancelled before Wick admission; no charge.',true);return;}
   try{
     await ctx.pool.query("UPDATE broker_vms SET status=CASE WHEN status='expired' THEN status ELSE 'terminating' END,termination_requested_at=COALESCE(termination_requested_at,now()) WHERE id=$1",[vmId]);
     let environment:WickEnvironment;

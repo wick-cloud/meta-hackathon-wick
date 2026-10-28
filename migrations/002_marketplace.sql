@@ -115,7 +115,6 @@ CREATE TABLE broker_activity (
 );
 CREATE INDEX broker_activity_provider_page ON broker_activity(provider_id,id DESC);
 CREATE TABLE broker_settings (key text PRIMARY KEY,value jsonb NOT NULL);
-INSERT INTO broker_settings(key,value) VALUES ('maxConcurrentVms','2');
 -- The environment specification is immutable after admission to an auction.
 CREATE FUNCTION broker_immutable_request() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN

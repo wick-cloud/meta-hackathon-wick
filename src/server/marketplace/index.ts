@@ -1,19 +1,20 @@
 import type { FastifyInstance } from 'fastify';
 import type { Pool } from 'pg';
-import type { Actor,CatalogItem,SupplierPolicy } from '../../shared/types.js';
+import type { Actor,CatalogItem,SupplierPolicy,Mode } from '../../shared/types.js';
 import { HttpError,type AppContext } from '../context.js';
 import { transaction,enqueue,activity,QUEUES } from './db.js';
 import { createRequest,submitBid,closeAuction,proposeBid } from './auction.js';
 import { provisionVm,cleanupVm,terminateVm } from './lifecycle.js';
-import { requestView,bidView,offeringView,vmView,getProvider,getCatalog,syncCatalog,integer,shortText,uuid,pagination,iso,type Row } from './data.js';
+import { requestView,bidView,offeringView,vmView,getProvider,getCatalog,syncCatalog,integer,shortText,uuid,pagination,encodeCursor,iso,type Row } from './data.js';
 export { createRequest,submitBid,closeAuction,proposeBid,provisionVm,cleanupVm,getCatalog,getProvider,requestView,syncCatalog };
 export { markReady,confirmCleanup } from './lifecycle.js';
 
 export async function registerMarketplace(app:FastifyInstance,ctx:AppContext){
+  const proposalCalls=new Map<string,{count:number;resetsAt:number}>();
   app.post('/api/requests',async request=>createRequest(ctx,await ctx.requireActor(request,['buyer']),request.body as Row));
   app.get('/api/requests',async request=>{
-    const actor=await ctx.requireActor(request,['buyer']);const {limit,cursor}=pagination(request.query);
-    const rows=(await ctx.pool.query('SELECT * FROM broker_requests WHERE buyer_id=$1 AND ($2::timestamptz IS NULL OR created_at<$2) ORDER BY created_at DESC,id DESC LIMIT $3',[actor.id,cursor,limit+1])).rows;
+    const actor=await ctx.requireActor(request,['buyer']);const {limit,cursor,cursorId}=pagination(request.query);
+    const rows=(await ctx.pool.query('SELECT *,created_at::text AS cursor_created_at FROM broker_requests WHERE buyer_id=$1 AND ($2::timestamptz IS NULL OR (created_at,id)<($2,$3::uuid)) ORDER BY created_at DESC,id DESC LIMIT $4',[actor.id,cursor,cursorId,limit+1])).rows;
     return page(rows,limit,requestView);
   });
   app.get<{Params:{id:string}}>('/api/requests/:id',async request=>{
@@ -45,8 +46,8 @@ export async function registerMarketplace(app:FastifyInstance,ctx:AppContext){
     return createRequest(ctx,actor,requestView(row),id);
   });
   app.get('/api/vms',async request=>{
-    const actor=await ctx.requireActor(request,['buyer']);const {limit,cursor}=pagination(request.query);
-    const rows=(await ctx.pool.query('SELECT * FROM broker_vms WHERE buyer_id=$1 AND ($2::timestamptz IS NULL OR created_at<$2) ORDER BY created_at DESC,id DESC LIMIT $3',[actor.id,cursor,limit+1])).rows;
+    const actor=await ctx.requireActor(request,['buyer']);const {limit,cursor,cursorId}=pagination(request.query);
+    const rows=(await ctx.pool.query('SELECT *,created_at::text AS cursor_created_at FROM broker_vms WHERE buyer_id=$1 AND ($2::timestamptz IS NULL OR (created_at,id)<($2,$3::uuid)) ORDER BY created_at DESC,id DESC LIMIT $4',[actor.id,cursor,cursorId,limit+1])).rows;
     return page(rows,limit,vmView);
   });
   app.get<{Params:{id:string}}>('/api/vms/:id',async request=>{
@@ -60,8 +61,8 @@ export async function registerMarketplace(app:FastifyInstance,ctx:AppContext){
     return {accepted:true,message:'Termination requested. The supplier slot stays reserved until Wick confirms cleanup.'};
   });
   app.get('/api/invoices',async request=>{
-    const actor=await ctx.requireActor(request,['buyer']);const {limit,cursor}=pagination(request.query);
-    const rows=(await ctx.pool.query(`SELECT i.*,v.catalog_snapshot,v.quote_snapshot FROM broker_invoices i JOIN broker_vms v ON v.id=i.vm_id WHERE i.buyer_id=$1 AND ($2::timestamptz IS NULL OR i.created_at<$2) ORDER BY i.created_at DESC,i.id DESC LIMIT $3`,[actor.id,cursor,limit+1])).rows;
+    const actor=await ctx.requireActor(request,['buyer']);const {limit,cursor,cursorId}=pagination(request.query);
+    const rows=(await ctx.pool.query(`SELECT i.*,i.created_at::text AS cursor_created_at,v.catalog_snapshot,v.quote_snapshot FROM broker_invoices i JOIN broker_vms v ON v.id=i.vm_id WHERE i.buyer_id=$1 AND ($2::timestamptz IS NULL OR (i.created_at,i.id)<($2,$3::uuid)) ORDER BY i.created_at DESC,i.id DESC LIMIT $4`,[actor.id,cursor,cursorId,limit+1])).rows;
     return page(rows,limit,r=>({id:r.id,vmId:r.vm_id,subtotalCents:r.subtotal_cents,feeCents:r.fee_cents,totalCents:r.total_cents,currency:r.currency,status:r.status,createdAt:iso(r.created_at),catalogName:r.catalog_snapshot.name,label:'No payment due',simulated:true}));
   });
 
@@ -88,24 +89,31 @@ export async function registerMarketplace(app:FastifyInstance,ctx:AppContext){
     return transaction(ctx.pool,async db=>{const p=await getProvider(db,actor);await db.query('UPDATE broker_providers SET policy=$2 WHERE id=$1',[p.id,policy]);await activity(db,p.id,null,'policy_changed','Pricing policy updated. Previously accepted bids and reservations remain binding.');return policy;});
   });
   app.get('/api/provider/requests',async request=>{
-    await ctx.requireActor(request,['provider']);const {limit,cursor}=pagination(request.query);
-    const rows=(await ctx.pool.query("SELECT * FROM broker_requests WHERE status='open' AND closes_at>clock_timestamp() AND ($1::timestamptz IS NULL OR created_at<$1) ORDER BY created_at DESC,id DESC LIMIT $2",[cursor,limit+1])).rows;
-    return page(rows,limit,requestView);
+    await ctx.requireActor(request,['provider']);const {limit,cursor,cursorId}=pagination(request.query);
+    const rows=(await ctx.pool.query("SELECT *,created_at::text AS cursor_created_at FROM broker_requests WHERE status='open' AND closes_at>clock_timestamp() AND ($1::timestamptz IS NULL OR (created_at,id)<($1,$2::uuid)) ORDER BY created_at DESC,id DESC LIMIT $3",[cursor,cursorId,limit+1])).rows;
+    return page(rows,limit,r=>{const {buyerId,...visible}=requestView(r);return visible;});
   });
   app.post<{Params:{id:string}}>('/api/provider/requests/:id/bids',async request=>{
     const actor=await ctx.requireActor(request,['provider']);const body=request.body as Row;
     return submitBid(ctx,actor,uuid(request.params.id),{totalPriceCents:body?.totalPriceCents,offeringId:body?.offeringId?uuid(body.offeringId):undefined});
   });
-  app.post<{Params:{id:string}}>('/api/provider/requests/:id/propose',async request=>proposeBid(ctx,await ctx.requireActor(request,['provider']),uuid(request.params.id)));
+  app.post<{Params:{id:string}}>('/api/provider/requests/:id/propose',async request=>{
+    const actor=await ctx.requireActor(request,['provider']);const now=Date.now();
+    if(proposalCalls.size>10000)for(const [key,budget] of proposalCalls)if(budget.resetsAt<=now)proposalCalls.delete(key);
+    const budget=proposalCalls.get(actor.id);
+    if(budget&&budget.resetsAt>now){if(budget.count>=10)throw new HttpError(429,'Proposal limit reached. Try again in a minute; manual bidding remains available.');budget.count++;}
+    else proposalCalls.set(actor.id,{count:1,resetsAt:now+60000});
+    return proposeBid(ctx,actor,uuid(request.params.id));
+  });
   app.get('/api/provider/offerings',async request=>{
-    const p=await getProvider(ctx.pool,await ctx.requireActor(request,['provider']));const {limit,cursor}=pagination(request.query);
-    return page((await ctx.pool.query('SELECT * FROM broker_offerings WHERE provider_id=$1 AND ($2::timestamptz IS NULL OR created_at<$2) ORDER BY created_at DESC,id DESC LIMIT $3',[p.id,cursor,limit+1])).rows,limit,offeringView);
+    const p=await getProvider(ctx.pool,await ctx.requireActor(request,['provider']));const {limit,cursor,cursorId}=pagination(request.query);
+    return page((await ctx.pool.query('SELECT *,created_at::text AS cursor_created_at FROM broker_offerings WHERE provider_id=$1 AND ($2::timestamptz IS NULL OR (created_at,id)<($2,$3::uuid)) ORDER BY created_at DESC,id DESC LIMIT $4',[p.id,cursor,cursorId,limit+1])).rows,limit,offeringView);
   });
   app.post('/api/provider/offerings',async request=>{
     const actor=await ctx.requireActor(request,['provider']);const b=request.body as Row;
     const catalogId=shortText(b?.catalogId,'Configuration',160),name=shortText(b?.name,'Offering name',160),description=shortText(b?.description,'Offering description',2000),price=integer(b?.priceCents,'Total price');
     return transaction(ctx.pool,async db=>{
-      const p=await getProvider(db,actor);const c=(await db.query('SELECT approved FROM broker_catalog WHERE id=$1 FOR SHARE',[catalogId])).rows[0];
+      const p=await getProvider(db,actor);const c=(await db.query('SELECT approved FROM broker_catalog WHERE id=$1 AND source_mode=$2 FOR SHARE',[catalogId,ctx.wick.mode])).rows[0];
       if(!c?.approved)throw new HttpError(400,'Offerings must use an administrator-approved existing Wick configuration.');
       if(price<p.policy.minimumPriceCents||(p.policy.maxPriceCents!==undefined&&price>p.policy.maxPriceCents))throw new HttpError(400,'Offering price is outside your pricing policy.');
       const duplicate=(await db.query('SELECT id FROM broker_offerings WHERE provider_id=$1 AND catalog_id=$2 AND name=$3',[p.id,catalogId,name])).rows[0];
@@ -121,8 +129,8 @@ export async function registerMarketplace(app:FastifyInstance,ctx:AppContext){
     if(!row)throw new HttpError(404,'Offering not found.');return offeringView(row);
   });
   app.get('/api/provider/activity',async request=>{
-    const p=await getProvider(ctx.pool,await ctx.requireActor(request,['provider']));const {limit,cursor}=pagination(request.query);
-    return page((await ctx.pool.query('SELECT * FROM broker_activity WHERE provider_id=$1 AND ($2::timestamptz IS NULL OR created_at<$2) ORDER BY created_at DESC,id DESC LIMIT $3',[p.id,cursor,limit+1])).rows,limit,activityView);
+    const p=await getProvider(ctx.pool,await ctx.requireActor(request,['provider']));const {limit,cursor,cursorId}=pagination(request.query);
+    return page((await ctx.pool.query('SELECT *,created_at::text AS cursor_created_at FROM broker_activity WHERE provider_id=$1 AND ($2::timestamptz IS NULL OR (created_at,id)<($2,$3::bigint)) ORDER BY created_at DESC,id DESC LIMIT $4',[p.id,cursor,cursorId,limit+1])).rows,limit,activityView);
   });
   app.get('/api/admin/config',async request=>{
     await ctx.requireActor(request,['admin']);
@@ -151,27 +159,13 @@ export async function registerMarketplace(app:FastifyInstance,ctx:AppContext){
     });return {accepted:true};
   });
 }
-function page(rows:Row[],limit:number,map:(r:Row)=>unknown){return {items:rows.slice(0,limit).map(map),...(rows.length>limit?{nextCursor:iso(rows[limit-1].created_at)}:{})};}
-function activityView(r:Row){return {id:String(r.id),kind:r.kind,message:r.message,createdAt:iso(r.created_at)};}
+function page(rows:Row[],limit:number,map:(r:Row)=>unknown){return {items:rows.slice(0,limit).map(map),...(rows.length>limit?{nextCursor:encodeCursor(rows[limit-1])}:{})};}
+function activityView(r:Row){return {id:String(r.id),kind:r.kind,message:r.message,createdAt:iso(r.created_at),...(r.receipt?{receipt:r.receipt,mode:r.mode,modelCalled:r.model_called}:{})};}
 
 export async function startMarketplaceWorkers(ctx:AppContext){
+  const mismatched=(await ctx.pool.query("SELECT id FROM broker_vms WHERE cleanup_confirmed_at IS NULL AND COALESCE(catalog_snapshot->>'sourceMode','fixture')<>$1 LIMIT 1",[ctx.wick.mode])).rows[0];
+  if(mismatched)throw new Error('Cannot switch Wick mode while a prior-mode rental still awaits confirmed cleanup. Start with the original mode and finish cleanup first.');
   for(const name of Object.values(QUEUES))await ctx.boss.createQueue(name,{retryLimit:3,retryDelay:5,expireInSeconds:120});
-  await ctx.boss.work<{requestId:string}>(QUEUES.close,{localConcurrency:2,pollingIntervalSeconds:1},async jobs=>{for(const job of jobs)await closeAuction(ctx,job.data.requestId);});
-  await ctx.boss.work<{requestId:string;providerId:string}>(QUEUES.auto,{localConcurrency:4,pollingIntervalSeconds:1},async jobs=>{
-    for(const job of jobs){
-      const {requestId,providerId}=job.data;
-      const p=(await ctx.pool.query('SELECT * FROM broker_providers WHERE id=$1',[providerId])).rows[0];
-      if(!p?.policy.autoBid)continue;
-      const actor:Actor={id:p.user_id,name:p.name,email:'',role:'provider',providerId:p.id};
-      try{
-        const proposal=await proposeBid(ctx,actor,requestId);
-        if(proposal.decision==='bid')await submitBid(ctx,actor,requestId,{totalPriceCents:proposal.totalPriceCents!});
-        else await transaction(ctx.pool,db=>activity(db,p.id,requestId,'declined',`Muse ${ctx.muse.mode==='fixture'?'fixture':'model'} proposal declined: ${proposal.receipt.decision.slice(0,300)}`));
-      }catch(error){await transaction(ctx.pool,db=>activity(db,p.id,requestId,'bid_unavailable',error instanceof Error?error.message.slice(0,400):'Bid proposal failed. Manual bidding remains available.'));}
-    }
-  });
-  await ctx.boss.work<{vmId:string}>(QUEUES.provision,{localConcurrency:2,pollingIntervalSeconds:1},async jobs=>{for(const job of jobs)await provisionVm(ctx,job.data.vmId);});
-  await ctx.boss.work<{vmId:string}>(QUEUES.cleanup,{localConcurrency:2,pollingIntervalSeconds:1},async jobs=>{for(const job of jobs)await cleanupVm(ctx,job.data.vmId);});
   // A single app instance owns these leases. Restart recovery never changes keys or expiry.
   await ctx.pool.query('UPDATE broker_vms SET lease_until=NULL WHERE lease_until IS NOT NULL');
   await ctx.pool.query("INSERT INTO broker_settings(key,value) VALUES('maxConcurrentVms',$1) ON CONFLICT(key) DO NOTHING",[ctx.config.maxConcurrentVms]);
@@ -184,11 +178,29 @@ export async function startMarketplaceWorkers(ctx:AppContext){
       else if(vm.cleanup_attempts<60)await enqueue(ctx,db,QUEUES.cleanup,{vmId:vm.id},vm.status==='running'&&vm.expires_at?Math.max(0,Math.ceil((new Date(vm.expires_at).getTime()-Date.now())/1000)):0);
     }
   });
+  await ctx.boss.work<{requestId:string}>(QUEUES.close,{localConcurrency:2,pollingIntervalSeconds:1},async jobs=>{for(const job of jobs)await closeAuction(ctx,job.data.requestId);});
+  await ctx.boss.work<{requestId:string;providerId:string}>(QUEUES.auto,{localConcurrency:4,pollingIntervalSeconds:1},async jobs=>{
+    for(const job of jobs){
+      const {requestId,providerId}=job.data;
+      const p=(await ctx.pool.query('SELECT * FROM broker_providers WHERE id=$1',[providerId])).rows[0];
+      if(!p?.policy.autoBid)continue;
+      const actor:Actor={id:p.user_id,name:p.name,email:'',role:'provider',providerId:p.id};
+      try{
+        const proposal=await proposeBid(ctx,actor,requestId);
+        await transaction(ctx.pool,db=>activity(db,p.id,requestId,'proposal',`Proposal ${proposal.decision==='bid'?'offered a fixed-price bid':'declined'}. ${ctx.muse.mode==='fixture'?'Fixture simulation; no model call.':'Real integration selected; see constraints receipt.'}`,{receipt:proposal.receipt,mode:ctx.muse.mode,modelCalled:proposal.modelCalled}));
+        if(proposal.decision==='bid')await submitBid(ctx,actor,requestId,{totalPriceCents:proposal.totalPriceCents!},'auto');
+        else await transaction(ctx.pool,db=>activity(db,p.id,requestId,'declined',`Proposal declined: ${proposal.receipt.decision.slice(0,300)}`));
+      }catch(error){await transaction(ctx.pool,db=>activity(db,p.id,requestId,'bid_unavailable',error instanceof Error?error.message.slice(0,400):'Bid proposal failed. Manual bidding remains available.'));}
+    }
+  });
+  await ctx.boss.work<{vmId:string}>(QUEUES.provision,{localConcurrency:2,pollingIntervalSeconds:1},async jobs=>{for(const job of jobs)await provisionVm(ctx,job.data.vmId);});
+  await ctx.boss.work<{vmId:string}>(QUEUES.cleanup,{localConcurrency:2,pollingIntervalSeconds:1},async jobs=>{for(const job of jobs)await cleanupVm(ctx,job.data.vmId);});
 }
 
-export async function seedMarketplace(pool:Pool,actors:Actor[],catalog:CatalogItem[]){
+export async function seedMarketplace(pool:Pool,actors:Actor[],catalog:CatalogItem[],mode:Mode='fixture'){
   await transaction(pool,async db=>{
-    for(const item of catalog)await db.query('INSERT INTO broker_catalog(id,item,approved) VALUES($1,$2,$3) ON CONFLICT(id) DO UPDATE SET item=excluded.item,updated_at=now()',[item.id,item,item.approved]);
+    await db.query('UPDATE broker_catalog SET approved=false,updated_at=now() WHERE NOT(id=ANY($1::text[])) OR source_mode<>$2',[catalog.map(item=>item.id),mode]);
+    for(const item of catalog)await db.query('INSERT INTO broker_catalog(id,item,approved,source_mode) VALUES($1,$2,$3,$4) ON CONFLICT(id) DO UPDATE SET item=excluded.item,approved=CASE WHEN broker_catalog.source_mode=excluded.source_mode THEN broker_catalog.approved ELSE false END,source_mode=excluded.source_mode,updated_at=now()',[item.id,item,item.approved,mode]);
     const providers=actors.filter(a=>a.role==='provider');
     for(let i=0;i<providers.length;i++){
       const actor=providers[i];const capacities=[3,2,0];const base=[120,150,100][i]??120;

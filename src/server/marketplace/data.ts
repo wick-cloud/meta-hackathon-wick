@@ -1,19 +1,23 @@
 import type { Pool, PoolClient } from 'pg';
 import type { Actor,CatalogItem } from '../../shared/types.js';
 import { HttpError,type AppContext } from '../context.js';
+import {transaction} from './db.js';
 export type Row=Record<string,any>;
 export const iso=(value:unknown):string|null=>value ? new Date(value as string).toISOString():null;
 export const requestView=(r:Row)=>({id:r.id,buyerId:r.buyer_id,description:r.description,catalogId:r.catalog_id,catalogName:r.catalog_snapshot?.name,region:r.region,durationMinutes:r.duration_minutes,maxPriceCents:r.max_price_cents,requirements:r.requirements,status:r.status,closesAt:iso(r.closes_at),createdAt:iso(r.created_at),winningBidId:r.winning_bid_id,failureReason:r.failure_reason});
 export const bidView=(r:Row)=>({id:r.id,providerId:r.provider_id,providerName:r.provider_name,totalPriceCents:r.total_price_cents,status:r.status,createdAt:iso(r.created_at),simulated:true});
 export const offeringView=(r:Row)=>({id:r.id,providerId:r.provider_id,catalogId:r.catalog_id,name:r.name,description:r.description,priceCents:r.price_cents,active:r.active,revision:r.revision,createdAt:iso(r.created_at),simulated:true});
 export const vmView=(r:Row)=>({id:r.id,requestId:r.request_id,buyerId:r.buyer_id,status:r.status,environmentId:r.environment_id,expiresAt:iso(r.expires_at),readyAt:iso(r.ready_at),createdAt:iso(r.created_at),admittedAt:iso(r.admitted_at),catalogName:r.catalog_snapshot?.name,region:r.catalog_snapshot?.region,durationMinutes:r.create_input?.ttlSeconds/60,priceCents:r.quote_snapshot?.totalPriceCents,failureReason:r.failure_reason,cleanupPending:!r.cleanup_confirmed_at&&['terminating','failed','expired'].includes(r.status)});
-export async function getCatalog(ctx:Pick<AppContext,'pool'>):Promise<CatalogItem[]>{
-  const result=await ctx.pool.query('SELECT id,item,approved FROM broker_catalog ORDER BY id');
+export async function getCatalog(ctx:Pick<AppContext,'pool'|'wick'>):Promise<CatalogItem[]>{
+  const result=await ctx.pool.query('SELECT id,item,approved FROM broker_catalog WHERE source_mode=$1 ORDER BY id',[ctx.wick.mode]);
   return result.rows.map(r=>({...r.item,id:r.id,approved:r.approved}));
 }
 export async function syncCatalog(ctx:AppContext){
   const items=await ctx.wick.catalog();
-  for(const item of items) await ctx.pool.query('INSERT INTO broker_catalog(id,item,approved) VALUES($1,$2,$3) ON CONFLICT(id) DO UPDATE SET item=excluded.item,updated_at=now()',[item.id,item,item.approved]);
+  await transaction(ctx.pool,async db=>{
+    await db.query('UPDATE broker_catalog SET approved=false,updated_at=now() WHERE NOT(id=ANY($1::text[])) OR source_mode<>$2',[items.map(item=>item.id),ctx.wick.mode]);
+    for(const item of items)await db.query('INSERT INTO broker_catalog(id,item,approved,source_mode) VALUES($1,$2,$3,$4) ON CONFLICT(id) DO UPDATE SET item=excluded.item,approved=CASE WHEN broker_catalog.source_mode=excluded.source_mode THEN broker_catalog.approved ELSE false END,source_mode=excluded.source_mode,updated_at=now()',[item.id,item,item.approved,ctx.wick.mode]);
+  });
   return getCatalog(ctx);
 }
 export async function getProvider(db:Pool|PoolClient,actor:Actor):Promise<Row>{
@@ -24,4 +28,18 @@ export async function getProvider(db:Pool|PoolClient,actor:Actor):Promise<Row>{
 export function integer(value:unknown,label:string,min=0,max=100000000){if(typeof value!=='number'||!Number.isSafeInteger(value)||value<min||value>max)throw new HttpError(400,`${label} must be an integer between ${min} and ${max}.`);return value;}
 export function shortText(value:unknown,label:string,max=2000){if(typeof value!=='string'||!value.trim()||value.length>max)throw new HttpError(400,`${label} is required and must be at most ${max} characters.`);return value.trim();}
 export function uuid(value:string){if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value))throw new HttpError(400,'Invalid resource ID.');return value;}
-export function pagination(query:unknown){const q=(query||{}) as {limit?:string;cursor?:string};const limit=Math.min(100,Math.max(1,Number(q.limit)||30));if(q.cursor&&!Number.isFinite(Date.parse(q.cursor)))throw new HttpError(400,'Invalid cursor.');return {limit,cursor:q.cursor||null};}
+export function pagination(query:unknown){
+  const q=(query||{}) as {limit?:string;cursor?:string};
+  const limit=q.limit===undefined?30:Number(q.limit);
+  if(!Number.isInteger(limit)||limit<1||limit>100)throw new HttpError(400,'Page size must be an integer between 1 and 100.');
+  let cursor:string|null=null,cursorId:string|null=null;
+  if(q.cursor){
+    try{
+      const parsed=JSON.parse(Buffer.from(q.cursor,'base64url').toString('utf8'));
+      if(!Array.isArray(parsed)||parsed.length!==2||typeof parsed[0]!=='string'||typeof parsed[1]!=='string'||!Number.isFinite(Date.parse(parsed[0]))||!/^([0-9a-f-]{36}|[0-9]{1,20})$/i.test(parsed[1]))throw new Error('Invalid cursor');
+      [cursor,cursorId]=parsed;
+    }catch{throw new HttpError(400,'Invalid pagination cursor.');}
+  }
+  return {limit,cursor,cursorId};
+}
+export function encodeCursor(row:Row){return Buffer.from(JSON.stringify([row.cursor_created_at||iso(row.created_at),String(row.id)])).toString('base64url');}
