@@ -22,6 +22,26 @@ export interface CatalogItem {
   organizationId?: string;
   groupId?: string;
   providerKeyId?: string;
+  /** Optional for historical fixture records; supplied only by the real catalog. */
+  rateMicrosPerSecond?: number;
+  rateRetrievedAt?: string;
+  rateSource?: 'wick-customer-catalog';
+  pricingMode?: 'managed' | 'byok';
+  resources?: { cpu: number; memoryGb: number; diskGb?: number; gpu?: string };
+}
+export interface ManagedPricing {
+  model: 'wick-managed-rate-v1';
+  rateMicrosPerSecond: number;
+  rateRetrievedAt: string;
+  rateSource: 'wick-customer-catalog';
+  markupBps: number;
+}
+export interface FixedQuote extends ManagedPricing {
+  durationSeconds: number;
+  upstreamEstimatedComputeMicros: string;
+  totalPriceCents: number;
+  currency: 'USD';
+  rounding: 'ceil-once-to-cent-minimum-one-cent';
 }
 export interface Requirements {
   cpu: number;

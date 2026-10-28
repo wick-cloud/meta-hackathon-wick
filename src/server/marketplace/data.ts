@@ -2,6 +2,7 @@ import type { Pool, PoolClient } from 'pg';
 import type { Actor, CatalogItem } from '../../shared/types.js';
 import { HttpError, type AppContext } from '../context.js';
 import { transaction } from './db.js';
+import { fixedQuote } from '../../shared/pricing.js';
 export type Row = Record<string, any>;
 export const iso = (value: unknown): string | null =>
   value ? new Date(value as string).toISOString() : null;
@@ -20,6 +21,9 @@ export const requestView = (r: Row) => ({
   createdAt: iso(r.created_at),
   winningBidId: r.winning_bid_id,
   failureReason: r.failure_reason,
+  ...(r.catalog_snapshot?.pricing
+    ? { pricing: fixedQuote(r.catalog_snapshot.pricing, r.duration_minutes) }
+    : {}),
 });
 export const bidView = (r: Row) => ({
   id: r.id,
@@ -29,6 +33,7 @@ export const bidView = (r: Row) => ({
   status: r.status,
   createdAt: iso(r.created_at),
   simulated: true,
+  ...(r.offering_snapshot?.pricing ? { pricing: r.offering_snapshot.pricing } : {}),
 });
 export const offeringView = (r: Row) => ({
   id: r.id,
@@ -39,6 +44,7 @@ export const offeringView = (r: Row) => ({
   priceCents: r.price_cents,
   active: r.active,
   revision: r.revision,
+  ...(r.pricing ? { pricing: r.pricing, priceDurationMinutes: 30 } : {}),
   createdAt: iso(r.created_at),
   simulated: true,
 });
@@ -56,6 +62,7 @@ export const vmView = (r: Row) => ({
   region: r.catalog_snapshot?.region,
   durationMinutes: r.create_input?.ttlSeconds / 60,
   priceCents: r.quote_snapshot?.totalPriceCents,
+  ...(r.quote_snapshot?.pricing ? { pricing: r.quote_snapshot.pricing } : {}),
   failureReason: r.failure_reason,
   cleanupPending:
     !r.cleanup_confirmed_at && ['terminating', 'failed', 'expired'].includes(r.status),
@@ -71,12 +78,12 @@ export async function syncCatalog(ctx: AppContext) {
   const items = await ctx.wick.catalog();
   await transaction(ctx.pool, async (db) => {
     await db.query(
-      'UPDATE broker_catalog SET approved=false,updated_at=now() WHERE NOT(id=ANY($1::text[])) OR source_mode<>$2',
+      'UPDATE broker_catalog SET approved=false,updated_at=now() WHERE source_mode=$2 AND NOT(id=ANY($1::text[]))',
       [items.map((item) => item.id), ctx.wick.mode],
     );
     for (const item of items)
       await db.query(
-        'INSERT INTO broker_catalog(id,item,approved,source_mode) VALUES($1,$2,$3,$4) ON CONFLICT(id) DO UPDATE SET item=excluded.item,approved=CASE WHEN broker_catalog.source_mode=excluded.source_mode THEN broker_catalog.approved ELSE false END,source_mode=excluded.source_mode,updated_at=now()',
+        'INSERT INTO broker_catalog(id,item,approved,source_mode) VALUES($1,$2,$3,$4) ON CONFLICT(id) DO UPDATE SET item=excluded.item,updated_at=now() WHERE broker_catalog.source_mode=excluded.source_mode',
         [item.id, item, item.approved, ctx.wick.mode],
       );
   });

@@ -6,6 +6,10 @@ import { createWickAdapter } from '../src/server/integrations/wick.js';
 import { seedMarketplace } from '../src/server/marketplace/index.js';
 import type { Actor, Role } from '../src/shared/types.js';
 const config = loadConfig();
+if (config.wickMode === 'real')
+  throw new Error(
+    'Use scripts/configure-real.ts for real catalog setup without changing accounts or sessions.',
+  );
 const accounts: [string, string, string, Role][] = [
   ['BUYER', 'buyer@demo.wick.local', 'Alex Morgan', 'buyer'],
   ['SUPPLIER_A', 'supplier-a@demo.wick.local', 'Supplier A', 'provider'],

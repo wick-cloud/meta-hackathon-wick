@@ -178,7 +178,9 @@ function Login({ session, onSignedIn }: { session: Session; onSignedIn: () => Pr
                   {session.modes.muse === 'fixture'
                     ? 'Muse responses are fixtures, not model calls. '
                     : ''}
-                  Supply and customer pricing are simulated.
+                  {session.modes.wick === 'real'
+                    ? 'Demo supplier allocations use Wick managed rates. No payment due.'
+                    : 'Supply and customer pricing are simulated.'}
                 </p>
               </div>
             </div>

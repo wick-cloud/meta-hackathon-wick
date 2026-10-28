@@ -16,6 +16,7 @@ const envSchema = z.object({
   META_API_BASE: z.string().url().default('https://api.meta.ai/v1'),
   META_API_KEY: z.string().optional(),
   MAX_CONCURRENT_VMS: z.coerce.number().int().min(1).max(20).default(2),
+  BROKER_TARGET_MARKUP_BPS: z.coerce.number().int().min(0).max(100000).default(2000),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
 });
 export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
@@ -61,6 +62,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     metaApiBase: e.META_API_BASE,
     metaApiKey: e.META_API_KEY,
     maxConcurrentVms: e.MAX_CONCURRENT_VMS,
+    targetMarkupBps: e.BROKER_TARGET_MARKUP_BPS,
     logLevel: e.LOG_LEVEL,
   };
 }

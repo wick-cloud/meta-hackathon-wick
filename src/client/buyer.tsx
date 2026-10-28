@@ -1,4 +1,5 @@
 import { lazy, Suspense, useEffect, useState, type FormEvent } from 'react';
+import { fixedQuote, managedPricing } from '../shared/pricing';
 import {
   ArrowDownToLine,
   ArrowRight,
@@ -295,7 +296,7 @@ export function NewEnvironment() {
 }
 
 export function RequestReview() {
-  const { catalog } = useSession(),
+  const { catalog, modes, targetMarkupBps } = useSession(),
     navigate = useNavigate();
   const [draft, setDraft] = useState<Draft | null>(loadDraft),
     [busy, setBusy] = useState(false),
@@ -495,6 +496,24 @@ export function RequestReview() {
               <DetailRow label="Region">{draft.region}</DetailRow>
               <DetailRow label="Rental">{draft.durationMinutes} minutes</DetailRow>
               <DetailRow label="Auction length">30 seconds</DetailRow>
+              {selected?.pricingMode === 'managed' &&
+                selected.rateMicrosPerSecond !== undefined && (
+                  <>
+                    <DetailRow label="Managed rate">
+                      {selected.rateMicrosPerSecond} µUSD / second
+                    </DetailRow>
+                    <DetailRow label="Rate-based quote">
+                      {money(
+                        fixedQuote(managedPricing(selected, targetMarkupBps), draft.durationMinutes)
+                          .totalPriceCents,
+                      )}
+                    </DetailRow>
+                    <p className="field-hint">
+                      Published rate × duration, plus {(targetMarkupBps ?? 2000) / 100}% markup;
+                      rounded up once to cents. The accepted offer freezes your total.
+                    </p>
+                  </>
+                )}
               <div className="summary-total">
                 <span>Maximum total</span>
                 <strong>
@@ -502,7 +521,12 @@ export function RequestReview() {
                   <small>USD</small>
                 </strong>
               </div>
-              <span className="demo-price-note">Simulated demo supply · No payment due</span>
+              <span className="demo-price-note">
+                {modes.wick === 'real'
+                  ? 'Demo supplier allocation backed by Wick'
+                  : 'Simulated demo supply'}{' '}
+                · No payment due
+              </span>
               <button
                 type="submit"
                 className="button primary full-width"
@@ -1093,6 +1117,18 @@ export function VMDetail({ id }: { id: string }) {
             </span>
           </DetailRow>
           <DetailRow label="Rental price">{money(vm.priceCents)} USD · fixed total</DetailRow>
+          {vm.pricing && (
+            <>
+              <DetailRow label="Wick compute estimate">
+                ${(Number(vm.pricing.upstreamEstimatedComputeMicros) / 1000000).toFixed(6)} USD for
+                the full term
+              </DetailRow>
+              <p className="field-hint">
+                The estimate uses the frozen published rate and is not settled usage. Customer fixed
+                quote includes {vm.pricing.markupBps / 100}% markup. No payment due.
+              </p>
+            </>
+          )}
           <div className="card-footer-link">
             <ArrowLink to={`/requests/${vm.requestId}`}>View auction & winning offer</ArrowLink>
           </div>
@@ -1187,8 +1223,8 @@ export function Invoices() {
         <div>
           <h3>These are demo invoices. No payment due.</h3>
           <p>
-            Customer quotes are simulated and separate from Wick’s operational costs. No payments or
-            payouts are collected.
+            Customer fixed quotes are separate from Wick’s actual internal usage. Full-term compute
+            estimates are not settled usage. No payments or payouts are collected.
           </p>
         </div>
         <span className="quiet-badge">Platform fee: $0.00</span>

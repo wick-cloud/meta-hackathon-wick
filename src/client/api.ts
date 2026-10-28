@@ -6,12 +6,15 @@ import type {
   Requirements,
   SupplierPolicy,
   Translation,
+  FixedQuote,
+  ManagedPricing,
 } from '../shared/types';
 
 export interface Session {
   user: Actor | null;
   modes: { wick: Mode; muse: Mode };
   catalog: CatalogItem[];
+  targetMarkupBps?: number;
 }
 export interface EnvironmentRequest {
   id: string;
@@ -25,6 +28,7 @@ export interface EnvironmentRequest {
   closesAt: string;
   createdAt: string;
   winningBidId?: string | null;
+  pricing?: FixedQuote;
 }
 export interface Bid {
   id: string;
@@ -49,6 +53,7 @@ export interface VM {
   priceCents: number;
   failureReason?: string | null;
   cleanupPending?: boolean;
+  pricing?: FixedQuote;
 }
 export interface Invoice {
   id: string;
@@ -62,6 +67,7 @@ export interface Invoice {
   status?: string;
   catalogName?: string;
   number?: string;
+  pricing?: FixedQuote;
 }
 export interface Offering {
   id: string;
@@ -72,6 +78,7 @@ export interface Offering {
   priceCents: number;
   active: boolean;
   revision: number;
+  pricing?: ManagedPricing;
   createdAt: string;
 }
 export interface Activity {

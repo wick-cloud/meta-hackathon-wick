@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import type { Pool } from 'pg';
+import { fixedQuote, managedPricing } from '../../shared/pricing.js';
 import type { Actor, CatalogItem, SupplierPolicy, Mode } from '../../shared/types.js';
 import { HttpError, type AppContext } from '../context.js';
 import { transaction, enqueue, activity, QUEUES } from './db.js';
@@ -166,6 +167,7 @@ export async function registerMarketplace(app: FastifyInstance, ctx: AppContext)
       createdAt: iso(r.created_at),
       catalogName: r.catalog_snapshot.name,
       label: 'No payment due',
+      ...(r.quote_snapshot.pricing ? { pricing: r.quote_snapshot.pricing } : {}),
       simulated: true,
     }));
   });
@@ -306,13 +308,14 @@ export async function registerMarketplace(app: FastifyInstance, ctx: AppContext)
     const b = request.body as Row;
     const catalogId = shortText(b?.catalogId, 'Configuration', 160),
       name = shortText(b?.name, 'Offering name', 160),
-      description = shortText(b?.description, 'Offering description', 2000),
-      price = integer(b?.priceCents, 'Total price');
+      description = shortText(b?.description, 'Offering description', 2000);
+    const fixturePrice =
+      ctx.wick.mode === 'fixture' ? integer(b?.priceCents, 'Total price') : undefined;
     return transaction(ctx.pool, async (db) => {
       const p = await getProvider(db, actor);
       const c = (
         await db.query(
-          'SELECT approved FROM broker_catalog WHERE id=$1 AND source_mode=$2 FOR SHARE',
+          'SELECT approved,item FROM broker_catalog WHERE id=$1 AND source_mode=$2 FOR SHARE',
           [catalogId, ctx.wick.mode],
         )
       ).rows[0];
@@ -321,6 +324,15 @@ export async function registerMarketplace(app: FastifyInstance, ctx: AppContext)
           400,
           'Offerings must use an administrator-approved existing Wick configuration.',
         );
+      let pricing;
+      if (ctx.wick.mode === 'real') {
+        try {
+          pricing = managedPricing(c.item, ctx.config.targetMarkupBps);
+        } catch (error) {
+          throw new HttpError(400, (error as Error).message);
+        }
+      }
+      const price = pricing ? fixedQuote(pricing, 30).totalPriceCents : fixturePrice!;
       if (
         price < p.policy.minimumPriceCents ||
         (p.policy.maxPriceCents !== undefined && price > p.policy.maxPriceCents)
@@ -336,8 +348,8 @@ export async function registerMarketplace(app: FastifyInstance, ctx: AppContext)
         throw new HttpError(409, 'An offering with this name and configuration already exists.');
       const r = (
         await db.query(
-          'INSERT INTO broker_offerings(provider_id,catalog_id,name,description,price_cents) VALUES($1,$2,$3,$4,$5) RETURNING *',
-          [p.id, catalogId, name, description, price],
+          'INSERT INTO broker_offerings(provider_id,catalog_id,name,description,price_cents,pricing) VALUES($1,$2,$3,$4,$5,$6) RETURNING *',
+          [p.id, catalogId, name, description, price, pricing ?? null],
         )
       ).rows[0];
       await activity(
@@ -420,6 +432,20 @@ export async function registerMarketplace(app: FastifyInstance, ctx: AppContext)
     await ctx.requireActor(request, ['admin']);
     const approved = (request.body as Row)?.approved;
     if (typeof approved !== 'boolean') throw new HttpError(400, 'Approved must be true or false.');
+    if (approved && ctx.wick.mode === 'real') {
+      const row = (
+        await ctx.pool.query('SELECT item FROM broker_catalog WHERE id=$1 AND source_mode=$2', [
+          request.params.id,
+          'real',
+        ])
+      ).rows[0];
+      if (!row) throw new HttpError(404, 'Configuration not found.');
+      try {
+        managedPricing(row.item, ctx.config.targetMarkupBps);
+      } catch (error) {
+        throw new HttpError(400, (error as Error).message);
+      }
+    }
     const result = await ctx.pool.query(
       'UPDATE broker_catalog SET approved=$2,updated_at=now() WHERE id=$1 RETURNING item',
       [request.params.id, approved],
@@ -605,6 +631,8 @@ export async function seedMarketplace(
   catalog: CatalogItem[],
   mode: Mode = 'fixture',
 ) {
+  if (mode === 'real')
+    throw new Error('Real catalog setup requires the explicit configure-real command.');
   await transaction(pool, async (db) => {
     await db.query(
       'UPDATE broker_catalog SET approved=false,updated_at=now() WHERE NOT(id=ANY($1::text[])) OR source_mode<>$2',

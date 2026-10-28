@@ -398,7 +398,9 @@ function ProviderRequestCard({
 }) {
   const { modes } = useSession(),
     now = useNow();
-  const [price, setPrice] = useState(Math.min(basePriceCents, request.maxPriceCents)),
+  const [price, setPrice] = useState(
+      request.pricing?.totalPriceCents ?? Math.min(basePriceCents, request.maxPriceCents),
+    ),
     [proposal, setProposal] = useState<
       (BidProposal & { mode: Mode; modelCalled?: boolean; submittedBid?: unknown }) | null
     >(null),
@@ -822,13 +824,20 @@ export function ProviderOfferings() {
               />
             </label>
             <div className="field-grid">
-              <MoneyInput
-                id="offering-price"
-                label="Fixed rental price (USD)"
-                value={draft.priceCents}
-                onChange={(priceCents) => setDraft({ ...draft, priceCents })}
-                min={1}
-              />
+              {modes.wick === 'fixture' ? (
+                <MoneyInput
+                  id="offering-price"
+                  label="Fixed rental price (USD)"
+                  value={draft.priceCents}
+                  onChange={(priceCents) => setDraft({ ...draft, priceCents })}
+                  min={1}
+                />
+              ) : (
+                <p className="field-hint">
+                  Managed rate pricing: the server freezes the published Wick rate and configured
+                  markup. Each 15, 30 or 60 minute quote is calculated from that rate.
+                </p>
+              )}
               <div className="field">
                 <span>Supported durations</span>
                 <div className="supported-duration-tags">
@@ -888,7 +897,11 @@ export function ProviderOfferings() {
                 </div>
                 <div className="offering-price">
                   <strong>{money(item.priceCents)}</strong>
-                  <span>fixed rental total</span>
+                  <span>
+                    {item.pricing
+                      ? '30 minute example · duration-based fixed quote'
+                      : 'fixed rental total'}
+                  </span>
                 </div>
                 <div className="offering-card-footer">
                   <span>
@@ -1214,8 +1227,9 @@ export function AdminConfig({ onUpdated }: { onUpdated: () => void }) {
         <section className="card">
           <h2>Providers</h2>
           <p className="muted-text">
-            Provider inventory and customer quotes are simulated demo supply. Wick operational costs
-            are separate.
+            These accounts manage demo supplier allocations backed by Wick; they are not independent
+            provider firms. Customer fixed quotes and Wick internal usage are separate. No payment
+            due.
           </p>
           <div className="admin-provider-list">
             {data.providers?.map((provider, index) => (
