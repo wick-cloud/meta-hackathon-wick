@@ -23,7 +23,7 @@ Current Railway projects can use [`.railway/railway.ts`](../.railway/railway.ts)
 
 The old `railway.toml` was removed because current Railway uses [Infrastructure as Code](https://docs.railway.com/infrastructure-as-code) for new services. You can also enter the settings above in the dashboard after connecting the GitHub branch; the Dockerfile builds the same image either way.
 
-For IaC, install the [Railway CLI](https://docs.railway.com/guides/cli) (5.42.1 or newer), run `npm ci`, and link a **dedicated project** for this app:
+For IaC, install the [Railway CLI](https://docs.railway.com/cli#installing-the-cli) (5.42.1 or newer), run `npm ci`, and link a **dedicated project** for this app:
 
 ```sh
 railway login
