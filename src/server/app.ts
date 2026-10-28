@@ -10,11 +10,15 @@ import { createPool, migrate } from './db.js';
 import { createAuth, createRequireActor, registerAuth } from './auth.js';
 import { HttpError, type AppContext } from './context.js';
 import { createWickAdapter } from './integrations/wick.js';
+import type { WickAdapter } from './integrations/types.js';
 import { createMuseAdapter } from './integrations/muse.js';
 import { registerTerminal } from './integrations/terminal.js';
 import { registerMarketplace, startMarketplaceWorkers, getCatalog } from './marketplace/index.js';
 import { registerMuse } from './muse/index.js';
-export async function buildApp(config: Config) {
+export async function buildApp(
+  config: Config,
+  options: { wrapWick?: (adapter: WickAdapter) => WickAdapter; clientRoot?: string } = {},
+) {
   const app = Fastify({
     logger: {
       level: config.logLevel,
@@ -41,7 +45,9 @@ export async function buildApp(config: Config) {
     pool,
     boss,
     config,
-    wick: createWickAdapter(config, pool),
+    wick: options.wrapWick
+      ? options.wrapWick(createWickAdapter(config, pool))
+      : createWickAdapter(config, pool),
     muse: createMuseAdapter(config),
     requireActor: createRequireActor(auth, pool),
   };
@@ -115,6 +121,7 @@ export async function buildApp(config: Config) {
       return {
         user,
         modes: { wick: config.wickMode, muse: config.museMode },
+        targetMarkupBps: config.targetMarkupBps,
         catalog: await getCatalog(ctx),
       };
     } catch (error) {
@@ -131,7 +138,7 @@ export async function buildApp(config: Config) {
   await registerMuse(app, ctx);
   await registerTerminal(app, ctx);
   await startMarketplaceWorkers(ctx);
-  const clientRoot = resolve('dist/client');
+  const clientRoot = resolve(options.clientRoot ?? 'dist/client');
   if (existsSync(resolve(clientRoot, 'index.html'))) {
     await app.register(fastifyStatic, { root: clientRoot, prefix: '/', wildcard: false });
     app.setNotFoundHandler(async (request, reply) => {
