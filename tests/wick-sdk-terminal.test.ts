@@ -119,6 +119,39 @@ describe('published Wick SDK terminal wire contract (offline)', () => {
     expect(sockets).toHaveLength(0);
   });
 
+  it.each([
+    ['32 KiB ASCII', 'a'.repeat(32 * 1024)],
+    ['surrogate pair at a frame boundary', 'a'.repeat(16_383) + '😀' + 'b'.repeat(8000)],
+  ])('chunks %s input into ordered SDK frames without splitting Unicode', async (_label, input) => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(JSON.stringify(session()))),
+    );
+    const terminal = await createWickAdapter(config).terminal('env_test');
+    const iterator = terminal[Symbol.asyncIterator]();
+    const socket = sockets[0]!;
+    socket.receive({ type: 'ready', environmentId: 'env_test', console: 'terminal' });
+    await iterator.next();
+    terminal.input(input);
+    terminal.input('next command\r');
+    const frames = socket.sent.filter((frame) => frame.type === 'input');
+    expect(frames.length).toBeGreaterThan(2);
+    expect(frames.at(-1)?.data).toBe('next command\r');
+    expect(
+      frames
+        .slice(0, -1)
+        .map((frame) => frame.data)
+        .join(''),
+    ).toBe(input);
+    for (const frame of frames) {
+      const value = frame.data as string;
+      expect(value.length).toBeLessThanOrEqual(16_384);
+      expect(value.isWellFormed()).toBe(true);
+    }
+    terminal.close();
+    await iterator.return?.();
+  });
+
   it('checks renewal scope and stops without exposing upstream error details', async () => {
     vi.useFakeTimers();
     let calls = 0;
