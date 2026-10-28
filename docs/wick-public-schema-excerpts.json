@@ -1,0 +1,541 @@
+{
+  "source": "https://app.wick-cloud.com/api/openapi.json",
+  "retrievedAt": "2026-10-28T06:18:00Z",
+  "documentSha256": "10d26c1fd5985e09341174d260d0678ec0551ed165224a55b75ea5143e477f21",
+  "note": "Focused public schema excerpts. CustomerEnvironment properties are intentionally narrowed; references are retained as published. Not captured live allocation responses.",
+  "schemas": {
+    "CustomerEnvironmentMutation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "environment": {
+          "$ref": "#/components/schemas/CustomerEnvironment"
+        },
+        "operation": {
+          "$ref": "#/components/schemas/CustomerOperation"
+        },
+        "replayed": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "environment",
+        "operation"
+      ]
+    },
+    "PublicSession": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "session": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "organizationId": {
+              "type": "string"
+            },
+            "groupId": {
+              "type": "string"
+            },
+            "createdAt": {
+              "type": "string"
+            },
+            "environmentId": {
+              "type": "string"
+            },
+            "expiresAt": {
+              "type": "string"
+            },
+            "revokedAt": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "organizationId",
+            "groupId",
+            "createdAt",
+            "environmentId",
+            "expiresAt"
+          ]
+        },
+        "token": {
+          "type": "string"
+        },
+        "websocketUrl": {
+          "type": "string"
+        },
+        "terminalWebsocketUrl": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "username": {
+          "type": "string"
+        },
+        "hostKey": {
+          "type": "string"
+        },
+        "sshWebsocketUrl": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "session",
+        "token"
+      ]
+    },
+    "PublicConnections": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "provider": {
+          "type": "string"
+        },
+        "terminal": {
+          "type": "boolean"
+        },
+        "ssh": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "provider",
+        "terminal",
+        "ssh"
+      ]
+    },
+    "CustomerCatalog": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "profiles": {
+          "type": "array",
+          "items": {
+            "anyOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "enum": [
+                      "micro"
+                    ]
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "cpu": {
+                    "type": "number"
+                  },
+                  "memoryMiB": {
+                    "type": "number"
+                  },
+                  "description": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id",
+                  "name",
+                  "cpu",
+                  "memoryMiB",
+                  "description"
+                ]
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "enum": [
+                      "small"
+                    ]
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "cpu": {
+                    "type": "number"
+                  },
+                  "memoryMiB": {
+                    "type": "number"
+                  },
+                  "description": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id",
+                  "name",
+                  "cpu",
+                  "memoryMiB",
+                  "description"
+                ]
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "enum": [
+                      "medium"
+                    ]
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "cpu": {
+                    "type": "number"
+                  },
+                  "memoryMiB": {
+                    "type": "number"
+                  },
+                  "description": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id",
+                  "name",
+                  "cpu",
+                  "memoryMiB",
+                  "description"
+                ]
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "enum": [
+                      "large"
+                    ]
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "cpu": {
+                    "type": "number"
+                  },
+                  "memoryMiB": {
+                    "type": "number"
+                  },
+                  "description": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id",
+                  "name",
+                  "cpu",
+                  "memoryMiB",
+                  "description"
+                ]
+              }
+            ]
+          }
+        },
+        "offers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/CustomerOffer"
+          }
+        }
+      },
+      "required": [
+        "profiles",
+        "offers"
+      ]
+    },
+    "CustomerOffer": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "profile": {
+          "type": "string",
+          "enum": [
+            "micro",
+            "small",
+            "medium",
+            "large"
+          ]
+        },
+        "provider": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "e2b"
+              ]
+            },
+            {
+              "type": "string",
+              "enum": [
+                "daytona"
+              ]
+            },
+            {
+              "type": "string",
+              "enum": [
+                "modal"
+              ]
+            },
+            {
+              "type": "string",
+              "enum": [
+                "sail"
+              ]
+            },
+            {
+              "type": "string",
+              "enum": [
+                "boat"
+              ]
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "region": {
+          "type": "string"
+        },
+        "resources": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "cpu": {
+              "type": "number"
+            },
+            "memoryMiB": {
+              "type": "number"
+            },
+            "diskMiB": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "cpu",
+            "memoryMiB",
+            "diskMiB"
+          ]
+        },
+        "rateMicrosPerSecond": {
+          "type": "number"
+        },
+        "available": {
+          "type": "boolean"
+        },
+        "maxTtlSeconds": {
+          "type": "number"
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "network": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "egress": {
+              "type": "string",
+              "enum": [
+                "blocked",
+                "included"
+              ]
+            },
+            "includedEgressMiB": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "egress",
+            "includedEgressMiB"
+          ]
+        },
+        "byok": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "feeMicros": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "enabled",
+            "feeMicros"
+          ]
+        }
+      },
+      "required": [
+        "profile",
+        "provider",
+        "region",
+        "rateMicrosPerSecond",
+        "available",
+        "maxTtlSeconds",
+        "capabilities"
+      ]
+    },
+    "CustomerProvider": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "provider": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "e2b"
+              ]
+            },
+            {
+              "type": "string",
+              "enum": [
+                "daytona"
+              ]
+            },
+            {
+              "type": "string",
+              "enum": [
+                "modal"
+              ]
+            },
+            {
+              "type": "string",
+              "enum": [
+                "sail"
+              ]
+            },
+            {
+              "type": "string",
+              "enum": [
+                "boat"
+              ]
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "scope": {
+          "type": "string",
+          "enum": [
+            "organization",
+            "wick_managed"
+          ]
+        },
+        "available": {
+          "type": "boolean"
+        },
+        "offers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/CustomerOffer"
+          }
+        },
+        "connectionName": {
+          "type": "string"
+        },
+        "providerKeyId": {
+          "type": "string"
+        },
+        "organizationId": {
+          "type": "string"
+        },
+        "revokedAt": {
+          "type": "string"
+        },
+        "health": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "ready": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ready"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "provider",
+        "scope",
+        "available",
+        "offers"
+      ]
+    },
+    "CustomerEnvironment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "organizationId",
+        "groupId",
+        "creatorId",
+        "name",
+        "status",
+        "createdAt",
+        "profile",
+        "provider",
+        "region",
+        "rateMicrosPerSecond",
+        "operationId",
+        "requiresReconciliation"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "provisioning",
+            "running",
+            "pausing",
+            "paused",
+            "resuming",
+            "terminating",
+            "terminated",
+            "failed"
+          ]
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "requiresReconciliation": {
+          "type": "boolean"
+        },
+        "expiresAt": {
+          "type": "string"
+        },
+        "allocationKnown": {
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

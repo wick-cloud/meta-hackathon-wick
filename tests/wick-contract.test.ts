@@ -1,0 +1,89 @@
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { createWickAdapter, parseCatalog, parseConnections, parseCreateResult, parseEnvironment, parseSession, WickApiError } from '../src/server/integrations/wick.js';
+import type { CreateEnvironmentInput } from '../src/server/integrations/types.js';
+
+const config = { wickMode: 'real' as const, wickApiBase: 'https://wick.example/api', wickApiKey: 'test-service-key', wickOrganizationId: 'org_test', wickGroupId: 'grp_test' };
+const create: CreateEnvironmentInput = { organizationId: 'org_test', groupId: 'grp_test', name: 'broker-test', provider: 'boat', profile: 'small', region: 'us-east', ttlSeconds: 1800, visibility: 'private' };
+// Synthetic values shaped against the public OpenAPI, not captured customer data.
+const environment = { id: 'env_test', status: 'provisioning', createdAt: '2026-10-28T06:00:00.000Z', expiresAt: '2026-10-28T06:30:00.000Z', provider: 'boat', profile: 'small', requiresReconciliation: false };
+const mutation = { environment, operation: { id: 'op_test', status: 'running', type: 'create' }, replayed: false };
+afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+
+describe('public Wick REST contract', () => {
+  it('retains the documented mutation envelope and authoritative expiry', () => {
+    const parsed = parseCreateResult(mutation);
+    expect(parsed.environment.expiresAt).toBe(environment.expiresAt);
+    expect(parsed.operation).toEqual({ id: 'op_test', status: 'running' });
+    expect(parsed.raw).toBe(mutation);
+    expect(parsed.environment.raw).toBe(environment);
+    expect(() => parseCreateResult({ data: mutation })).toThrow('operation');
+  });
+  it('does not synthesize expiry, ready state, or cleanup from unrelated fields', () => {
+    expect(parseEnvironment({ id: 'env_test', status: 'provisioning', ttlSeconds: 1800 }).expiresAt).toBeNull();
+    expect(() => parseEnvironment({ ...environment, status: 'paused' })).toThrow('unsupported');
+    expect(() => parseEnvironment({ ...environment, expiresAt: 'tomorrow' })).toThrow('expiresAt');
+    expect(() => parseConnections({ terminalWebsocketUrl: 'wss://wick.example' })).toThrow();
+    expect(parseConnections({ provider: 'boat', terminal: false, ssh: true })).toEqual({ terminal: false });
+  });
+  it('reads session expiry from nested public session and enforces environment scope', () => {
+    const expiresAt = new Date(Date.now() + 240_000).toISOString();
+    const response = { session: { id: 'session_test', environmentId: 'env_test', expiresAt }, token: 'scoped-token', terminalWebsocketUrl: 'wss://wick.example/terminal?token=scoped-token' };
+    expect(parseSession(response, 'env_test')).toEqual({ token: response.token, terminalWebsocketUrl: response.terminalWebsocketUrl, expiresAt });
+    expect(() => parseSession(response, 'another-env')).toThrow('scope');
+    expect(() => parseSession({ ...response, terminalWebsocketUrl: 'http://127.0.0.1/' }, 'env_test')).toThrow('secure');
+    expect(() => parseSession({ ...response, session: { ...response.session, expiresAt: '2020-01-01' } }, 'env_test')).toThrow('expiring');
+    expect(() => parseSession({ token: 'x', terminalWebsocketUrl: 'wss://wick.example', expiresAt }, 'env_test')).toThrow('session');
+  });
+  it('maps only available offers and exact supported finite TTLs; starts real choices unapproved', () => {
+    const offer = { provider: 'boat', profile: 'small', region: 'us-east', maxTtlSeconds: 1800, available: true };
+    const catalog = parseCatalog({ profiles: [{ id: 'small', name: 'Small', cpu: 2, memoryMiB: 4096, description: 'Small machine' }], offers: [offer, { ...offer, region: 'elsewhere', available: false }, { ...offer, region: 'too-short', maxTtlSeconds: 899 }] }, config);
+    expect(catalog).toEqual([{ id: 'boat:small:us-east', name: 'Small · boat', description: 'Small machine', provider: 'boat', profile: 'small', region: 'us-east', cpu: 2, memoryGb: 4, durationMinutes: [15, 30], approved: false, organizationId: 'org_test', groupId: 'grp_test' }]);
+    expect(() => parseCatalog({ items: [] }, config)).toThrow('profiles and offers');
+  });
+  it('uses Bearer auth, the persisted idempotency key, and only allowed create fields', async () => {
+    const fetcher = vi.fn(async () => new Response(JSON.stringify(mutation), { status: 202 }));
+    vi.stubGlobal('fetch', fetcher);
+    const adapter = createWickAdapter(config);
+    await adapter.create({ ...create, agent: 'codex', repository: { url: 'https://example.invalid/private' }, setup: 'run something' } as CreateEnvironmentInput, 'persisted-key-123');
+    expect(fetcher).toHaveBeenCalledOnce();
+    const [url, options] = fetcher.mock.calls[0]! as unknown as [URL, RequestInit];
+    expect(url.toString()).toBe('https://wick.example/api/v1/environments');
+    expect(options.redirect).toBe('error');
+    expect(options.headers).toMatchObject({ Authorization: 'Bearer test-service-key', 'Idempotency-Key': 'persisted-key-123' });
+    expect(JSON.parse(String(options.body))).toEqual(create);
+  });
+  it('replays the same key without generating a replacement and preserves upstream replay flag', async () => {
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({ ...mutation, replayed: true }), { status: 202 }));
+    vi.stubGlobal('fetch', fetcher);
+    const adapter = createWickAdapter(config);
+    const one = await adapter.create(create, 'stable-key-123');
+    const two = await adapter.create(create, 'stable-key-123');
+    expect(two.environment.expiresAt).toBe(one.environment.expiresAt);
+    expect(two.raw).toMatchObject({ replayed: true });
+    expect(fetcher.mock.calls.every((call) => (call as unknown as [URL, RequestInit])[1].headers && ((call as unknown as [URL, RequestInit])[1].headers as Record<string, string>)['Idempotency-Key'] === 'stable-key-123')).toBe(true);
+  });
+  it.each([400, 401, 403, 409, 422, 429, 500, 503])('classifies HTTP %i without fake success or error-body leakage', async status => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('secret credential error detail', { status })));
+    const error = await createWickAdapter(config).create(create, 'stable-key-123').then(() => { throw new Error('Expected Wick failure'); }, error => error as WickApiError);
+    expect(error).toBeInstanceOf(WickApiError);
+    expect(error.admissionRejected).toBe([400, 422].includes(status));
+    expect(error.message).not.toContain('secret');
+  });
+  it('keeps network uncertainty distinct from confirmed admission rejection', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('Service key must not leak'); }));
+    const error = await createWickAdapter(config).create(create, 'stable-key-123').then(() => { throw new Error('Expected Wick failure'); }, error => error as WickApiError);
+    expect(error.admissionRejected).toBe(false);
+    expect(error.message).toContain('reconciliation');
+    expect(error.message).not.toContain('Service key');
+  });
+  it('requires an explicit adapter mode and never replaces real errors with fixtures', async () => {
+    expect(() => createWickAdapter({ ...config, wickMode: 'fixture' })).toThrow('PostgreSQL');
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ unexpected: 'shape' }), { status: 202 })));
+    await expect(createWickAdapter(config).create(create, 'stable-key-123')).rejects.toThrow();
+  });
+  it('rejects unsupported rental durations before making an API call', async () => {
+    const fetcher = vi.fn(); vi.stubGlobal('fetch', fetcher);
+    await expect(createWickAdapter(config).create({ ...create, ttlSeconds: 7200 }, 'stable-key-123')).rejects.toThrow('15, 30, or 60');
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+});
