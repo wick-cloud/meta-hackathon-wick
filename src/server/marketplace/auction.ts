@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import type { PoolClient } from 'pg';
+import { availableForBids } from './policy.js';
 import {
   acceptedBidQuote,
   fixedQuote,
@@ -44,6 +46,36 @@ export async function createRequest(
     if (key in body)
       throw new HttpError(400, 'Environment requests cannot contain workload execution fields.');
   return transaction(ctx.pool, async (db) => {
+    if (priorRequestId) {
+      const prior = (
+        await db.query('SELECT * FROM broker_requests WHERE id=$1 AND buyer_id=$2 FOR UPDATE', [
+          priorRequestId,
+          actor.id,
+        ])
+      ).rows[0];
+      if (!prior) throw new HttpError(404, 'Request not found.');
+      if (!['no_offers', 'failed', 'cancelled'].includes(prior.status))
+        throw new HttpError(409, 'Only a finished unsuccessful attempt can be retried.');
+      if (prior.resolution_request_id) {
+        const resolved = (
+          await db.query('SELECT * FROM broker_requests WHERE id=$1', [prior.resolution_request_id])
+        ).rows[0];
+        if (resolved?.prior_request_id === prior.id && !resolved.negotiation_intent_id)
+          return requestView(resolved);
+        throw new HttpError(409, 'This request was already resolved by an accepted alternative.');
+      }
+      if (
+        (
+          await db.query(
+            'SELECT 1 FROM broker_vms WHERE request_id=$1 AND cleanup_confirmed_at IS NULL',
+            [prior.id],
+          )
+        ).rowCount
+      )
+        throw new HttpError(409, 'Wait for the prior environment cleanup before retrying.');
+      if ((prior.catalog_snapshot.sourceMode ?? 'fixture') !== ctx.wick.mode)
+        throw new HttpError(409, 'The integration mode changed. Review a new request.');
+    }
     const result = await db.query(
       'SELECT item,approved FROM broker_catalog WHERE id=$1 AND source_mode=$2 FOR SHARE',
       [catalogId, ctx.wick.mode],
@@ -91,6 +123,16 @@ export async function createRequest(
       ],
     );
     const request = r.rows[0];
+    if (priorRequestId) {
+      await db.query('UPDATE broker_requests SET resolution_request_id=$2 WHERE id=$1', [
+        priorRequestId,
+        request.id,
+      ]);
+      await db.query(
+        "UPDATE broker_intents SET status='resolved' WHERE source_request_id=$1 AND status='open'",
+        [priorRequestId],
+      );
+    }
     await enqueue(ctx, db, QUEUES.close, { requestId: request.id }, 30);
     const providers = await db.query(
       "SELECT id FROM broker_providers WHERE policy->>'autoBid'='true'",
@@ -184,7 +226,7 @@ export async function submitBid(
         )
       ).rows[0].n,
     );
-    if (held >= p.total_capacity)
+    if (availableForBids(p.total_capacity, held, policy) < 1)
       throw new HttpError(409, 'All simulated supplier slots are already reserved.');
     const bid = (
       await db.query(
@@ -260,18 +302,7 @@ export async function closeAuction(ctx: AppContext, requestId: string) {
       );
       return;
     }
-    await db.query("SELECT pg_advisory_xact_lock(hashtext('broker-global-vm-admission'))");
-    const configured =
-      (await db.query("SELECT value FROM broker_settings WHERE key='maxConcurrentVms'")).rows[0]
-        ?.value ?? ctx.config.maxConcurrentVms;
-    const count = Number(
-      (
-        await db.query(
-          'SELECT count(*)::int AS n FROM broker_vms WHERE cleanup_confirmed_at IS NULL',
-        )
-      ).rows[0].n,
-    );
-    if (count >= Number(configured)) {
+    if (!(await globalAdmissionAvailable(ctx, db))) {
       await db.query(
         "UPDATE broker_requests SET status='failed',failure_reason='The concurrent VM limit is reached. Start a new auction when a VM has finished cleanup.' WHERE id=$1",
         [requestId],
@@ -283,80 +314,101 @@ export async function closeAuction(ctx: AppContext, requestId: string) {
       );
       return;
     }
-    const winner = bids[0];
-    await db.query(
-      "UPDATE broker_bids SET status=CASE WHEN id=$2 THEN 'won' ELSE 'lost' END WHERE request_id=$1",
-      [requestId, winner.id],
-    );
-    await db.query(
-      "UPDATE broker_holds SET released_at=now(),release_reason='Auction lost' WHERE bid_id IN(SELECT id FROM broker_bids WHERE request_id=$1 AND id<>$2) AND released_at IS NULL",
-      [requestId, winner.id],
-    );
-    const catalog = request.catalog_snapshot;
-    const vmId = randomUUID();
-    const config = ctx.config as unknown as Record<string, unknown>;
-    const createInput = {
-      organizationId: catalog.organizationId || config.wickOrganizationId || 'fixture-organization',
-      groupId: catalog.groupId || config.wickGroupId || 'fixture-group',
-      name: `${config.environmentNamePrefix || 'wick-broker'}-${vmId.slice(0, 8)}`,
-      provider: catalog.provider,
-      profile: catalog.profile,
-      region: catalog.region,
-      ...(catalog.providerKeyId ? { providerKeyId: catalog.providerKeyId } : {}),
-      ...(ctx.wick.mode === 'real'
-        ? { maximumPriceMicrosPerSecond: catalog.rateMicrosPerSecond }
-        : {}),
-      ttlSeconds: request.duration_minutes * 60,
-      visibility: 'private',
-    };
-    if (
-      ctx.wick.mode === 'real' &&
-      ((!catalog.organizationId && !config.wickOrganizationId) ||
-        (!catalog.groupId && !config.wickGroupId))
-    )
-      throw new HttpError(
-        503,
-        'Real Wick organization and group must be configured before awarding.',
-      );
-    await db.query(
-      `INSERT INTO broker_vms(id,request_id,buyer_id,provider_id,bid_id,create_key,create_input,catalog_snapshot,quote_snapshot)
-      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-      [
-        vmId,
-        requestId,
-        request.buyer_id,
-        winner.provider_id,
-        winner.id,
-        `broker-v1:${vmId}`,
-        createInput,
-        catalog,
-        {
-          totalPriceCents: winner.total_price_cents,
-          currency: 'USD',
-          feeCents: 0,
-          offering: winner.offering_snapshot,
-          acceptedAt: isoDate(winner.created_at),
-          ...(winner.offering_snapshot.pricing
-            ? { pricing: winner.offering_snapshot.pricing }
-            : {}),
-        },
-      ],
-    );
-    await db.query(
-      "UPDATE broker_requests SET status='provisioning',winning_bid_id=$2 WHERE id=$1",
-      [requestId, winner.id],
-    );
-    await activity(
-      db,
-      winner.provider_id,
-      requestId,
-      'awarded',
-      'Lowest eligible fixed-price offer won. Quote and offering revision frozen.',
-    );
-    await enqueue(ctx, db, QUEUES.provision, { vmId });
-    return { vmId, winningBidId: winner.id };
+    return awardHeldBid(ctx, db, request, bids[0]);
   });
 }
+
+/** Caller holds the request/provider rows. Shared admission lock covers every award path. */
+export async function globalAdmissionAvailable(ctx: AppContext, db: PoolClient) {
+  await db.query("SELECT pg_advisory_xact_lock(hashtext('broker-global-vm-admission'))");
+  const configured =
+    (await db.query("SELECT value FROM broker_settings WHERE key='maxConcurrentVms'")).rows[0]
+      ?.value ?? ctx.config.maxConcurrentVms;
+  const count = Number(
+    (await db.query('SELECT count(*)::int AS n FROM broker_vms WHERE cleanup_confirmed_at IS NULL'))
+      .rows[0].n,
+  );
+  return count < Number(configured);
+}
+
+/** Shared frozen quote + VM + provision-job owner; does not call Wick or run workloads. */
+export async function awardHeldBid(ctx: AppContext, db: PoolClient, request: Row, winner: Row) {
+  if (!(await globalAdmissionAvailable(ctx, db)))
+    throw new HttpError(409, 'The concurrent VM limit is reached.');
+  const requestId = request.id;
+  await db.query(
+    "UPDATE broker_bids SET status=CASE WHEN id=$2 THEN 'won' ELSE 'lost' END WHERE request_id=$1",
+    [requestId, winner.id],
+  );
+  await db.query(
+    "UPDATE broker_holds SET released_at=now(),release_reason='Auction lost' WHERE bid_id IN(SELECT id FROM broker_bids WHERE request_id=$1 AND id<>$2) AND released_at IS NULL",
+    [requestId, winner.id],
+  );
+  const catalog = request.catalog_snapshot;
+  const vmId = randomUUID();
+  const config = ctx.config as unknown as Record<string, unknown>;
+  const createInput = {
+    organizationId: catalog.organizationId || config.wickOrganizationId || 'fixture-organization',
+    groupId: catalog.groupId || config.wickGroupId || 'fixture-group',
+    name: `${config.environmentNamePrefix || 'wick-broker'}-${vmId.slice(0, 8)}`,
+    provider: catalog.provider,
+    profile: catalog.profile,
+    region: catalog.region,
+    ...(catalog.providerKeyId ? { providerKeyId: catalog.providerKeyId } : {}),
+    ...(ctx.wick.mode === 'real'
+      ? { maximumPriceMicrosPerSecond: catalog.rateMicrosPerSecond }
+      : {}),
+    ttlSeconds: request.duration_minutes * 60,
+    visibility: 'private',
+  };
+  if (
+    ctx.wick.mode === 'real' &&
+    ((!catalog.organizationId && !config.wickOrganizationId) ||
+      (!catalog.groupId && !config.wickGroupId))
+  )
+    throw new HttpError(
+      503,
+      'Real Wick organization and group must be configured before awarding.',
+    );
+  await db.query(
+    `INSERT INTO broker_vms(id,request_id,buyer_id,provider_id,bid_id,create_key,create_input,catalog_snapshot,quote_snapshot)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+    [
+      vmId,
+      requestId,
+      request.buyer_id,
+      winner.provider_id,
+      winner.id,
+      `broker-v1:${vmId}`,
+      createInput,
+      catalog,
+      {
+        totalPriceCents: winner.total_price_cents,
+        currency: 'USD',
+        feeCents: 0,
+        offering: winner.offering_snapshot,
+        acceptedAt: isoDate(winner.created_at),
+        ...(winner.offering_snapshot.pricing ? { pricing: winner.offering_snapshot.pricing } : {}),
+      },
+    ],
+  );
+  await db.query("UPDATE broker_requests SET status='provisioning',winning_bid_id=$2 WHERE id=$1", [
+    requestId,
+    winner.id,
+  ]);
+  await activity(
+    db,
+    winner.provider_id,
+    requestId,
+    'awarded',
+    request.negotiation_intent_id
+      ? 'Buyer explicitly accepted the reviewed provider and fixed total. Quote and offering revision frozen.'
+      : 'Lowest eligible fixed-price offer won. Quote and offering revision frozen.',
+  );
+  await enqueue(ctx, db, QUEUES.provision, { vmId });
+  return { vmId, winningBidId: winner.id };
+}
+
 function isoDate(value: unknown) {
   return new Date(value as string).toISOString();
 }
@@ -432,7 +484,8 @@ export async function proposeBid(ctx: AppContext, actor: Actor, requestId: strin
       region: request.region,
     },
     policy: { ...provider.policy, minimumPriceCents },
-    availableCapacity: Math.max(0, provider.total_capacity - held),
+    availableCapacity: availableForBids(provider.total_capacity, held, provider.policy),
+    suggestedTotalPriceCents: Math.max(minimumPriceCents, provider.policy.basePriceCents),
     catalog,
   });
   if (proposal.decision === 'bid') {
