@@ -6,6 +6,7 @@ import type {
   SupplierPolicy,
   OfferingProposal,
 } from '../../shared/types.js';
+import type { MusePricedCandidate } from '../../shared/muse-contracts.js';
 export interface CreateEnvironmentInput {
   organizationId: string;
   groupId: string;
@@ -87,7 +88,38 @@ export interface MuseAdapter {
   translate(
     description: string,
     catalog: CatalogItem[],
-  ): Promise<{ proposal: Translation; receipt: Receipt; mode: 'fixture' | 'real' }>;
+  ): Promise<{
+    proposal: Translation & { maxPriceCents?: number };
+    receipt: Receipt;
+    mode: 'fixture' | 'real';
+  }>;
+  proposeCapacityPolicy(input: {
+    strategy: string;
+    policy: SupplierPolicy;
+    capacity: { total: number; held: number; available: number };
+    catalogIds: string[];
+  }): Promise<{
+    policy: SupplierPolicy;
+    receipt: Receipt;
+    mode: 'fixture' | 'real';
+    modelCalled: boolean;
+  }>;
+  selectCounteroffers(input: {
+    requirements: {
+      requirements: import('../../shared/types.js').Requirements;
+      region: string;
+      durationMinutes: number;
+      maxPriceCents: number;
+    };
+    policy: SupplierPolicy;
+    capacity: { total: number; held: number; available: number };
+    candidates: MusePricedCandidate[];
+  }): Promise<{
+    selections: { candidateId: string; rationale: string }[];
+    receipt: Receipt;
+    mode: 'fixture' | 'real';
+    modelCalled: boolean;
+  }>;
   proposeBid(input: {
     request: {
       description: string;
@@ -100,10 +132,17 @@ export interface MuseAdapter {
     policy: SupplierPolicy;
     availableCapacity: number;
     catalog: CatalogItem[];
+    suggestedTotalPriceCents?: number;
   }): Promise<BidProposal>;
   proposeOfferings(input: {
     demand: unknown[];
     catalog: CatalogItem[];
     policy: SupplierPolicy;
+    pricedCandidates?: {
+      id: string;
+      catalogId: string;
+      durationMinutes: number;
+      totalPriceCents: number;
+    }[];
   }): Promise<{ proposals: OfferingProposal[]; receipt: Receipt; mode: 'fixture' | 'real' }>;
 }

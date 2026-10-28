@@ -235,6 +235,7 @@ describe('real Meta structured-output contract', () => {
     });
     expect(body.messages).toHaveLength(2);
     expect(body.max_completion_tokens).toBe(1600);
+    expect(body.reasoning_effort).toBe('low');
     expect(result.mode).toBe('real');
     expect(result.proposal.requirements).toEqual({ cpu: 2, memoryGb: 4 });
     expect(fetcher).toHaveBeenCalledTimes(1);
@@ -259,7 +260,6 @@ describe('real Meta structured-output contract', () => {
   it('ignores extraneous private policy fields and does not share other supplier information', async () => {
     const { fetcher, adapter } = realAdapter({
       decision: 'bid',
-      totalPriceCents: 70,
       catalogId: 'small',
     });
     await adapter.proposeBid({
@@ -314,7 +314,6 @@ describe('real Meta structured-output contract', () => {
   it('never calls Meta for a deterministic capacity decline', async () => {
     const { adapter, fetcher } = realAdapter({
       decision: 'bid',
-      totalPriceCents: 65,
       catalogId: 'small',
     });
     const result = await adapter.proposeBid({ ...bidInput(), availableCapacity: 0 });
@@ -328,7 +327,6 @@ describe('real Meta structured-output contract', () => {
       (
         await realAdapter({
           decision: 'bid',
-          totalPriceCents: 65,
           catalogId: 'small',
         }).adapter.proposeBid(bidInput())
       ).modelCalled,
@@ -337,7 +335,6 @@ describe('real Meta structured-output contract', () => {
       (
         await realAdapter({
           decision: 'decline',
-          totalPriceCents: null,
           catalogId: null,
         }).adapter.proposeBid(bidInput())
       ).modelCalled,
@@ -347,10 +344,9 @@ describe('real Meta structured-output contract', () => {
     const { adapter, fetcher } = realAdapter({
       proposals: [
         {
-          catalogId: 'large',
+          candidateId: 'large:60',
           name: 'Larger environment',
           description: 'Existing approved larger configuration.',
-          priceCents: 70,
         },
       ],
     });
@@ -376,10 +372,9 @@ describe('real Meta structured-output contract', () => {
     const { adapter } = realAdapter({
       proposals: [
         {
-          catalogId: 'small',
+          candidateId: 'small:60',
           name: 'Too small',
           description: 'Existing but insufficient configuration.',
-          priceCents: 65,
         },
       ],
     });
@@ -395,10 +390,9 @@ describe('real Meta structured-output contract', () => {
   });
   it('rejects generated setup fields and duplicate offerings', async () => {
     const suggestion = {
-      catalogId: 'large',
+      candidateId: 'large:60',
       name: 'Larger environment',
       description: 'Approved.',
-      priceCents: 65,
     };
     const input = {
       demand: [{ region: 'us-east', durationMinutes: 60, requirements: { cpu: 8, memoryGb: 16 } }],
@@ -486,6 +480,7 @@ describe('bounded failures without fixture fallback', () => {
   it('rejects truncated completions, refusals, malformed JSON and oversized envelopes', async () => {
     const responses = [
       completion(translateOutput, { finish_reason: 'length' }),
+      completion(translateOutput, { finish_reason: undefined }),
       completion(translateOutput, { message: { refusal: 'refused', content: null } }),
       new Response('{invalid json'),
       new Response('x'.repeat(65_537)),
