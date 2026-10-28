@@ -5,4 +5,3 @@ CREATE INDEX IF NOT EXISTS broker_offerings_active_price_idx
 CREATE INDEX IF NOT EXISTS broker_providers_auto_bid_idx
   ON broker_providers(id)
   WHERE policy->>'autoBid'='true';
-
