@@ -301,7 +301,12 @@ test('provider saves capacity and policy, then publishes a reviewed offering', a
     await expect(page.getByText('Policy saved', { exact: true })).toBeVisible();
     const replayedDashboard = await (await page.request.get('/api/provider/dashboard')).json();
     expect(replayedDashboard.policyRevision).toBe(afterApply.policyRevision);
-    expect(replayedDashboard.activity).toEqual(afterApply.activity);
+    // A preceding rental can finish cleanup between these reads. Replay must
+    // preserve policy events, not freeze unrelated background lifecycle events.
+    const policyEvents = (activity: { kind: string }[]) =>
+      activity.filter((event) => event.kind === 'policy_changed');
+    expect(policyEvents(afterApply.activity).length).toBeGreaterThan(0);
+    expect(policyEvents(replayedDashboard.activity)).toEqual(policyEvents(afterApply.activity));
     const policy = replayedDashboard.policy;
     expect(policy.autoBid).toBe(false);
     expect(policy.basePriceCents).toBe(changedPrice);
