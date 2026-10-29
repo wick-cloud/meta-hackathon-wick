@@ -22,6 +22,7 @@ import { registerOpenApi } from './openapi.js';
 import { registerAgreements, startAgreementWorkers } from './agreements/index.js';
 import { registerAgreementBilling } from './agreement-billing.js';
 import { registerDeveloperKeys } from './developer-keys.js';
+import { registerClientReleases } from './client-releases.js';
 export async function buildApp(
   config: Config,
   options: { wrapWick?: (adapter: WickAdapter) => WickAdapter; clientRoot?: string } = {},
@@ -163,6 +164,7 @@ export async function buildApp(
     return { items: (await getCatalog(ctx)).map(publicCatalogView) };
   });
   registerOpenApi(app);
+  registerClientReleases(app);
   await registerMarketplace(app, ctx);
   registerOrders(app, ctx);
   await registerAgreements(app, ctx);
