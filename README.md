@@ -4,6 +4,8 @@ A single-process environment marketplace: describe an environment, review an imm
 
 The permanent **Orders** hub retains every auction and funded scheduled agreement. Seven-day agreements reserve Broker pilot credit and future capacity; customers manually start VMs inside accepted windows. See [Orders and funded agreements](docs/orders-and-agreements.md) for the UI, funding model, API and real-provider enforcement boundary.
 
+**Developer access:** buyers and providers can create separate Broker API keys in **API keys**, then use the [TypeScript SDK, CLI and local MCP server](docs/developer-access.md). The same account, orders, funding and capacity rules apply. Broker keys are independent of Wick service credentials.
+
 Node 24 · TypeScript · Fastify · React/Vite · PostgreSQL · Better Auth · pg-boss · xterm.js.
 
 ## Local start

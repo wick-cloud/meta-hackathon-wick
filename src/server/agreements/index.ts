@@ -42,9 +42,10 @@ export async function registerAgreements(app: FastifyInstance, ctx: AppContext) 
     await ctx.requireActor(request, ['buyer']);
     return previewAgreement(ctx, request.body);
   });
-  app.post('/api/agreements', async (request) =>
-    createAgreement(ctx, (await ctx.requireActor(request, ['buyer'])).id, request.body),
-  );
+  app.post('/api/agreements', async (request) => {
+    const actor = await ctx.requireActor(request, ['buyer']);
+    return createAgreement(ctx, actor.id, request.body, actor.apiKey);
+  });
   app.get('/api/agreements/:id', async (request) =>
     agreementDetail(
       ctx,
@@ -53,22 +54,26 @@ export async function registerAgreements(app: FastifyInstance, ctx: AppContext) 
       (await ctx.requireActor(request, ['buyer'])).id,
     ),
   );
-  app.post('/api/agreements/:id/cancel-unmatched', async (request) =>
-    cancelUnmatched(
+  app.post('/api/agreements/:id/cancel-unmatched', async (request) => {
+    const actor = await ctx.requireActor(request, ['buyer']);
+    return cancelUnmatched(
       ctx,
       uuid((request.params as { id: string }).id),
-      (await ctx.requireActor(request, ['buyer'])).id,
+      actor.id,
       request.body,
-    ),
-  );
-  app.post('/api/agreements/:id/activate', async (request) =>
-    activateAgreement(
+      actor.apiKey,
+    );
+  });
+  app.post('/api/agreements/:id/activate', async (request) => {
+    const actor = await ctx.requireActor(request, ['buyer']);
+    return activateAgreement(
       ctx,
       uuid((request.params as { id: string }).id),
-      (await ctx.requireActor(request, ['buyer'])).id,
+      actor.id,
       request.body,
-    ),
-  );
+      actor.apiKey,
+    );
+  });
   for (const provider of [false, true])
     app.post(
       provider ? '/api/provider/scheduled-offerings/draft' : '/api/agreements/draft',

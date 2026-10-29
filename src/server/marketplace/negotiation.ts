@@ -1,3 +1,4 @@
+import { enforceKeyLimit, recordKeyAction } from '../operations.js';
 import { createHash } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import type { PoolClient } from 'pg';
@@ -251,7 +252,10 @@ export async function createIntent(ctx: AppContext, actor: Actor, body: Row) {
         [actor.id, key, description, desired, flexibility, ctx.wick.mode, sourceId],
       )
     ).rows[0];
-    if (inserted) return intentView(inserted);
+    if (inserted) {
+      await recordKeyAction(db, actor, 'intents.create', key, inserted.id);
+      return intentView(inserted);
+    }
     const existing = (
       await db.query('SELECT * FROM broker_intents WHERE buyer_id=$1 AND operation_key=$2', [
         actor.id,
@@ -659,6 +663,7 @@ export async function acceptCounteroffer(
 ) {
   const key = operationKey(body?.operationKey);
   const initial = await ownedIntent(ctx, actor, id);
+  enforceKeyLimit(actor.apiKey, 'maxAuctionCents', initial.flexibility.hardMaxPriceCents);
   uuid(offerId);
   return transaction(ctx.pool, async (db) => {
     await db.query("SELECT pg_advisory_xact_lock(hashtext('broker-global-vm-admission'))");
@@ -800,7 +805,7 @@ export async function acceptCounteroffer(
     const pricing = ctx.wick.mode === 'real' ? managedPricing(catalog.item) : undefined;
     const request = (
       await db.query(
-        `INSERT INTO broker_requests(buyer_id,description,catalog_id,catalog_snapshot,region,duration_minutes,max_price_cents,requirements,prior_request_id,negotiation_intent_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+        `INSERT INTO broker_requests(buyer_id,description,catalog_id,catalog_snapshot,region,duration_minutes,max_price_cents,requirements,prior_request_id,negotiation_intent_id,source_api_key_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
         [
           actor.id,
           intent.description,
@@ -817,6 +822,7 @@ export async function acceptCounteroffer(
           requirements(reviewedAfter),
           source?.id ?? null,
           intent.id,
+          actor.apiKey?.id ?? null,
         ],
       )
     ).rows[0];
@@ -841,6 +847,7 @@ export async function acceptCounteroffer(
     ).rows[0];
     await db.query('INSERT INTO broker_holds(bid_id,provider_id) VALUES($1,$2)', [bid.id, p.id]);
     const awarded = await awardHeldBid(ctx, db, request, bid);
+    await recordKeyAction(db, actor, 'intents.accept', key, request.id);
     await activity(
       db,
       p.id,

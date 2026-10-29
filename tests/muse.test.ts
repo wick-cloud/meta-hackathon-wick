@@ -655,3 +655,10 @@ describe('credential redaction', () => {
       expect(result).not.toContain(secret);
   });
 });
+
+it('redacts standalone Broker credentials before a model call', () => {
+  const token = `wbk_22222222-2222-4222-8222-222222222222.${'x'.repeat(43)}`;
+  expect(redactMuseText(`Please configure ${token}`)).toBe(
+    'Please configure [redacted credential]',
+  );
+});

@@ -8,6 +8,9 @@ export const iso = (value: unknown): string | null =>
 export const requestView = (r: Row) => ({
   id: r.id,
   buyerId: r.buyer_id,
+  ...(r.source_api_key_id
+    ? { source: { kind: 'api_key' as const, keyId: r.source_api_key_id } }
+    : {}),
   description: r.description,
   catalogId: r.catalog_id,
   catalogName: r.catalog_snapshot?.name,

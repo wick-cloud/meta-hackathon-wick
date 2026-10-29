@@ -9,6 +9,7 @@ export interface OrderListItem {
   kind: OrderKind;
   reference: string;
   title: string;
+  source?: { kind: 'api_key'; keyId: string };
   status: string;
   auctionStatus?: string;
   vmStatus?: string;

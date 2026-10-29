@@ -126,6 +126,9 @@ export async function agreementDetail(
   return {
     agreement: {
       id: a.id,
+      ...(a.source_api_key_id
+        ? { source: { kind: 'api_key' as const, keyId: a.source_api_key_id } }
+        : {}),
       description: a.description,
       status: a.status,
       targetQuantity: a.target_quantity,

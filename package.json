@@ -8,9 +8,9 @@
   },
   "scripts": {
     "dev": "tsx watch src/server/index.ts",
-    "build": "NODE_ENV=production vite build && tsc -p tsconfig.server.json",
+    "build": "npm run build:app && npm run build:packages",
     "start": "node dist/src/server/index.js",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "npm run build:packages && tsc --noEmit",
     "test": "vitest run",
     "test:db": "vitest run tests/marketplace*.test.ts",
     "test:browser": "playwright test",
@@ -21,7 +21,11 @@
     "format": "prettier --write src scripts tests *.ts *.json",
     "test:recovery": "tsx scripts/verify-recovery.ts",
     "db:migrate:production": "node dist/scripts/migrate.js",
-    "configure:real:production": "node dist/scripts/configure-real.js"
+    "configure:real:production": "node dist/scripts/configure-real.js",
+    "build:app": "NODE_ENV=production vite build && tsc -p tsconfig.server.json",
+    "build:packages": "npm run build --workspace @wick-cloud/broker-sdk && npm run build --workspace @wick-cloud/broker-cli && npm run build --workspace @wick-cloud/broker-mcp",
+    "pretest": "npm run build:packages",
+    "test:developer-e2e": "npm run build:packages && tsx tests/developer-access-e2e.ts"
   },
   "dependencies": {
     "@fastify/middie": "^9.0.3",
@@ -55,6 +59,13 @@
     "tsx": "^4.20.6",
     "typescript": "^5.9.3",
     "vite": "^7.2.2",
-    "vitest": "^5.0.5"
-  }
+    "vitest": "^5.0.5",
+    "ajv": "^8.17.1",
+    "ajv-formats": "^3.0.1"
+  },
+  "workspaces": [
+    "packages/sdk",
+    "packages/cli",
+    "packages/mcp"
+  ]
 }

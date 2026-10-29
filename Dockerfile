@@ -1,17 +1,18 @@
 FROM node:24-bookworm-slim AS build
 WORKDIR /app
 COPY package*.json ./
-RUN npm ci
+RUN npm ci --workspaces=false
 COPY tsconfig*.json vite.config.ts index.html ./
 COPY src ./src
 COPY scripts ./scripts
-RUN npm run build
+COPY packages/sdk/src/contracts.ts ./packages/sdk/src/contracts.ts
+RUN npm run build:app
 
 FROM node:24-bookworm-slim AS runtime
 ENV NODE_ENV=production HOST=0.0.0.0 PORT=3000
 WORKDIR /app
 COPY package*.json ./
-RUN npm ci --omit=dev && npm cache clean --force
+RUN npm ci --omit=dev --workspaces=false && npm cache clean --force
 COPY --from=build /app/dist ./dist
 COPY migrations ./migrations
 USER node

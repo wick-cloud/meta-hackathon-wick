@@ -179,13 +179,27 @@ export class ApiError extends Error {
 }
 
 export async function api<T>(url: string, options: RequestInit = {}): Promise<T> {
+  const headers = new Headers(options.headers);
+  if (options.body) headers.set('Content-Type', 'application/json');
+  if (
+    !['GET', 'HEAD', 'OPTIONS'].includes((options.method ?? 'GET').toUpperCase()) &&
+    !headers.has('Idempotency-Key')
+  ) {
+    let operationKey: string | undefined;
+    if (typeof options.body === 'string') {
+      try {
+        const b = JSON.parse(options.body);
+        if (typeof b?.operationKey === 'string') operationKey = b.operationKey;
+      } catch {
+        /* server validates malformed JSON */
+      }
+    }
+    headers.set('Idempotency-Key', operationKey ?? crypto.randomUUID());
+  }
   const response = await fetch(url, {
     credentials: 'same-origin',
     ...options,
-    headers: {
-      ...(options.body ? { 'Content-Type': 'application/json' } : {}),
-      ...options.headers,
-    },
+    headers,
   });
   const data = await response.json().catch(() => null);
   if (!response.ok)

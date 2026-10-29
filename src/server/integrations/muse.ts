@@ -151,7 +151,7 @@ export function redactMuseText(value: string): string {
       '$1=[redacted]',
     )
     .replace(
-      /\b(b10_[A-Za-z0-9_-]{8,}(?:\.[A-Za-z0-9_-]{12,})?|sk-[A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0-9_]{12,}|AKIA[A-Z0-9]{16})\b/g,
+      /\b(wbk_[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{16,}|b10_[A-Za-z0-9_-]{8,}(?:\.[A-Za-z0-9_-]{12,})?|sk-[A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0-9_]{12,}|AKIA[A-Z0-9]{16})\b/g,
       '[redacted credential]',
     )
     .replace(/(https?:\/\/)[^\s/@]+:[^\s/@]+@/gi, '$1[redacted]@');

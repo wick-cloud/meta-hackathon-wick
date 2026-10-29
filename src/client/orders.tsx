@@ -258,6 +258,11 @@ export function Orders({ search }: { search: string }) {
                               <span>
                                 {item.kind === 'agreement' ? '7-day agreement' : 'Instant auction'}
                               </span>
+                              {item.source?.kind === 'api_key' && (
+                                <span title={`Created through Broker API key ${item.source.keyId}`}>
+                                  API
+                                </span>
+                              )}
                               <code title={`Created ${dateTime(item.createdAt)}`}>
                                 {item.reference}
                               </code>
