@@ -311,14 +311,80 @@ test('Provider schedule separates location from clock and requires publication r
 
 test('Orders mobile layout keeps overflow inside the table', async ({ page }) => {
   await fixture(page, 'buyer', (path) =>
-    path === '/api/orders' ? { items: [], serverNow: iso(0) } : undefined,
+    path === '/api/orders'
+      ? {
+          serverNow: iso(0),
+          items: [
+            {
+              id,
+              key: `agreement:${id}`,
+              kind: 'agreement',
+              reference: 'AG-11111111',
+              title: 'Nightly development fleet with reserved continuation',
+              status: 'approved',
+              cleanupPending: false,
+              createdAt: iso(-60000),
+              closesAt: null,
+              expiresAt: iso(7 * 86400000),
+              requestedQuantity: 20,
+              approvedQuantity: 12,
+              runningQuantity: 0,
+              bidCount: 0,
+              amount: {
+                label: 'reserved',
+                amountCents: 14000,
+                reservedCents: 14000,
+                committedCents: 8400,
+              },
+              nextWindow: { startsAt: iso(3600000), endsAt: iso(28800000), timeZone: 'UTC' },
+              detailUrl: `/orders/${id}`,
+            },
+            {
+              id,
+              key: `auction:${id}`,
+              kind: 'auction',
+              reference: 'AU-11111111',
+              title: 'Completed instant environment with a frozen accepted quote',
+              status: 'completed',
+              auctionStatus: 'ready',
+              vmStatus: 'terminated',
+              cleanupPending: false,
+              createdAt: iso(-120000),
+              closesAt: iso(-90000),
+              expiresAt: iso(-1000),
+              requestedQuantity: 1,
+              approvedQuantity: 1,
+              runningQuantity: 0,
+              bidCount: 4,
+              amount: { label: 'accepted', amountCents: 120 },
+              detailUrl: `/requests/${id}`,
+              vmUrl: '/vms/mobile-fixture-vm',
+            },
+          ],
+        }
+      : undefined,
   );
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/orders');
   await expect(page.getByRole('heading', { name: 'Every order. One place.' })).toBeVisible();
+  await expect(page.locator('.market-table tbody tr')).toHaveCount(2);
+  await expect(page.getByRole('columnheader', { name: 'Open', exact: true })).toHaveCount(1);
+  const wrapper = page.locator('.market-table-scroll');
+  const widths = await wrapper.evaluate((element) => ({
+    visible: element.clientWidth,
+    scroll: element.scrollWidth,
+    table: element.querySelector('table')!.getBoundingClientRect().width,
+  }));
+  expect(widths.table).toBeGreaterThan(widths.visible);
+  expect(widths.scroll).toBeGreaterThan(widths.visible);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
     true,
   );
+  await wrapper.evaluate((element) => {
+    element.scrollLeft = element.scrollWidth;
+  });
+  expect(await wrapper.evaluate((element) => element.scrollLeft)).toBeGreaterThan(0);
+  expect(await page.evaluate(() => window.scrollX)).toBe(0);
 });
 
 test('Orders distinguishes the maximum reservation ceiling from actual credit held', async ({
