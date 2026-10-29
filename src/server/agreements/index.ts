@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { HttpError, type AppContext } from '../context.js';
 import { shortText, uuid } from '../marketplace/data.js';
 import { agreementDetail } from './data.js';
-import { createAgreement, cancelUnmatched } from './service.js';
+import { createAgreement, cancelUnmatched, previewAgreement } from './service.js';
 import { activateAgreement } from './activation.js';
 import { registerCreditRoutes } from './credits.js';
 import { registerProviderAgreementRoutes } from './provider.js';
@@ -19,12 +19,16 @@ export {
   assertProviderFutureCapacity,
   assertGlobalFutureCapacity,
 } from './calendar.js';
-export { createAgreement, cancelUnmatched } from './service.js';
+export { createAgreement, cancelUnmatched, previewAgreement } from './service.js';
 export { matchAgreement } from './matching.js';
 
 export async function registerAgreements(app: FastifyInstance, ctx: AppContext) {
   await registerCreditRoutes(app, ctx);
   await registerProviderAgreementRoutes(app, ctx);
+  app.post('/api/agreements/preview', async (request) => {
+    await ctx.requireActor(request, ['buyer']);
+    return previewAgreement(ctx, request.body);
+  });
   app.post('/api/agreements', async (request) =>
     createAgreement(ctx, (await ctx.requireActor(request, ['buyer'])).id, request.body),
   );

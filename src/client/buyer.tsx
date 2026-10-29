@@ -200,9 +200,9 @@ export function NewEnvironment() {
   return (
     <>
       <PageHeader
-        eyebrow="A FRESH PLACE TO BUILD"
-        title="Your next environment starts here."
-        description="Tell us what you need. We’ll find the right fit, at a clear price."
+        eyebrow="CREATE AN ORDER"
+        title="New order"
+        description="Choose an instant auction or reserve scheduled capacity."
       />
       <div className="market-mode-picker" aria-label="Choose order type">
         <div className="market-mode selected">
@@ -229,8 +229,8 @@ export function NewEnvironment() {
               <SquareTerminal size={21} />
             </div>
             <div>
-              <h2>What do you have in mind?</h2>
-              <p>A few details are all it takes to get started.</p>
+              <h2>Environment requirements</h2>
+              <p>Resources, region and rental duration.</p>
             </div>
           </div>
           <label className="field prompt-field" htmlFor="environment-description">
@@ -238,7 +238,7 @@ export function NewEnvironment() {
             <textarea
               id="environment-description"
               maxLength={4000}
-              rows={6}
+              rows={4}
               placeholder="I need a small Linux environment with 2 vCPUs and 4 GB of memory for 30 minutes…"
               value={description}
               onChange={(e) => changeDescription(e.target.value)}
@@ -319,85 +319,36 @@ export function NewEnvironment() {
             Only your environment requirements go to Muse. Never credentials or terminal contents.
           </div>
         </section>
-        <aside className="new-side">
-          <div className="environment-illustration">
-            <div className="illustration-caption">
-              <span className="green-dot" />A SPACE OF YOUR OWN
-            </div>
-            <div className="server-stack">
-              <div className="server-layer back">
-                <i />
-                <i />
-                <span />
-              </div>
-              <div className="server-layer middle">
-                <i />
-                <i />
-                <span />
-              </div>
-              <div className="server-layer front">
-                <div className="server-logo">w</div>
-                <div className="server-leds">
-                  <i />
-                  <i />
-                  <i />
-                </div>
-                <span className="server-line" />
-              </div>
-              <div className="server-orbit orbit-one" />
-              <div className="server-orbit orbit-two" />
-              <span className="floating-chip">
-                <LockKeyhole size={12} />
-                Private
-              </span>
-            </div>
-            <h3>
-              Just the environment.
-              <br />
-              The rest is yours.
-            </h3>
-            <p>Open a browser terminal and run your own commands when you’re ready.</p>
+        <aside className="card market-panel market-sticky">
+          <div className="section-heading">
+            <h2>Instant auction</h2>
+            <Clock3 size={17} />
           </div>
-          <div className="muse-explainer">
-            <span className="icon-tile violet">
-              <Sparkles size={19} />
-            </span>
-            <div>
-              <h3>A thoughtful starting point</h3>
-              <p>
-                Muse matches your description to approved configurations. Every choice stays
-                editable.
-              </p>
-              <span className="tiny-label">
-                {modes.muse === 'fixture' ? 'Fixture mode · no model call' : 'muse-wonder-1.0'}
-              </span>
-            </div>
-          </div>
+          <DetailRow label="Auction window">30 seconds</DetailRow>
+          <DetailRow label="Maximum total">{money(budget)}</DetailRow>
+          <DetailRow label="Buyer fee">$0</DetailRow>
+          <div className="market-divider" />
+          <h3>From review to terminal</h3>
+          <ol className="market-explain-list">
+            <li>Review your configuration, duration and maximum price.</li>
+            <li>Providers bid for 30 seconds. The lowest eligible offer wins.</li>
+            <li>Open your VM and run your own commands.</li>
+          </ol>
+          <p className="field-hint">
+            The rental clock starts when Wick admits provisioning, including setup time.
+          </p>
+          <div className="market-divider" />
+          <h3>
+            <Sparkles size={15} /> Muse drafts
+          </h3>
+          <p className="market-copy">
+            Muse suggests an approved configuration. You can edit every choice before submitting.
+          </p>
+          <span className="quiet-badge">
+            {modes.muse === 'fixture' ? 'Fixture mode · no model call' : 'Meta Muse API enabled'}
+          </span>
         </aside>
       </div>
-      <section className="how-it-works">
-        <div className="section-heading">
-          <h2>A clear path from idea to terminal</h2>
-          <span>Three small steps. One ready environment.</span>
-        </div>
-        <div className="how-grid">
-          <div>
-            <span className="how-number">01</span>
-            <h3>Make it your own</h3>
-            <p>Review the configuration, exact rental duration, and maximum total price.</p>
-          </div>
-          <div>
-            <span className="how-number">02</span>
-            <h3>Let providers compete</h3>
-            <p>A 30-second auction finds the lowest eligible total offer automatically.</p>
-          </div>
-          <div>
-            <span className="how-number">03</span>
-            <h3>Open your terminal</h3>
-            <p>Connect in your browser. Your rental clock begins when Wick admits provisioning.</p>
-          </div>
-        </div>
-      </section>
       {!first && (
         <ErrorBox error="No approved configurations are available. Ask an administrator to approve a supported configuration." />
       )}
@@ -422,7 +373,7 @@ export function RequestReview() {
   if (!draft)
     return (
       <>
-        <PageHeader title="Let’s start with an environment." />
+        <PageHeader title="Review instant order" />
         <EmptyState
           icon={<SquareTerminal size={26} />}
           title="No request to review yet"
@@ -465,7 +416,7 @@ export function RequestReview() {
         Back to description
       </Link>
       <PageHeader
-        title="A good fit. A few final details."
+        title="Review instant order"
         description="Review your environment before providers start bidding."
       />
       <Steps active={1} />
@@ -778,16 +729,16 @@ export function AuctionPage({ id }: { id: string }) {
         eyebrow="REQUEST MATCHING"
         title={
           open
-            ? 'A little competition. A better fit.'
+            ? 'Live auction'
             : request.status === 'ready'
-              ? 'Your environment is ready.'
+              ? 'Environment ready'
               : request.status === 'provisioning'
-                ? 'A match made. Getting you ready.'
+                ? 'Provisioning environment'
                 : request.status === 'no_offers'
-                  ? 'No match this time.'
+                  ? 'No offers received'
                   : request.status === 'cancelled'
-                    ? 'This auction was cancelled.'
-                    : 'Provisioning couldn’t finish.'
+                    ? 'Auction cancelled'
+                    : 'Environment failed to start'
         }
         description={
           open
@@ -1012,8 +963,8 @@ export function MyVMs() {
     <>
       <PageHeader
         eyebrow="YOUR WORKSPACE"
-        title="Room to make things happen."
-        description="Keep an eye on your environments, from first boot to final minute."
+        title="Environments"
+        description="Manage your VMs, terminals and rental deadlines."
       >
         <Link href="/new" className="button primary">
           <Plus size={16} />
@@ -1421,8 +1372,8 @@ export function Invoices() {
   return (
     <>
       <PageHeader
-        eyebrow="CLEAR FROM THE START"
-        title="Every rental, accounted for."
+        eyebrow="BUYER BILLING"
+        title="Billing"
         description="Instant rental invoices and scheduled capacity charges, with no added buyer fee."
       >
         {items.length > 0 && (

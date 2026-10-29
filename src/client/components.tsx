@@ -57,19 +57,34 @@ export function useResource<T>(path: string, interval = 0) {
       data: T | null;
       error: string;
       loading: boolean;
-    }>({ path, data: null, error: '', loading: true }),
+      refreshing: boolean;
+      updatedAt: number;
+    }>({ path, data: null, error: '', loading: true, refreshing: false, updatedAt: 0 }),
     [version, setVersion] = useState(0);
   useEffect(() => {
     let cancelled = false,
       inFlight = false;
     const controller = new AbortController();
-    setState((old) => (old.path === path ? old : { path, data: null, error: '', loading: true }));
+    setState((old) =>
+      old.path === path
+        ? old
+        : { path, data: null, error: '', loading: true, refreshing: false, updatedAt: 0 },
+    );
     const fetchData = async () => {
       if (inFlight) return;
       inFlight = true;
+      setState((old) => (old.path === path ? { ...old, refreshing: true } : old));
       try {
         const data = await api<T>(path, { signal: controller.signal });
-        if (!cancelled) setState({ path, data, error: '', loading: false });
+        if (!cancelled)
+          setState({
+            path,
+            data,
+            error: '',
+            loading: false,
+            refreshing: false,
+            updatedAt: Date.now(),
+          });
       } catch (err) {
         if (!cancelled)
           setState((old) => ({
@@ -77,6 +92,8 @@ export function useResource<T>(path: string, interval = 0) {
             data: old.path === path ? old.data : null,
             error: err instanceof Error ? err.message : 'Unable to load this page.',
             loading: false,
+            refreshing: false,
+            updatedAt: old.path === path ? old.updatedAt : 0,
           }));
       } finally {
         inFlight = false;
@@ -101,7 +118,15 @@ export function useResource<T>(path: string, interval = 0) {
   }, [path, interval, version]);
   return state.path === path
     ? { ...state, reload: () => setVersion((v) => v + 1) }
-    : { path, data: null, error: '', loading: true, reload: () => setVersion((v) => v + 1) };
+    : {
+        path,
+        data: null,
+        error: '',
+        loading: true,
+        refreshing: false,
+        updatedAt: 0,
+        reload: () => setVersion((v) => v + 1),
+      };
 }
 export function usePagedResource<T extends { id: string }>(path: string, interval = 0) {
   const first = useResource<{ items: T[]; nextCursor?: string }>(path, interval);

@@ -210,7 +210,7 @@ test('provider reviews exact commission and historical earnings without buyer ac
     });
   });
   await page.getByRole('link', { name: 'Earnings', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Your share, clearly.' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Earnings', exact: true })).toBeVisible();
   const legacy = page.locator('[data-invoice-id="legacy-one"]');
   await expect(legacy.getByText('Not assessed', { exact: true })).toHaveCount(2);
   await expect(legacy.getByText('Historical · unchanged')).toBeVisible();

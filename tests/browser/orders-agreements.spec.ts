@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { agreementEstimate, agreementWindows } from '../../src/shared/schedule';
 
 // UI contract fixtures intercept every API request. These tests cannot allocate compute,
 // call Muse, read credentials or change a running Broker database.
@@ -88,7 +89,8 @@ async function fixture(page: Page, role: 'buyer' | 'provider' | 'admin', handler
       path = new URL(req.url()).pathname,
       method = req.method();
     const body = req.postDataJSON();
-    if (method !== 'GET') writes.push({ path, body });
+    // Schedule preview is an authenticated read-only calculation, not an order mutation.
+    if (method !== 'GET' && path !== '/api/agreements/preview') writes.push({ path, body });
     const common: Record<string, unknown> = {
       '/api/me': {
         user: { id: 'user-one', name: 'Fixture User', email: `${role}@fixture.invalid`, role },
@@ -115,7 +117,24 @@ async function fixture(page: Page, role: 'buyer' | 'provider' | 'admin', handler
         activity: [],
       },
     };
-    const response = handler(path, method, body) ?? common[path];
+    let response = handler(path, method, body) ?? common[path];
+    if (response === undefined && path === '/api/agreements/preview' && method === 'POST') {
+      try {
+        const quote = agreementEstimate(body);
+        response = {
+          maxAmountCents: quote.maximum,
+          minimumAmountCents: quote.minimum,
+          windows: agreementWindows(body),
+          timeZone: body.timeZone,
+        };
+      } catch (error) {
+        await route.fulfill({
+          status: 400,
+          json: { error: error instanceof Error ? error.message : 'Invalid schedule.' },
+        });
+        return;
+      }
+    }
     if (response === undefined) {
       await route.fulfill({ status: 500, json: { error: `Unmocked UI API: ${method} ${path}` } });
       return;
@@ -188,6 +207,8 @@ test('Orders preserves server order across identical source IDs and URL filters;
   await expect(page).toHaveURL(/cursor=opaque-cursor/);
   await page.goBack();
   await expect(page).not.toHaveURL(/cursor=/);
+  await page.getByRole('button', { name: 'Clear filters', exact: true }).click();
+  await expect(page).toHaveURL(/\/orders$/);
   await page.getByRole('link', { name: 'Scheduled first', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Seven-day fixture fleet' })).toBeVisible();
   expect(writes).toHaveLength(0);
@@ -227,13 +248,12 @@ test('Agreement review reserves the full target maximum and does not start VMs',
   );
   await page.goto('/agreements/new');
   await page.getByLabel('Agreement name', { exact: true }).fill('Nightly fleet');
+  await page.getByLabel('Schedule time zone (IANA)', { exact: true }).fill('UTC');
   await page.getByLabel('Target slots per window', { exact: true }).fill('20');
   await page.getByLabel('Minimum approved per window', { exact: true }).fill('12');
   await page.getByLabel('Reserve a normal-rate continuation').check();
   await page.getByRole('button', { name: 'Review agreement', exact: true }).click();
-  await expect(
-    page.getByRole('heading', { name: 'Review your seven-day agreement.' }),
-  ).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Review capacity agreement' })).toBeVisible();
   await expect(page.getByText('$140.00 maximum', { exact: true })).toBeVisible();
   expect(writes).toHaveLength(0);
   await page.getByLabel('I accept the booked-capacity charges', { exact: false }).check();
@@ -243,6 +263,7 @@ test('Agreement review reserves the full target maximum and does not start VMs',
   expect(writes[0].body).toMatchObject({
     minimumQuantity: 12,
     targetQuantity: 20,
+    maxReservationCents: 14000,
     continuation: { enabled: true, until: '08:00', maxRateCentsPerHour: 20 },
   });
   expect(writes[0].body.operationKey).toBeTruthy();
@@ -366,7 +387,7 @@ test('Orders mobile layout keeps overflow inside the table', async ({ page }) =>
   );
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/orders');
-  await expect(page.getByRole('heading', { name: 'Every order. One place.' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Orders' })).toBeVisible();
   await expect(page.locator('.market-table tbody tr')).toHaveCount(2);
   await expect(page.getByRole('columnheader', { name: 'Open', exact: true })).toHaveCount(1);
   const wrapper = page.locator('.market-table-scroll');
@@ -864,4 +885,158 @@ test('Provider capacity calendar orders loaded windows by start time then ID and
   await expect(
     page.getByText('2 runtime slots held · idle slots remain paid', { exact: true }),
   ).toHaveCount(3);
+});
+
+test('Environment mode explains fixture compute and Muse honestly and closes on Escape', async ({
+  page,
+}) => {
+  const writes = await fixture(page, 'buyer', (path) =>
+    path === '/api/orders' ? { items: [], serverNow: iso(0) } : undefined,
+  );
+  await page.goto('/orders');
+  const mode = page.locator('summary[aria-label="Environment mode"]');
+  await expect(mode).toContainText('Demo environment');
+  await expect(page.getByText('Simulated environments', { exact: true })).not.toBeVisible();
+  await mode.click();
+  await expect(page.getByText('Simulated environments', { exact: true })).toBeVisible();
+  await expect(
+    page.getByText('VMs and terminals use fixtures. No real compute is allocated.', {
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(page.getByText('Muse fixture · no model calls', { exact: true })).toBeVisible();
+  await expect(
+    page.getByText('Pilot pricing · no payment collected', { exact: true }),
+  ).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.environment-status')).not.toHaveAttribute('open');
+  await expect(mode).toBeFocused();
+  expect(writes).toHaveLength(0);
+});
+
+test('Mobile navigation traps focus, locks background and restores the toggle on Escape', async ({
+  page,
+}) => {
+  const writes = await fixture(page, 'buyer', (path) =>
+    path === '/api/orders' ? { items: [], serverNow: iso(0) } : undefined,
+  );
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/orders');
+  await expect(page.getByRole('heading', { name: 'Orders', exact: true })).toBeVisible();
+  const toggle = page.getByRole('button', { name: 'Open navigation', exact: true });
+  const originalOverflow = await page.evaluate(() => document.body.style.overflow);
+  await expect(page.locator('.sidebar')).toHaveCSS('visibility', 'hidden');
+  await toggle.click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'Close navigation', exact: true })).toBeFocused();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.locator('.main-shell')).toHaveAttribute('inert');
+  expect(await page.evaluate(() => document.body.style.overflow)).toBe('hidden');
+  const focusable = dialog.locator('a[href], button:not([disabled])');
+  await focusable.last().focus();
+  await page.keyboard.press('Tab');
+  await expect(focusable.first()).toBeFocused();
+  await page.keyboard.press('Shift+Tab');
+  await expect(focusable.last()).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(page.locator('.main-shell')).not.toHaveAttribute('inert');
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await expect(toggle).toBeFocused();
+  expect(await page.evaluate(() => document.body.style.overflow)).toBe(originalOverflow);
+  await expect(page.locator('.sidebar')).toHaveCSS('visibility', 'hidden');
+  await page.keyboard.press('Tab');
+  expect(await page.evaluate(() => document.activeElement?.closest('.sidebar') === null)).toBe(
+    true,
+  );
+  expect(writes).toHaveLength(0);
+});
+
+test('Funding estimate rounds each partial-hour VM window before target and minimum totals', async ({
+  page,
+}) => {
+  const writes = await fixture(page, 'buyer', () => undefined);
+  await page.goto('/agreements/new');
+  await page.getByLabel('Agreement name', { exact: true }).fill('Partial-hour capacity');
+  await page.getByLabel('Schedule time zone (IANA)', { exact: true }).fill('UTC');
+  await page.getByLabel('First local date', { exact: true }).fill('2026-10-29');
+  await page.getByLabel('Target slots per window', { exact: true }).fill('20');
+  await page.getByLabel('Minimum approved per window', { exact: true }).fill('12');
+  await page.getByLabel('Window opens', { exact: true }).fill('00:00');
+  await page.getByLabel('Discount ends', { exact: true }).fill('00:17');
+  await page.getByLabel('Maximum discounted rate (USD / VM-hour)', { exact: true }).fill('0.10');
+  const funding = page.locator('.market-two-column > aside');
+  // 17 minutes at ten cents/hour rounds to three cents for each VM/window.
+  await expect(funding.getByText('Estimated $4.20 maximum', { exact: true })).toBeVisible();
+  await expect(funding).toContainText('Up to $2.52');
+  await expect(page.getByRole('button', { name: 'Review agreement', exact: true })).toBeEnabled();
+  // A shorter window still has a one-cent minimum for each VM/window.
+  await page.getByLabel('Discount ends', { exact: true }).fill('00:01');
+  await expect(funding.getByText('Estimated $1.40 maximum', { exact: true })).toBeVisible();
+  await expect(funding).toContainText('Up to $0.84');
+  expect(writes).toHaveLength(0);
+});
+
+test('Server-confirmed DST quote overrides this device and rejected calendars never create an order', async ({
+  page,
+}) => {
+  const writes = await fixture(page, 'buyer', () => undefined);
+  await page.goto('/agreements/new');
+  await page.getByLabel('Agreement name', { exact: true }).fill('Calendar validation');
+  await page.getByLabel('Schedule time zone (IANA)', { exact: true }).fill('America/Vancouver');
+  await page.getByLabel('First local date', { exact: true }).fill('2026-10-29');
+  await page.getByLabel('Target slots per window', { exact: true }).fill('20');
+  await page.getByLabel('Minimum approved per window', { exact: true }).fill('12');
+  await page.getByLabel('Window opens', { exact: true }).fill('00:00');
+  await page.getByLabel('Discount ends', { exact: true }).fill('06:00');
+  await page.getByLabel('Reserve a normal-rate continuation').check();
+  const funding = page.locator('.market-two-column > aside');
+  // The Node fixture uses the server's timezone database, independently of Chromium.
+  await page.getByRole('button', { name: 'Review agreement', exact: true }).click();
+  await expect(
+    page.getByRole('heading', { name: 'Review capacity agreement', exact: true }),
+  ).toBeVisible();
+  await expect(funding.getByText('$142.00 maximum', { exact: true })).toBeVisible();
+  await expect(funding).toContainText('Up to $85.20');
+  await expect(
+    page.getByText(
+      'Time-zone rules differ on this device. Review the server-confirmed schedule below.',
+      { exact: true },
+    ),
+  ).toBeVisible();
+  await expect(
+    page.getByRole('cell', { name: '2026-11-01 14:00:00 UTC', exact: true }),
+  ).toBeVisible();
+  expect(writes).toHaveLength(0);
+  await page.getByRole('button', { name: 'Edit request', exact: true }).click();
+  await page.getByLabel('Window opens', { exact: true }).fill('01:30');
+  await page.getByRole('button', { name: 'Review agreement', exact: true }).click();
+  await expect(page.getByRole('alert')).toContainText('daylight-saving transition');
+  await expect(
+    page.getByRole('heading', { name: 'New capacity agreement', exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: 'Fund & request capacity', exact: true }),
+  ).toHaveCount(0);
+  await page.getByLabel('First local date', { exact: true }).fill('2026-03-08');
+  await page.getByLabel('Window opens', { exact: true }).fill('02:30');
+  await page.getByRole('button', { name: 'Review agreement', exact: true }).click();
+  await expect(page.getByRole('alert')).toContainText('daylight-saving transition');
+  await expect(
+    page.getByRole('button', { name: 'Fund & request capacity', exact: true }),
+  ).toHaveCount(0);
+  await page.getByLabel('First local date', { exact: true }).fill('');
+  await expect(funding.getByRole('heading', { level: 2 })).toHaveText(
+    'Complete the schedule for an estimate',
+  );
+  await expect(funding.getByRole('heading', { level: 2 })).not.toContainText(/\$0|NaN/);
+  await expect(page.getByRole('button', { name: 'Review agreement', exact: true })).toBeDisabled();
+  await page.getByLabel('First local date', { exact: true }).fill('2026-10-29');
+  await page.getByLabel('Window opens', { exact: true }).fill('');
+  await expect(funding.getByRole('heading', { level: 2 })).toHaveText(
+    'Complete the schedule for an estimate',
+  );
+  await expect(page.getByRole('button', { name: 'Review agreement', exact: true })).toBeDisabled();
+  expect(writes).toHaveLength(0);
 });

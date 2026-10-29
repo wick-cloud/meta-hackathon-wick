@@ -4,7 +4,26 @@ import { transaction } from '../marketplace/db.js';
 import { agreementDetail, globalLock, ownedAgreement } from './data.js';
 import { applyCreditEntry, fingerprint, operationKey } from './credits.js';
 import { validateAgreement } from './recurrence.js';
+import { windowCost } from './recurrence.js';
+import type { AgreementPreview } from '../../shared/agreements.js';
 import { matchAgreement } from './matching.js';
+
+/** Authoritative calendar/rounding preview: one DB-clock read, no transaction or mutations. */
+export async function previewAgreement(
+  ctx: Pick<AppContext, 'pool'>,
+  raw: unknown,
+): Promise<AgreementPreview> {
+  const now = (await ctx.pool.query('SELECT clock_timestamp() at')).rows[0].at;
+  const { input, windows, maxAmountCents } = validateAgreement(raw, new Date(now).getTime());
+  const minimumAmountCents = windows.reduce(
+    (sum, w) =>
+      sum +
+      windowCost(w, input.maxDiscountRateCentsPerHour, input.continuation?.maxRateCentsPerHour) *
+        input.minimumQuantity,
+    0,
+  );
+  return { maxAmountCents, minimumAmountCents, windows, timeZone: input.timeZone };
+}
 
 export async function createAgreement(ctx: AppContext, buyerId: string, raw: unknown) {
   const key = operationKey((raw as { operationKey?: unknown })?.operationKey),

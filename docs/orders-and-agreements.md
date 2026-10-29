@@ -14,6 +14,8 @@ An order selects seven consecutive local dates within a 30-day forecast, an IANA
 
 Initial approval requires the minimum in **every** window and the full maximum credit reservation in the same database transaction. Global and provider capacity calendars include the whole authorized interval, including normal-rate continuation. Quotes freeze prices, resource scope and dates. Provider edits affect unbooked supply; booked rights remain binding. Additional quantities can match only before their windows start and within remaining funded allowance.
 
+Before consent, Review fetches a read-only server quote containing the full reservation, the minimum-quantity ceiling and seven absolute UTC windows. Browser estimates remain provisional because browser and server timezone databases can differ. When their interpretations differ, Review exposes the server-confirmed UTC schedule. The submitted order carries its reviewed reservation ceiling; the server rejects a higher recomputed amount before creating an order or reserving credit.
+
 At illustrative rates of $0.10/VM-hour discounted and $0.20 normally, 20 target slots for seven days with six discounted hours plus two normal hours require a $140 maximum reservation. With 12 approved slots, $84 is committed and $56 remains reserved for additional matches. A $200 wallet has $60 available elsewhere. These figures are examples, not currently published Singapore inventory or quotes.
 
 Booked idle capacity is payable. Window settlement debits the booked amount once, applies confirmed failed-start adjustments, and releases the corresponding credit hold. Unused matching allowance returns after cancellation or term-expiry reconciliation. Cleanup uncertainty retains the relevant resource/funding fences. Provider revenue share is exactly 15% Broker / 85% provider before compute costs, calculated on net charged capacity, never on unused reserves. No fee is added to the buyer.
@@ -34,6 +36,7 @@ Each scheduled VM receives the original window's absolute `hardEndAt`, rather th
 
 - `GET /api/orders`: unified read-only history with `kind`, `status`, `created`, `limit`, `cursor`.
 - `POST /api/agreements`, `GET /api/agreements/:id`: reviewed agreement and funding/booking detail.
+- `POST /api/agreements/preview`: authenticated buyer quote validation without credit, capacity, model or VM side effects.
 - `POST /api/agreements/:id/activate`, `/cancel-unmatched`: explicit idempotent customer actions.
 - `GET /api/credits`, `/api/credits/history`; `POST /api/admin/credits`: buyer wallet, ledger and admin pilot grants.
 - `/api/provider/scheduled-offerings`: owner-scoped publication and revision-safe pause/resume; `/api/provider/commitments` and `/agreement-demand`: calendar and eligible demand.
@@ -56,7 +59,7 @@ SQL tests cover credit and capacity concurrency, uncertain cleanup, immutable pr
 
 Verified locally on October 29, 2026:
 
-- All 452 tests in 32 Vitest files passed with disposable PostgreSQL, including 10,000-order history and indexed overlap-plan checks.
-- All 18 intercepted Orders/agreement UI tests and all six existing auth/PostgreSQL browser flows passed, with no browser-test skips.
+- All 470 tests in 34 Vitest files passed with disposable PostgreSQL, including 10,000-order history, indexed overlap plans and side-effect-free authoritative quote/cap checks.
+- All 22 intercepted Orders/agreement UI tests and all six existing auth/PostgreSQL browser flows passed, including mobile keyboard navigation, stale previews and browser/server timezone-rule differences.
 - The opt-in full fixture journey passed: a real 30-second auction, seven funded windows, two manual scheduled starts, fixture terminal connection and confirmed cleanup of all three test environments. No real provider allocations were made.
 - Typecheck, the complete client/server production build, Prettier, local documentation links and diff checks passed.

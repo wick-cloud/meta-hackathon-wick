@@ -14,7 +14,15 @@ export interface AgreementInput {
   requirements: Requirements;
   region: string;
   maxDiscountRateCentsPerHour: number;
+  /** Reviewed maximum hold; omitted by legacy clients. Server never reserves above it. */
+  maxReservationCents?: number;
   continuation?: { enabled: boolean; until: string; maxRateCentsPerHour: number };
+}
+export interface AgreementPreview {
+  maxAmountCents: number;
+  minimumAmountCents: number;
+  windows: { startsAt: string; discountEndsAt: string; endsAt: string }[];
+  timeZone: string;
 }
 export interface AgreementWindow {
   id: string;
@@ -153,6 +161,7 @@ export interface AgreementDemand {
 export interface ProviderCommitment extends AgreementBooking {
   agreementId: string;
   agreementDescription: string;
+  timeZone?: string;
   runningQuantity: number;
 }
 export interface AgreementDraftResult<T> {

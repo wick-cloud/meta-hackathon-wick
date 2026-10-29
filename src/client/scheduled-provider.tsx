@@ -18,7 +18,7 @@ import type {
   ScheduledOffering,
   ScheduledOfferingInput,
 } from '../shared/agreements';
-import { api, dateTime, money, moneyMicros, post, type Dashboard } from './api';
+import { api, money, moneyMicros, post, type Dashboard } from './api';
 import {
   DetailRow,
   EmptyState,
@@ -36,7 +36,7 @@ import './market.css';
 
 const weekdays = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 export function ProviderScheduled() {
-  const { catalog } = useSession();
+  const { catalog, modes } = useSession();
   const dashboard = useResource<Dashboard>('/api/provider/dashboard', 5000);
   const offerings = usePagedResource<ScheduledOffering>('/api/provider/scheduled-offerings', 5000);
   const commitments = usePagedResource<ProviderCommitment>('/api/provider/commitments', 5000);
@@ -173,15 +173,16 @@ export function ProviderScheduled() {
     }
   }
   const chosen = approved.find((c) => c.id === (review?.catalogId ?? form.catalogId));
+  const chosenNativeEligible = modes.wick === 'fixture' || chosen?.deadlineEnforcement === 'native';
   const chronologicalCommitments = [...(commitments.data?.items ?? [])].sort(
     (a, b) => a.startsAt.localeCompare(b.startsAt) || a.id.localeCompare(b.id),
   );
   return (
     <>
       <PageHeader
-        eyebrow="SELL CAPACITY AHEAD"
-        title="Make your quiet hours work."
-        description="Publish a discount schedule, protect actual availability and see every future commitment."
+        eyebrow="PROVIDER CAPACITY"
+        title="Scheduled offerings"
+        description="Publish availability and prices. Track booked capacity and buyer demand."
       >
         <button
           className="button primary"
@@ -213,10 +214,10 @@ export function ProviderScheduled() {
           <CalendarClock size={21} />
         </span>
         <div>
-          <strong>Discount hours and capacity availability are separate.</strong>
+          <strong>Discount end changes the price. Hard end stops the VM.</strong>
           <p>
-            Your region sets the compute location. Your time zone sets the schedule. A booked
-            normal-rate continuation reserves capacity through its hard end.
+            Region sets the compute location; time zone sets the clock. Normal-rate continuation
+            must be booked through its hard end.
           </p>
         </div>
       </div>
@@ -224,7 +225,7 @@ export function ProviderScheduled() {
         <div className="market-two-column">
           <section className="card market-panel">
             <div className="section-heading">
-              <h2>{review ? 'Review scheduled offering' : 'Your next scheduled offering'}</h2>
+              <h2>{review ? 'Review scheduled offering' : 'Offering details'}</h2>
               <button
                 className="text-button"
                 disabled={busy}
@@ -272,7 +273,10 @@ export function ProviderScheduled() {
                             : 'Prepared locally · no model call'}
                       </strong>
                       <p>{suggestion.explanation}</p>
-                      <pre>{JSON.stringify(suggestion.draft, null, 2)}</pre>
+                      <details className="market-disclosure">
+                        <summary>View suggested fields</summary>
+                        <pre>{JSON.stringify(suggestion.draft, null, 2)}</pre>
+                      </details>
                       <button
                         className="button secondary small"
                         onClick={() => {
@@ -472,7 +476,11 @@ export function ProviderScheduled() {
                   >
                     Edit schedule
                   </button>
-                  <button className="button primary" disabled={busy} onClick={() => void publish()}>
+                  <button
+                    className="button primary"
+                    disabled={busy || !chosenNativeEligible}
+                    onClick={() => void publish()}
+                  >
                     {busy ? <Spinner label="Publishing schedule" /> : 'Publish scheduled offering'}
                   </button>
                 </div>
@@ -483,7 +491,7 @@ export function ProviderScheduled() {
             <section className="card market-panel">
               <span className="market-kicker">
                 <Wallet size={16} />
-                YOUR HOURLY ECONOMICS
+                HOURLY PRICING
               </span>
               <DetailRow label="Discounted buyer price">
                 {hourly(form.discountRateCentsPerHour)}
@@ -495,19 +503,34 @@ export function ProviderScheduled() {
                 {moneyMicros(BigInt(Math.max(0, form.discountRateCentsPerHour)) * 1500n)} / VM-hour
               </DetailRow>
               <p className="field-hint">
-                Provider net is before compute costs. The server enforces the current Wick cost
-                floor, route authorization, physical deadline support and overlapping capacity
-                commitments.
+                Provider net is before compute costs. Buyers pay no added fee.
               </p>
               {chosen?.rateMicrosPerSecond !== undefined && (
                 <DetailRow label="Current compute estimate">
                   {moneyMicros(BigInt(chosen.rateMicrosPerSecond) * 3600n)} / VM-hour
                 </DetailRow>
               )}
-              <p className="field-hint">
-                Enforced schedules require an approved native or supervised hard-stop capability.
-                Publishing never grants capabilities to a route.
-              </p>
+              {!chosenNativeEligible && chosen ? (
+                <div className="market-notice">
+                  <Clock3 size={16} />
+                  <p>
+                    This route has no verified native hard deadline. Publication and matching remain
+                    blocked.
+                  </p>
+                </div>
+              ) : (
+                <p className="field-hint">
+                  Real schedules require verified native hard-deadline enforcement.
+                </p>
+              )}
+              <details className="market-disclosure">
+                <summary>Pricing and eligibility checks</summary>
+                <p className="field-hint">
+                  The server checks current compute prices, route authorization, hard-deadline
+                  support and overlapping commitments. Publishing does not change route
+                  capabilities.
+                </p>
+              </details>
             </section>
           </aside>
         </div>
@@ -532,51 +555,79 @@ export function ProviderScheduled() {
             {offerings.loading ? (
               <Spinner label="Loading schedules" />
             ) : offerings.data?.items.length ? (
-              <div className="market-offering-grid">
-                {offerings.data.items.map((o) => (
-                  <article className="market-scheduled-card" key={o.id}>
-                    <div className="section-heading">
-                      <h3>{o.name}</h3>
-                      <span className={`status-pill status-${o.active ? 'approved' : 'cancelled'}`}>
-                        <span />
-                        {o.active ? 'Published' : 'Paused'}
-                      </span>
-                    </div>
-                    <p>
-                      {catalog.find((c) => c.id === o.catalogId)?.name ?? 'Configuration'} ·{' '}
-                      {catalog.find((c) => c.id === o.catalogId)?.region ?? ''}
-                    </p>
-                    <div className="market-meta">
-                      {o.timeZone} · {o.weekdays.map((d) => weekdays[d]).join(', ')}
-                    </div>
-                    <DetailRow label={`${o.windowStart}–${o.windowEnd}`}>
-                      {hourly(o.discountRateCentsPerHour)}
-                    </DetailRow>
-                    <DetailRow label={`Normal through ${o.availableUntil}`}>
-                      {hourly(o.normalRateCentsPerHour)}
-                    </DetailRow>
-                    <DetailRow label="Capacity / revision">
-                      {o.capacityQuantity} slots · r{o.revision}
-                    </DetailRow>
-                    {!o.deadlineEligible && (
-                      <div className="market-notice">
-                        <Clock3 size={16} />
-                        <p>
-                          {o.blockedReason ||
-                            'Hard deadline enforcement is not confirmed; scheduled matching is blocked.'}
-                        </p>
-                      </div>
-                    )}
-                    <button
-                      className="button secondary small"
-                      disabled={busy}
-                      onClick={() => void toggle(o)}
-                    >
-                      {o.active ? <Pause size={13} /> : <Play size={13} />}
-                      {o.active ? 'Pause new commitments' : 'Resume matching'}
-                    </button>
-                  </article>
-                ))}
+              <div className="market-table-scroll">
+                <table className="market-table">
+                  <thead>
+                    <tr>
+                      <th>Offering</th>
+                      <th>Schedule</th>
+                      <th>Slots</th>
+                      <th>Rates / VM-hour</th>
+                      <th>State</th>
+                      <th>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {offerings.data.items.map((o) => (
+                      <tr key={o.id}>
+                        <td>
+                          <strong>{o.name}</strong>
+                          <div className="market-meta">
+                            {catalog.find((c) => c.id === o.catalogId)?.name ?? 'Configuration'} ·{' '}
+                            {catalog.find((c) => c.id === o.catalogId)?.region ?? ''}
+                          </div>
+                        </td>
+                        <td>
+                          <strong>
+                            {o.windowStart}–{o.windowEnd}
+                          </strong>
+                          <div className="market-meta">
+                            Available until {o.availableUntil}
+                            <br />
+                            {o.weekdays.length === 7
+                              ? 'Daily'
+                              : o.weekdays.map((d) => weekdays[d]).join(', ')}{' '}
+                            · {o.timeZone}
+                          </div>
+                        </td>
+                        <td>
+                          {o.capacityQuantity}
+                          <div className="market-meta">Revision {o.revision}</div>
+                        </td>
+                        <td>
+                          {hourly(o.discountRateCentsPerHour)}
+                          <div className="market-meta">
+                            Normal {hourly(o.normalRateCentsPerHour)}
+                          </div>
+                        </td>
+                        <td>
+                          <span
+                            className={`status-pill status-${o.active ? (o.deadlineEligible ? 'approved' : 'failed') : 'cancelled'}`}
+                          >
+                            <span />
+                            {o.active ? (o.deadlineEligible ? 'Published' : 'Blocked') : 'Paused'}
+                          </span>
+                          {!o.deadlineEligible && (
+                            <div className="market-meta">
+                              {o.blockedReason ||
+                                'Native hard deadline is unverified; matching is blocked.'}
+                            </div>
+                          )}
+                        </td>
+                        <td>
+                          <button
+                            className="button secondary small"
+                            disabled={busy || (!o.active && !o.deadlineEligible)}
+                            onClick={() => void toggle(o)}
+                          >
+                            {o.active ? <Pause size={13} /> : <Play size={13} />}{' '}
+                            {o.active ? 'Pause new commitments' : 'Resume matching'}
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             ) : (
               <EmptyState
@@ -609,7 +660,7 @@ export function ProviderScheduled() {
                       <th>Agreement / window</th>
                       <th>Slots</th>
                       <th>Rates / VM-hour</th>
-                      <th>Gross / provider net</th>
+                      <th>Booked amount</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -618,11 +669,12 @@ export function ProviderScheduled() {
                         <td>
                           <strong>{c.agreementDescription}</strong>
                           <div className="market-meta">
-                            Opens {dateTime(c.startsAt)}
+                            {c.timeZone ?? 'UTC'} · opens{' '}
+                            {zonedTime(c.startsAt, c.timeZone ?? 'UTC')}
                             <br />
-                            Discount ends {dateTime(c.discountEndsAt)}
+                            Discount ends {zonedTime(c.discountEndsAt, c.timeZone ?? 'UTC')}
                             <br />
-                            Hard end {dateTime(c.endsAt)}
+                            Hard end {zonedTime(c.endsAt, c.timeZone ?? 'UTC')}
                           </div>
                         </td>
                         <td>
@@ -638,15 +690,18 @@ export function ProviderScheduled() {
                         <td>
                           <strong>{money(c.totalCents)} gross</strong>
                           <div className="market-meta">
-                            {moneyMicros(BigInt(c.totalCents) * 8500n)} provider net before compute
+                            {moneyMicros(BigInt(c.totalCents) * 8500n)} estimated net before compute
                             <br />
-                            Broker fee 15% · buyer fee $0
                           </div>
                         </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
+                <p className="field-hint">
+                  Booked amounts include idle capacity. Final settled charges and failed-start
+                  adjustments appear in Earnings. Broker fee 15%; buyer fee $0.
+                </p>
               </div>
             ) : (
               <EmptyState

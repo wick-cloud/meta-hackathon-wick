@@ -192,7 +192,7 @@ export async function registerProviderAgreementRoutes(app: FastifyInstance, ctx:
       throw new HttpError(400, 'Choose a commitment range no longer than 62 days.');
     const rows = (
       await ctx.pool.query(
-        `SELECT b.*,a.description agreement_description,b.starts_at::text cursor_created_at,COALESCE(x.n,0)::int occupied FROM broker_agreement_bookings b JOIN broker_agreements a ON a.id=b.agreement_id LEFT JOIN LATERAL(SELECT count(*) n FROM broker_agreement_activations x WHERE x.booking_id=b.id AND x.cleaned_at IS NULL) x ON true WHERE b.provider_id=$1 AND b.starts_at>=$2::timestamptz-interval '24 hours' AND b.starts_at<$3 AND b.ends_at>$2 AND ($4::timestamptz IS NULL OR(b.starts_at,b.id)>($4,$5::uuid)) ORDER BY b.starts_at,b.id LIMIT $6`,
+        `SELECT b.*,a.description agreement_description,a.time_zone,b.starts_at::text cursor_created_at,COALESCE(x.n,0)::int occupied FROM broker_agreement_bookings b JOIN broker_agreements a ON a.id=b.agreement_id LEFT JOIN LATERAL(SELECT count(*) n FROM broker_agreement_activations x WHERE x.booking_id=b.id AND x.cleaned_at IS NULL) x ON true WHERE b.provider_id=$1 AND b.starts_at>=$2::timestamptz-interval '24 hours' AND b.starts_at<$3 AND b.ends_at>$2 AND ($4::timestamptz IS NULL OR(b.starts_at,b.id)>($4,$5::uuid)) ORDER BY b.starts_at,b.id LIMIT $6`,
         [provider.id, from, to, p.cursor, p.cursorId, p.limit + 1],
       )
     ).rows;
@@ -201,6 +201,7 @@ export async function registerProviderAgreementRoutes(app: FastifyInstance, ctx:
         ...bookingView(r),
         agreementId: r.agreement_id,
         agreementDescription: r.agreement_description,
+        timeZone: r.time_zone,
         runningQuantity: r.occupied,
       })),
       ...(rows.length > p.limit ? { nextCursor: encodeCursor(rows[p.limit - 1]) } : {}),

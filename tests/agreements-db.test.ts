@@ -1172,6 +1172,7 @@ describe.skipIf(!url)('funded manual agreements (real disposable PostgreSQL)', (
       expect(response.statusCode).toBe(200);
       const body = response.json();
       expect(body.items.length).toBeLessThanOrEqual(2);
+      expect(body.items.every((b: { timeZone: string }) => b.timeZone === 'UTC')).toBe(true);
       starts.push(...body.items.map((b: { startsAt: string }) => b.startsAt));
       cursor = body.nextCursor;
     }
@@ -1353,5 +1354,37 @@ describe.skipIf(!url)('funded manual agreements (real disposable PostgreSQL)', (
     });
     expect(ctx.wick.create).not.toHaveBeenCalled();
     expect(ctx.boss.send).not.toHaveBeenCalled();
+  });
+  it('rejects a changed reservation above the reviewed ceiling before creating an order or touching wallet credit', async () => {
+    const spec = input(),
+      before = await creditWalletView(pool, buyer),
+      ledger = (await pool.query('SELECT count(*) n FROM broker_credit_ledger')).rows[0].n;
+    await expect(
+      createAgreement(ctx, buyer, { ...spec, maxReservationCents: 13999 }),
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      message: expect.stringContaining('reviewed credit ceiling'),
+    });
+    for (const table of [
+      'broker_agreements',
+      'broker_agreement_windows',
+      'broker_agreement_bookings',
+      'broker_agreement_activations',
+      'broker_vms',
+    ])
+      expect((await pool.query(`SELECT count(*) n FROM ${table}`)).rows[0].n).toBe('0');
+    expect(await creditWalletView(pool, buyer)).toEqual(before);
+    expect((await pool.query('SELECT count(*) n FROM broker_credit_ledger')).rows[0].n).toBe(
+      ledger,
+    );
+    expect(ctx.boss.send).not.toHaveBeenCalled();
+    expect(ctx.wick.create).not.toHaveBeenCalled();
+    const accepted = await createAgreement(ctx, buyer, { ...spec, maxReservationCents: 14000 });
+    expect(accepted.agreement.status).toBe('approved');
+    expect(accepted.agreement.reservedCents).toBe(14000);
+    expect(accepted.agreement.specification.maxReservationCents).toBe(14000);
+    const legacy = await createAgreement(ctx, other, input());
+    expect(legacy.agreement.id).toBeTruthy();
+    expect(legacy.agreement.specification.maxReservationCents).toBeUndefined();
   });
 });

@@ -39,7 +39,7 @@ import {
 
 const buyerNavigation = [
   { path: '/orders', label: 'Orders', icon: ListOrdered },
-  { path: '/new', label: 'New environment', icon: Plus },
+  { path: '/new', label: 'New order', icon: Plus },
   { path: '/alternatives', label: 'Alternatives', icon: Sparkles },
   { path: '/vms', label: 'My VMs', icon: LayoutGrid },
   { path: '/invoices', label: 'Invoices', icon: CircleDollarSign },
@@ -208,11 +208,56 @@ function Login({ session, onSignedIn }: { session: Session; onSignedIn: () => Pr
 
 export default function App() {
   const previousActor = useRef<string | null | undefined>(undefined);
+  const sidebarRef = useRef<HTMLElement>(null);
+  const navigationToggleRef = useRef<HTMLButtonElement>(null);
+  const environmentRef = useRef<HTMLDetailsElement>(null);
   const [session, setSession] = useState<Session | null>(null),
     [bootError, setBootError] = useState(''),
     [location, setLocation] = useState(window.location.pathname + window.location.search),
     [mobileOpen, setMobileOpen] = useState(false),
     [signingOut, setSigningOut] = useState(false);
+  useEffect(() => {
+    environmentRef.current?.removeAttribute('open');
+  }, [location]);
+  useEffect(() => {
+    if (!mobileOpen) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    sidebarRef.current
+      ?.querySelector<HTMLButtonElement>('button[aria-label="Close navigation"]')
+      ?.focus();
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setMobileOpen(false);
+      }
+      if (event.key !== 'Tab') return;
+      const focusable = Array.from(
+        sidebarRef.current?.querySelectorAll<HTMLElement>('a[href], button:not([disabled])') ?? [],
+      ).filter((element) => element.getClientRects().length > 0);
+      const first = focusable[0],
+        last = focusable.at(-1);
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last?.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first?.focus();
+      }
+    };
+    const desktop = window.matchMedia('(min-width: 801px)');
+    const onDesktop = () => {
+      if (desktop.matches) setMobileOpen(false);
+    };
+    document.addEventListener('keydown', onKey);
+    desktop.addEventListener('change', onDesktop);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener('keydown', onKey);
+      desktop.removeEventListener('change', onDesktop);
+      navigationToggleRef.current?.focus();
+    };
+  }, [mobileOpen]);
   const navigate = (next: string) => {
     if (next !== window.location.pathname + window.location.search)
       window.history.pushState({}, '', next);
@@ -342,14 +387,24 @@ export default function App() {
   const currentNav =
     navigation.find((item) => path === item.path || path.startsWith(item.path + '/'))?.label ||
     (path === '/requests/review' || path === '/agreements/new'
-      ? 'New environment'
+      ? 'New order'
       : path.startsWith('/requests/') || path.startsWith('/agreements/')
         ? 'Orders'
         : navigation[0]?.label);
+  const isNavActive = (to: string) =>
+    path === to ||
+    path.startsWith(to + '/') ||
+    (to === '/new' && (path === '/requests/review' || path === '/agreements/new')) ||
+    (to === '/orders' &&
+      ((path.startsWith('/requests/') && path !== '/requests/review') ||
+        (path.startsWith('/agreements/') && path !== '/agreements/new')));
   return (
     <NavigationContext.Provider value={navigate}>
       <SessionContext.Provider value={session}>
         <div className="app-shell">
+          <a className="skip-link" href="#workspace-content">
+            Skip to content
+          </a>
           {mobileOpen && (
             <button
               className="sidebar-scrim"
@@ -357,7 +412,14 @@ export default function App() {
               onClick={() => setMobileOpen(false)}
             />
           )}
-          <aside className={`sidebar ${mobileOpen ? 'is-open' : ''}`}>
+          <aside
+            id="workspace-navigation"
+            ref={sidebarRef}
+            className={`sidebar ${mobileOpen ? 'is-open' : ''}`}
+            role={mobileOpen ? 'dialog' : undefined}
+            aria-modal={mobileOpen || undefined}
+            aria-label="Workspace navigation"
+          >
             <div className="sidebar-brand">
               <Link href={navigation[0]!.path} aria-label="Wick Broker home">
                 <Brand />
@@ -390,7 +452,6 @@ export default function App() {
                 </strong>
                 <span>{user.role === 'buyer' ? 'Customer account' : user.name}</span>
               </div>
-              <ChevronDown size={14} />
             </div>
             <div className="nav-label">
               {user.role === 'provider'
@@ -404,30 +465,27 @@ export default function App() {
                 <Link
                   key={to}
                   href={to}
-                  className={`nav-item ${path === to || path.startsWith(to + '/') || (to === '/new' && (path === '/requests/review' || path === '/agreements/new')) || (to === '/orders' && ((path.startsWith('/requests/') && path !== '/requests/review') || (path.startsWith('/agreements/') && path !== '/agreements/new'))) ? 'active' : ''}`}
+                  className={`nav-item ${isNavActive(to) ? 'active' : ''}`}
+                  aria-current={isNavActive(to) ? 'page' : undefined}
                 >
                   <Icon size={18} />
                   <span>{label}</span>
-                  {to === '/new' && <span className="nav-plus">+</span>}
                 </Link>
               ))}
             </nav>
             <div className="sidebar-bottom">
-              <div className="sidebar-muse">
+              <div className="sidebar-assistant">
                 <span className="muse-mini-icon">
                   <Sparkles size={16} />
                 </span>
-                <strong>A little help from Muse</strong>
-                <p>
-                  {session.modes.muse === 'fixture'
-                    ? 'Explicit fixture responses make this demo easy to explore.'
-                    : 'From a simple description to a supported environment.'}
-                </p>
-                <span>
-                  {session.modes.muse === 'fixture'
-                    ? 'Fixture mode · no model calls'
-                    : 'Powered by muse-wonder-1.0'}
-                </span>
+                <div>
+                  <strong>Meta Muse</strong>
+                  <span>
+                    {session.modes.muse === 'fixture'
+                      ? 'Fixture · no model calls'
+                      : 'AI drafts enabled'}
+                  </span>
+                </div>
               </div>
               <div className="sidebar-footnote">
                 <span className="green-dot" />
@@ -435,13 +493,16 @@ export default function App() {
               </div>
             </div>
           </aside>
-          <div className="main-shell">
+          <div className="main-shell" inert={mobileOpen || undefined}>
             <header className="topbar">
               <div className="topbar-location">
                 <button
                   className="icon-button mobile-only"
+                  ref={navigationToggleRef}
                   onClick={() => setMobileOpen(true)}
                   aria-label="Open navigation"
+                  aria-expanded={mobileOpen}
+                  aria-controls="workspace-navigation"
                 >
                   <Menu size={20} />
                 </button>
@@ -456,10 +517,45 @@ export default function App() {
                 <strong>{currentNav}</strong>
               </div>
               <div className="topbar-account">
-                <span className="environment-badge">
-                  <span className="demo-dot" />
-                  {session.modes.wick === 'real' ? 'Wick-managed providers' : 'Simulated supply'}
-                </span>
+                <details
+                  className="environment-status"
+                  data-mode={session.modes.wick}
+                  ref={environmentRef}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Escape') {
+                      event.currentTarget.open = false;
+                      event.currentTarget.querySelector('summary')?.focus();
+                    }
+                  }}
+                  onBlur={(event) => {
+                    if (!event.currentTarget.contains(event.relatedTarget as Node | null))
+                      event.currentTarget.open = false;
+                  }}
+                >
+                  <summary aria-label="Environment mode">
+                    <span className="demo-dot" />
+                    {session.modes.wick === 'fixture' ? 'Demo environment' : 'Live VMs'}
+                    <ChevronDown size={12} />
+                  </summary>
+                  <div className="environment-popover">
+                    <strong>
+                      {session.modes.wick === 'fixture'
+                        ? 'Simulated environments'
+                        : 'Real Wick environments'}
+                    </strong>
+                    <p>
+                      {session.modes.wick === 'fixture'
+                        ? 'VMs and terminals use fixtures. No real compute is allocated.'
+                        : 'VM usage consumes the configured Wick account’s compute credits.'}
+                    </p>
+                    <p>
+                      {session.modes.muse === 'fixture'
+                        ? 'Muse fixture · no model calls'
+                        : 'Meta Muse API enabled'}
+                    </p>
+                    <p>Pilot pricing · no payment collected</p>
+                  </div>
+                </details>
                 <div className="account-avatar">
                   {user.name
                     ?.split(' ')
@@ -482,22 +578,8 @@ export default function App() {
                 </button>
               </div>
             </header>
-            <main className="main-content">
+            <main className="main-content" id="workspace-content" tabIndex={-1}>
               {bootError && <ErrorBox error={bootError} />}
-              <div className="mode-banner">
-                <span>
-                  <span className="demo-dot" />
-                  {session.modes.wick === 'fixture'
-                    ? 'Fixture environments & terminal'
-                    : 'Real Wick VMs · uses Wick credits'}
-                </span>
-                <span className="mode-banner-detail">
-                  {session.modes.muse === 'fixture'
-                    ? 'Muse fixture · no model calls'
-                    : 'Muse API enabled'}
-                  <span className="middle-dot">·</span>Demo quotes · no payment due
-                </span>
-              </div>
               {content}
             </main>
             <footer className="app-footer">
