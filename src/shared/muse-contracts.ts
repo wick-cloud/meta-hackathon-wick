@@ -1,25 +1,42 @@
 import type { Requirements } from './types.js';
 
-// Bare "in ..." is ambiguous prose. Recognize locations, not programming languages or
-// workflows; an explicit "region ..." always preserves an unsupported canonical choice.
+// Bare "in ..." and "... region" are ambiguous prose. Recognize locations,
+// while explicitly named region values may remain unsupported catalog choices.
 const REGIONAL_WORDS = new Set(
   'us usa eu uk ca au asia europe africa australia america americas antarctica canada japan india china singapore tokyo osaka london paris frankfurt amsterdam dublin sydney melbourne mumbai delhi seoul hongkong taipei zurich stockholm helsinki warsaw madrid milan montreal toronto oregon ohio virginia california texas'.split(
     ' ',
   ),
 );
+const REGION_PROSE = new Set(
+  'and or is of with fine ok okay acceptable preference preferences'.split(' '),
+);
+function recognizableRegion(candidate: string): boolean {
+  return (
+    REGIONAL_WORDS.has(candidate) ||
+    (/[\w][-_][\w]/.test(candidate) &&
+      /(?:^|[-_])(?:us|eu|uk|ca|au|ap|asia|europe|north|south|east|west|central|northeast|northwest|southeast|southwest)(?:$|[-_])/.test(
+        candidate,
+      ))
+  );
+}
 function explicitRegion(description: string): string | undefined {
-  const explicit = description.match(/\bregion\s*(?:[:=]|is|of)?\s*([a-z][a-z0-9_-]{0,119})\b/i);
-  if (explicit) return explicit[1]!.toLowerCase();
-  for (const match of description.matchAll(/\bin\s+([a-z][a-z0-9_-]{0,119})\b/gi)) {
-    const candidate = match[1]!.toLowerCase();
-    if (
-      REGIONAL_WORDS.has(candidate) ||
-      (/[\w][-_][\w]/.test(candidate) &&
-        /(?:^|[-_])(?:us|eu|uk|ca|au|ap|asia|europe|north|south|east|west|central|northeast|northwest|southeast|southwest)(?:$|[-_])/.test(
-          candidate,
-        ))
-    )
-      return candidate;
+  // Keep the first named region; delimited values also preserve unknown names.
+  for (const match of description.matchAll(
+    /\bregion(?:\s*([:=])\s*|\s+(?:(?:is|of)\s+)?)([a-z][a-z0-9_-]{0,119})\b/gi,
+  )) {
+    const candidate = match[2]!.toLowerCase();
+    if (match[1] || !REGION_PROSE.has(candidate)) return candidate;
+  }
+  // "Any US region" still constrains location to US; "any region is fine"
+  // does not name a region. Do not turn either sentence's prose into a value.
+  for (const pattern of [
+    /\b([a-z][a-z0-9_-]{0,119})\s+region\b/gi,
+    /\bin\s+([a-z][a-z0-9_-]{0,119})\b/gi,
+  ]) {
+    for (const match of description.matchAll(pattern)) {
+      const candidate = match[1]!.toLowerCase();
+      if (recognizableRegion(candidate)) return candidate;
+    }
   }
   return undefined;
 }
