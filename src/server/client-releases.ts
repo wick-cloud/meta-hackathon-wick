@@ -4,23 +4,29 @@ import { open, realpath, type FileHandle } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
-const VERSION = '0.1.0';
+const VERSIONS = ['0.1.0', '0.1.1'] as const;
+type ReleaseVersion = (typeof VERSIONS)[number];
 const MAX_MANIFEST_BYTES = 32768;
 const MAX_FILE_BYTES = 16 * 1024 * 1024;
-const FILE_NAMES = [
-  'wick-cloud-broker-sdk-0.1.0.tgz',
-  'wick-cloud-broker-cli-0.1.0.tgz',
-  'wick-cloud-broker-mcp-0.1.0.tgz',
-  'SHA256SUMS',
-  'INSTALL.md',
-] as const;
+function isReleaseVersion(version: string): version is ReleaseVersion {
+  return (VERSIONS as readonly string[]).includes(version);
+}
+function fileNames(version: ReleaseVersion) {
+  return [
+    `wick-cloud-broker-sdk-${version}.tgz`,
+    `wick-cloud-broker-cli-${version}.tgz`,
+    `wick-cloud-broker-mcp-${version}.tgz`,
+    'SHA256SUMS',
+    'INSTALL.md',
+  ];
+}
 interface ReleaseFile {
   name: string;
   sha256: string;
   size: number;
 }
 interface ReleaseManifest {
-  version: typeof VERSION;
+  version: ReleaseVersion;
   files: ReleaseFile[];
 }
 async function close(handle: FileHandle | undefined) {
@@ -28,9 +34,11 @@ async function close(handle: FileHandle | undefined) {
 }
 async function manifestAt(
   root: string,
+  version: ReleaseVersion,
 ): Promise<{ directory: string; manifest: ReleaseManifest; bytes: Buffer }> {
   const realRoot = await realpath(root),
-    directory = join(realRoot, VERSION);
+    directory = join(realRoot, version),
+    names = fileNames(version);
   if ((await realpath(directory)) !== directory) throw Error('Unlisted release.');
   const handle = await open(
     join(directory, 'manifest.json'),
@@ -50,9 +58,9 @@ async function manifestAt(
       !value ||
       typeof value !== 'object' ||
       Object.keys(value).some((k) => !['version', 'files'].includes(k)) ||
-      value.version !== VERSION ||
+      value.version !== version ||
       !Array.isArray(value.files) ||
-      value.files.length !== FILE_NAMES.length
+      value.files.length !== names.length
     )
       throw Error('Invalid manifest.');
     const seen = new Set<string>();
@@ -61,7 +69,7 @@ async function manifestAt(
         !file ||
         typeof file !== 'object' ||
         Object.keys(file).some((k) => !['name', 'sha256', 'size'].includes(k)) ||
-        !FILE_NAMES.includes(file.name as (typeof FILE_NAMES)[number]) ||
+        !names.includes(file.name) ||
         seen.has(file.name) ||
         !Number.isSafeInteger(file.size) ||
         file.size < 1 ||
@@ -148,13 +156,13 @@ export function registerClientReleases(app: FastifyInstance, root = resolve('cli
       const { version, file: name } = request.params;
       if (
         !/^\d+\.\d+\.\d+$/.test(version) ||
-        version !== VERSION ||
-        !([...FILE_NAMES, 'manifest.json'] as readonly string[]).includes(name)
+        !isReleaseVersion(version) ||
+        ![...fileNames(version), 'manifest.json'].includes(name)
       )
         return missing(request, reply);
       let handle: FileHandle | undefined;
       try {
-        const release = await manifestAt(root);
+        const release = await manifestAt(root, version);
         if (name === 'manifest.json') {
           const digest = createHash('sha256').update(release.bytes).digest('hex');
           headers(reply, name, release.bytes.byteLength, digest);
