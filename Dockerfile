@@ -15,6 +15,7 @@ COPY package*.json ./
 RUN npm ci --omit=dev --workspaces=false && npm cache clean --force
 COPY --from=build /app/dist ./dist
 COPY migrations ./migrations
+COPY client-releases ./client-releases
 USER node
 STOPSIGNAL SIGTERM
 EXPOSE 3000

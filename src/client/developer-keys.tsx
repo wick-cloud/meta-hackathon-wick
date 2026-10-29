@@ -264,6 +264,15 @@ export function DeveloperKeys() {
           <code>WICK_BROKER_API_URL</code> for your Broker URL. Never substitute a Wick
           infrastructure key.
         </p>
+        <h3>Install the clients</h3>
+        <pre>
+          {[
+            'npm install \\',
+            `  ${window.location.origin}/downloads/0.1.0/wick-cloud-broker-sdk-0.1.0.tgz \\`,
+            `  ${window.location.origin}/downloads/0.1.0/wick-cloud-broker-cli-0.1.0.tgz \\`,
+            `  ${window.location.origin}/downloads/0.1.0/wick-cloud-broker-mcp-0.1.0.tgz`,
+          ].join('\n')}
+        </pre>
         <div className="key-setup-grid">
           <div>
             <h3>TypeScript SDK</h3>
@@ -271,9 +280,9 @@ export function DeveloperKeys() {
           </div>
           <div>
             <h3>CLI</h3>
-            <pre>{`npm install -g @wick-cloud/broker-cli\nwick-broker auth login\nwick-broker orders list --json`}</pre>
+            <pre>{`npx --no-install wick-broker auth login --api-url ${window.location.origin}\nnpx --no-install wick-broker orders list --json`}</pre>
             <h3>Local MCP</h3>
-            <pre>{`npx @wick-cloud/broker-mcp`}</pre>
+            <pre>{`node /absolute/path/to/your/project/node_modules/@wick-cloud/broker-mcp/dist/index.js`}</pre>
             <p>
               Your MCP host supplies the Broker key through its private environment configuration.
             </p>
