@@ -69,7 +69,7 @@ WITH eligible_auction_ids AS MATERIALIZED (
    UNION ALL SELECT id,created_at FROM eligible_auction_ids WHERE $5::text IN ('active','attention')
  ) candidates ORDER BY created_at DESC,id DESC LIMIT $8
 ), auction_page AS MATERIALIZED (
- SELECT r.id,'auction'::text AS kind,r.created_at,r.created_at::text AS cursor_created_at,
+ SELECT r.id,'auction'::text AS kind,r.created_at,r.created_at::text AS cursor_created_at,r.source_api_key_id,
  r.description AS title,
  CASE WHEN v.cleanup_confirmed_at IS NOT NULL AND r.status='ready' THEN 'completed'
       WHEN v.status IN ('running','provisioning','terminating','expired') THEN
@@ -83,13 +83,13 @@ WITH eligible_auction_ids AS MATERIALIZED (
  NULL::int AS committed_cents,NULL::int AS reserved_cents,v.id AS vm_id,
  (r.status IN ('no_offers','failed','cancelled') AND (v.id IS NULL OR v.cleanup_confirmed_at IS NOT NULL)) AS can_retry
  FROM auction_ids ids
- JOIN LATERAL (SELECT id,buyer_id,description,status,created_at,closes_at,winning_bid_id,max_price_cents
+ JOIN LATERAL (SELECT id,buyer_id,description,status,created_at,closes_at,winning_bid_id,max_price_cents,source_api_key_id
    FROM broker_requests WHERE id=ids.id OFFSET 0) r ON true
  LEFT JOIN broker_vms v ON v.request_id=r.id AND v.buyer_id=$1
  LEFT JOIN broker_bids b ON b.id=r.winning_bid_id
  ORDER BY r.created_at DESC,r.id DESC LIMIT $8
 ), agreement_page AS MATERIALIZED (
- SELECT a.id,'agreement'::text AS kind,a.created_at,a.created_at::text AS cursor_created_at,
+ SELECT a.id,'agreement'::text AS kind,a.created_at,a.created_at::text AS cursor_created_at,a.source_api_key_id,
  a.description AS title,
  CASE WHEN a.status='expired' AND a.reserved_cents>0 THEN 'credit_release_pending'
       WHEN a.status='approved' AND a.starts_at<=clock_timestamp() AND a.expires_at>clock_timestamp() THEN 'active'
@@ -176,6 +176,9 @@ export async function listOrders(
       kind: r.kind,
       reference: `${agreement ? 'AG' : 'AU'}-${String(r.id).slice(0, 8).toUpperCase()}`,
       title: r.title,
+      ...(r.source_api_key_id
+        ? { source: { kind: 'api_key' as const, keyId: r.source_api_key_id } }
+        : {}),
       status: r.status,
       ...(r.auction_status ? { auctionStatus: r.auction_status } : {}),
       ...(r.vm_status ? { vmStatus: r.vm_status } : {}),

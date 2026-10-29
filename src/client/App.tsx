@@ -18,6 +18,7 @@ import {
   X,
   Wallet,
   CalendarClock,
+  KeyRound,
 } from 'lucide-react';
 import {
   api,
@@ -35,6 +36,7 @@ import { Orders } from './orders';
 import { AgreementComposer, AgreementDetail, Credits } from './agreements';
 import { ProviderScheduled } from './scheduled-provider';
 import { AdminCreditGrant } from './admin-credits';
+import { DeveloperKeys } from './developer-keys';
 import {
   ProviderCapacity,
   ProviderPolicy,
@@ -52,6 +54,7 @@ const buyerNavigation = [
   { path: '/vms', label: 'My VMs', icon: LayoutGrid },
   { path: '/invoices', label: 'Invoices', icon: CircleDollarSign },
   { path: '/credits', label: 'Broker wallet', icon: Wallet },
+  { path: '/keys', label: 'API keys', icon: KeyRound },
 ];
 const providerNavigation = [
   { path: '/provider/capacity', label: 'Capacity', icon: Cpu },
@@ -61,6 +64,7 @@ const providerNavigation = [
   { path: '/provider/scheduled', label: 'Scheduled market', icon: CalendarClock },
   { path: '/provider/earnings', label: 'Earnings', icon: CircleDollarSign },
   { path: '/provider/activity', label: 'Activity', icon: Activity },
+  { path: '/keys', label: 'API keys', icon: KeyRound },
 ];
 
 function Brand() {
@@ -357,7 +361,8 @@ export default function App() {
         ? [{ path: '/admin', label: 'Configuration', icon: Settings2 }]
         : buyerNavigation;
   let content;
-  if (user.role === 'buyer') {
+  if (path === '/keys' && user.role !== 'admin') content = <DeveloperKeys key={user.id} />;
+  else if (user.role === 'buyer') {
     if (path === '/orders') content = <Orders search={search} />;
     else if (path.startsWith('/orders/'))
       content = <AgreementDetail key={path} id={path.split('/')[2]!} />;

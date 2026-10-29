@@ -71,9 +71,11 @@ export async function registerTerminal(app: FastifyInstance, ctx: AppContext): P
   let total = 0;
 
   async function authorize(request: FastifyRequest): Promise<Rental> {
-    if (request.headers.origin !== allowedOrigin)
+    if (request.headers.origin !== undefined && request.headers.origin !== allowedOrigin)
       throw new HttpError(403, 'Terminal origin is not allowed');
     const actor = await ctx.requireActor(request, ['buyer']);
+    if (!actor.apiKey && request.headers.origin !== allowedOrigin)
+      throw new HttpError(403, 'Terminal origin is not allowed');
     const id = (request.params as { id: string }).id;
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id))
       throw new HttpError(404, 'VM not found');

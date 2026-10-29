@@ -1,3 +1,5 @@
+import type { BrokerKeyAuthority } from '../../shared/developer.js';
+import { enforceKeyLimit, recordKeyAction } from '../operations.js';
 import { randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import type { ActivateAgreementInput, ActivateAgreementResult } from '../../shared/agreements.js';
@@ -16,17 +18,20 @@ export async function activateAgreement(
   id: string,
   buyerId: string,
   raw: unknown,
+  authority?: BrokerKeyAuthority,
 ): Promise<ActivateAgreementResult> {
   const b = (raw ?? {}) as ActivateAgreementInput;
   const key = operationKey(b.operationKey),
     windowId = uuid(b.windowId ?? ''),
     quantity = integer(b.quantity, 'Activation quantity', 1, 20),
     digest = fingerprint({ windowId, quantity });
+  enforceKeyLimit(authority, 'maxActivationQuantity', quantity);
   if (ctx.wick.mode === 'real')
     await refreshActivationCatalog(ctx, id, buyerId, windowId, key, digest, quantity);
   const outcome = await transaction(ctx.pool, async (db) => {
     await globalLock(db);
     const a = await ownedAgreement(db, id, buyerId, true);
+    await recordKeyAction(db, { id: buyerId, apiKey: authority }, 'agreements.activate', key, id);
     const prior = (
       await db.query(
         'SELECT * FROM broker_agreement_actions WHERE agreement_id=$1 AND operation_key=$2',

@@ -130,3 +130,7 @@ Keep PostgreSQL, the auth secret and adapter modes consistent across deploys. A 
 After deployment, check `/health` and `/ready`, sign in to each invited role, inspect provider policy/Earnings and confirm the 85/15 split. Run fixture buyer → auction → terminal → termination before switching to real allocations. Database migrations and redeploys must preserve accounts, accepted quotes, invoice history, reservations and cleanup state.
 
 Official references: [Dockerfiles](https://docs.railway.com/builds/dockerfiles), [IaC](https://docs.railway.com/infrastructure-as-code), [pre-deploy commands](https://docs.railway.com/deployments/pre-deploy-command), [variables](https://docs.railway.com/variables), [deployment teardown](https://docs.railway.com/deployments/deployment-teardown), [SSH](https://docs.railway.com/cli/ssh).
+
+## Broker client packages
+
+The repository also contains the SDK, CLI and local MCP npm workspaces. Railway still deploys one Broker app and PostgreSQL. The Dockerfile installs only root dependencies with `--workspaces=false` and builds with `npm run build:app`; it copies the shared public API contract needed by the server. Customer credentials are issued and hashed in PostgreSQL, not configured as Wick environment variables. Ordinary deployments must not seed users or reset keys. See [developer access](developer-access.md).

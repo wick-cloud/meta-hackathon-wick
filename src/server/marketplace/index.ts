@@ -1,3 +1,4 @@
+import { clientOperationKey, recordKeyAction, withOperation } from '../operations.js';
 import type { FastifyInstance } from 'fastify';
 import type { Pool } from 'pg';
 import { fixedQuote, managedPricing, requireFreshManagedRate } from '../../shared/pricing.js';
@@ -46,7 +47,10 @@ export { markReady, confirmCleanup } from './lifecycle.js';
 export async function registerMarketplace(app: FastifyInstance, ctx: AppContext) {
   const proposalCalls = new Map<string, { count: number; resetsAt: number }>();
   app.post('/api/requests', async (request) =>
-    createRequest(ctx, await ctx.requireActor(request, ['buyer']), request.body as Row),
+    createRequest(ctx, await ctx.requireActor(request, ['buyer']), {
+      ...(request.body as Row),
+      operationKey: (request.body as Row)?.operationKey ?? request.headers['idempotency-key'],
+    }),
   );
   app.get('/api/requests', async (request) => {
     const actor = await ctx.requireActor(request, ['buyer']);
@@ -86,28 +90,40 @@ export async function registerMarketplace(app: FastifyInstance, ctx: AppContext)
   app.post<{ Params: { id: string } }>('/api/requests/:id/cancel', async (request) => {
     const actor = await ctx.requireActor(request, ['buyer']);
     const id = uuid(request.params.id);
-    const result = await transaction(ctx.pool, async (db) => {
-      const row = (
-        await db.query('SELECT * FROM broker_requests WHERE id=$1 AND buyer_id=$2 FOR UPDATE', [
-          id,
-          actor.id,
-        ])
-      ).rows[0];
-      if (!row) throw new HttpError(404, 'Request not found.');
-      if (row.status === 'cancelled') return { cancelled: true };
-      if (row.status !== 'open')
-        throw new HttpError(
-          409,
-          'The auction has ended. Manage termination from the VM detail page.',
-        );
-      await db.query("UPDATE broker_requests SET status='cancelled' WHERE id=$1", [id]);
-      await db.query("UPDATE broker_bids SET status='cancelled' WHERE request_id=$1", [id]);
-      await db.query(
-        "UPDATE broker_holds SET released_at=now(),release_reason='Buyer cancelled auction' WHERE bid_id IN(SELECT id FROM broker_bids WHERE request_id=$1) AND released_at IS NULL",
-        [id],
-      );
-      return { cancelled: true };
-    });
+    const result = await transaction(ctx.pool, async (db) =>
+      withOperation(
+        db,
+        actor,
+        'orders.cancel',
+        clientOperationKey(
+          (request.body as Row)?.operationKey ?? request.headers['idempotency-key'],
+          Boolean(actor.apiKey),
+        ),
+        { id },
+        async () => {
+          const row = (
+            await db.query('SELECT * FROM broker_requests WHERE id=$1 AND buyer_id=$2 FOR UPDATE', [
+              id,
+              actor.id,
+            ])
+          ).rows[0];
+          if (!row) throw new HttpError(404, 'Request not found.');
+          if (row.status === 'cancelled') return { cancelled: true };
+          if (row.status !== 'open')
+            throw new HttpError(
+              409,
+              'The auction has ended. Manage termination from the VM detail page.',
+            );
+          await db.query("UPDATE broker_requests SET status='cancelled' WHERE id=$1", [id]);
+          await db.query("UPDATE broker_bids SET status='cancelled' WHERE request_id=$1", [id]);
+          await db.query(
+            "UPDATE broker_holds SET released_at=now(),release_reason='Buyer cancelled auction' WHERE bid_id IN(SELECT id FROM broker_bids WHERE request_id=$1) AND released_at IS NULL",
+            [id],
+          );
+          return { cancelled: true };
+        },
+      ),
+    );
     return result;
   });
   app.post<{ Params: { id: string } }>('/api/requests/:id/retry', async (request) => {
@@ -122,7 +138,15 @@ export async function registerMarketplace(app: FastifyInstance, ctx: AppContext)
     if (!row) throw new HttpError(404, 'Request not found.');
     if (!['no_offers', 'failed', 'cancelled'].includes(row.status))
       throw new HttpError(409, 'Only a finished unsuccessful attempt can be retried.');
-    return createRequest(ctx, actor, requestView(row), id);
+    return createRequest(
+      ctx,
+      actor,
+      {
+        ...requestView(row),
+        operationKey: (request.body as Row)?.operationKey ?? request.headers['idempotency-key'],
+      },
+      id,
+    );
   });
   app.get('/api/vms', async (request) => {
     const actor = await ctx.requireActor(request, ['buyer']);
@@ -146,7 +170,18 @@ export async function registerMarketplace(app: FastifyInstance, ctx: AppContext)
   });
   app.post<{ Params: { id: string } }>('/api/vms/:id/terminate', async (request) => {
     const actor = await ctx.requireActor(request, ['buyer']);
-    if (!(await terminateVm(ctx, actor.id, uuid(request.params.id))))
+    if (
+      !(await terminateVm(
+        ctx,
+        actor.id,
+        uuid(request.params.id),
+        actor,
+        clientOperationKey(
+          (request.body as Row)?.operationKey ?? request.headers['idempotency-key'],
+          Boolean(actor.apiKey),
+        ),
+      ))
+    )
       throw new HttpError(404, 'VM not found.');
     return {
       accepted: true,
@@ -243,33 +278,45 @@ export async function registerMarketplace(app: FastifyInstance, ctx: AppContext)
       body?.expectedRevision === undefined
         ? undefined
         : integer(body.expectedRevision, 'Expected policy revision', 1);
-    return transaction(ctx.pool, async (db) => {
-      await db.query("SELECT pg_advisory_xact_lock(hashtext('broker-global-vm-admission'))");
-      const p = (
-        await db.query('SELECT * FROM broker_providers WHERE user_id=$1 FOR UPDATE', [actor.id])
-      ).rows[0];
-      if (!p) throw new HttpError(403, 'Provider access is not configured.');
-      if (expectedRevision !== undefined && expectedRevision !== p.policy_revision)
-        throw new HttpError(
-          409,
-          'Capacity or policy changed. Reload and review the current limits.',
-        );
-      await assertProviderFutureCapacity(db, p.id, total, Number(p.policy.reserveSlots ?? 0));
-      const updated = (
-        await db.query(
-          'UPDATE broker_providers SET total_capacity=$2 WHERE id=$1 RETURNING policy_revision',
-          [p.id, total],
-        )
-      ).rows[0];
-      await activity(
+    return transaction(ctx.pool, async (db) =>
+      withOperation(
         db,
-        p.id,
-        null,
-        'capacity_changed',
-        `Configured capacity set to ${total}. Existing reservations retained.`,
-      );
-      return { total, policyRevision: updated.policy_revision };
-    });
+        actor,
+        'provider.capacity.set',
+        clientOperationKey(
+          (request.body as Row)?.operationKey ?? request.headers['idempotency-key'],
+          Boolean(actor.apiKey),
+        ),
+        { total, expectedRevision },
+        async () => {
+          await db.query("SELECT pg_advisory_xact_lock(hashtext('broker-global-vm-admission'))");
+          const p = (
+            await db.query('SELECT * FROM broker_providers WHERE user_id=$1 FOR UPDATE', [actor.id])
+          ).rows[0];
+          if (!p) throw new HttpError(403, 'Provider access is not configured.');
+          if (expectedRevision !== undefined && expectedRevision !== p.policy_revision)
+            throw new HttpError(
+              409,
+              'Capacity or policy changed. Reload and review the current limits.',
+            );
+          await assertProviderFutureCapacity(db, p.id, total, Number(p.policy.reserveSlots ?? 0));
+          const updated = (
+            await db.query(
+              'UPDATE broker_providers SET total_capacity=$2 WHERE id=$1 RETURNING policy_revision',
+              [p.id, total],
+            )
+          ).rows[0];
+          await activity(
+            db,
+            p.id,
+            null,
+            'capacity_changed',
+            `Configured capacity set to ${total}. Existing reservations retained.`,
+          );
+          return { total, policyRevision: updated.policy_revision };
+        },
+      ),
+    );
   });
   app.post('/api/provider/policy/propose', async (request) => {
     const actor = await ctx.requireActor(request, ['provider']);
@@ -398,6 +445,7 @@ export async function registerMarketplace(app: FastifyInstance, ctx: AppContext)
         'policy_changed',
         'Reviewed pricing and reserve limits applied. Previously accepted bids and reservations remain binding.',
       );
+      await recordKeyAction(db, actor, 'provider.policy.apply', operationKey, p.id);
       return response;
     });
   });
@@ -411,7 +459,7 @@ export async function registerMarketplace(app: FastifyInstance, ctx: AppContext)
       )
     ).rows;
     return page(rows, limit, (r) => {
-      const { buyerId, ...visible } = requestView(r);
+      const { buyerId, source, ...visible } = requestView(r);
       return visible;
     });
   });
@@ -419,6 +467,7 @@ export async function registerMarketplace(app: FastifyInstance, ctx: AppContext)
     const actor = await ctx.requireActor(request, ['provider']);
     const body = request.body as Row;
     return submitBid(ctx, actor, uuid(request.params.id), {
+      operationKey: body?.operationKey ?? request.headers['idempotency-key'],
       totalPriceCents: body?.totalPriceCents,
       offeringId: body?.offeringId ? uuid(body.offeringId) : undefined,
     });
@@ -464,108 +513,155 @@ export async function registerMarketplace(app: FastifyInstance, ctx: AppContext)
       ctx.wick.mode === 'fixture' ? integer(b?.priceCents, 'Total price') : undefined;
     if (b.durationMinutes !== undefined && b.durationMinutes !== 30)
       throw new HttpError(400, 'Published offering prices use a reviewed 30-minute baseline.');
-    return transaction(ctx.pool, async (db) => {
-      const owned = await getProvider(db, actor);
-      const p = (
-        await db.query('SELECT * FROM broker_providers WHERE id=$1 FOR UPDATE', [owned.id])
-      ).rows[0];
-      if (p.policy.allowedCatalogIds && !p.policy.allowedCatalogIds.includes(catalogId))
-        throw new HttpError(400, 'Provider policy excludes this configuration.');
-      const c = (
-        await db.query(
-          'SELECT approved,item FROM broker_catalog WHERE id=$1 AND source_mode=$2 FOR SHARE',
-          [catalogId, ctx.wick.mode],
-        )
-      ).rows[0];
-      if (!c?.approved)
-        throw new HttpError(
-          400,
-          'Offerings must use an administrator-approved existing Wick configuration.',
-        );
-      assertProviderCatalog(p, c.item);
-      let pricing;
-      if (ctx.wick.mode === 'real') {
-        try {
-          requireFreshManagedRate(c.item);
-          pricing = managedPricing(c.item);
-        } catch (error) {
-          throw new HttpError(400, (error as Error).message);
-        }
-      }
-      const price = pricing
-        ? Math.max(p.policy.minimumPriceCents, fixedQuote(pricing, 30).totalPriceCents)
-        : fixturePrice!;
-      if (pricing && b.priceBasis === 'server-priced-candidate' && b.priceCents !== price)
-        throw new HttpError(
-          409,
-          'The reviewed offering price changed. Generate and review a fresh suggestion.',
-        );
-      if (
-        price < p.policy.minimumPriceCents ||
-        (p.policy.maxPriceCents !== undefined && price > p.policy.maxPriceCents)
-      )
-        throw new HttpError(400, 'Offering price is outside your pricing policy.');
-      const duplicate = (
-        await db.query(
-          'SELECT id FROM broker_offerings WHERE provider_id=$1 AND catalog_id=$2 AND name=$3',
-          [p.id, catalogId, name],
-        )
-      ).rows[0];
-      if (duplicate)
-        throw new HttpError(409, 'An offering with this name and configuration already exists.');
-      const r = (
-        await db.query(
-          'INSERT INTO broker_offerings(provider_id,catalog_id,name,description,price_cents,pricing) VALUES($1,$2,$3,$4,$5,$6) RETURNING *',
-          [p.id, catalogId, name, description, price, pricing ?? null],
-        )
-      ).rows[0];
-      await activity(
+    return transaction(ctx.pool, async (db) =>
+      withOperation(
         db,
-        p.id,
-        null,
-        'offering_published',
-        'Published an offering using an existing administrator-approved configuration.',
-      );
-      return offeringView({ ...r, simulated: p.simulated, cloud_provider: p.cloud_provider });
-    });
+        actor,
+        'provider.offerings.create',
+        clientOperationKey(
+          (request.body as Row)?.operationKey ?? request.headers['idempotency-key'],
+          Boolean(actor.apiKey),
+        ),
+        {
+          catalogId,
+          name,
+          description,
+          fixturePrice,
+          durationMinutes: 30,
+          priceBasis: b.priceBasis,
+          priceCents: b.priceCents,
+        },
+        async () => {
+          const owned = await getProvider(db, actor);
+          const p = (
+            await db.query('SELECT * FROM broker_providers WHERE id=$1 FOR UPDATE', [owned.id])
+          ).rows[0];
+          if (p.policy.allowedCatalogIds && !p.policy.allowedCatalogIds.includes(catalogId))
+            throw new HttpError(400, 'Provider policy excludes this configuration.');
+          const c = (
+            await db.query(
+              'SELECT approved,item FROM broker_catalog WHERE id=$1 AND source_mode=$2 FOR SHARE',
+              [catalogId, ctx.wick.mode],
+            )
+          ).rows[0];
+          if (!c?.approved)
+            throw new HttpError(
+              400,
+              'Offerings must use an administrator-approved existing Wick configuration.',
+            );
+          assertProviderCatalog(p, c.item);
+          let pricing;
+          if (ctx.wick.mode === 'real') {
+            try {
+              requireFreshManagedRate(c.item);
+              pricing = managedPricing(c.item);
+            } catch (error) {
+              throw new HttpError(400, (error as Error).message);
+            }
+          }
+          const price = pricing
+            ? Math.max(p.policy.minimumPriceCents, fixedQuote(pricing, 30).totalPriceCents)
+            : fixturePrice!;
+          if (pricing && b.priceBasis === 'server-priced-candidate' && b.priceCents !== price)
+            throw new HttpError(
+              409,
+              'The reviewed offering price changed. Generate and review a fresh suggestion.',
+            );
+          if (
+            price < p.policy.minimumPriceCents ||
+            (p.policy.maxPriceCents !== undefined && price > p.policy.maxPriceCents)
+          )
+            throw new HttpError(400, 'Offering price is outside your pricing policy.');
+          const duplicate = (
+            await db.query(
+              'SELECT id FROM broker_offerings WHERE provider_id=$1 AND catalog_id=$2 AND name=$3',
+              [p.id, catalogId, name],
+            )
+          ).rows[0];
+          if (duplicate)
+            throw new HttpError(
+              409,
+              'An offering with this name and configuration already exists.',
+            );
+          const r = (
+            await db.query(
+              'INSERT INTO broker_offerings(provider_id,catalog_id,name,description,price_cents,pricing,source_api_key_id) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *',
+              [
+                p.id,
+                catalogId,
+                name,
+                description,
+                price,
+                pricing ?? null,
+                actor.apiKey?.id ?? null,
+              ],
+            )
+          ).rows[0];
+          await activity(
+            db,
+            p.id,
+            null,
+            'offering_published',
+            'Published an offering using an existing administrator-approved configuration.',
+          );
+          return offeringView({ ...r, simulated: p.simulated, cloud_provider: p.cloud_provider });
+        },
+      ),
+    );
   });
   app.patch<{ Params: { id: string } }>('/api/provider/offerings/:id', async (request) => {
     const actor = await ctx.requireActor(request, ['provider']);
     const active = (request.body as Row)?.active;
     if (typeof active !== 'boolean') throw new HttpError(400, 'Active must be true or false.');
-    return transaction(ctx.pool, async (db) => {
-      const p = (
-        await db.query('SELECT * FROM broker_providers WHERE user_id=$1 FOR UPDATE', [actor.id])
-      ).rows[0];
-      if (!p) throw new HttpError(403, 'Provider access is not configured.');
-      const row = (
-        await db.query('SELECT * FROM broker_offerings WHERE id=$1 AND provider_id=$2 FOR UPDATE', [
-          uuid(request.params.id),
-          p.id,
-        ])
-      ).rows[0];
-      if (!row) throw new HttpError(404, 'Offering not found.');
-      if (active) {
-        const catalog = (
-          await db.query(
-            'SELECT item,approved FROM broker_catalog WHERE id=$1 AND source_mode=$2 FOR SHARE',
-            [row.catalog_id, ctx.wick.mode],
-          )
-        ).rows[0];
-        if (!catalog?.approved)
-          throw new HttpError(409, 'This configuration is no longer approved.');
-        assertProviderCatalog(p, catalog.item);
-        if (p.policy.allowedCatalogIds && !p.policy.allowedCatalogIds.includes(row.catalog_id))
-          throw new HttpError(403, 'Provider policy excludes this configuration.');
-      }
-      const updated = (
-        await db.query(
-          'UPDATE broker_offerings SET active=$2,revision=revision+1 WHERE id=$1 RETURNING *',
-          [row.id, active],
-        )
-      ).rows[0];
-      return offeringView({ ...updated, simulated: p.simulated, cloud_provider: p.cloud_provider });
-    });
+    return transaction(ctx.pool, async (db) =>
+      withOperation(
+        db,
+        actor,
+        'provider.offerings.update',
+        clientOperationKey(
+          (request.body as Row)?.operationKey ?? request.headers['idempotency-key'],
+          Boolean(actor.apiKey),
+        ),
+        { id: request.params.id, active },
+        async () => {
+          const p = (
+            await db.query('SELECT * FROM broker_providers WHERE user_id=$1 FOR UPDATE', [actor.id])
+          ).rows[0];
+          if (!p) throw new HttpError(403, 'Provider access is not configured.');
+          const row = (
+            await db.query(
+              'SELECT * FROM broker_offerings WHERE id=$1 AND provider_id=$2 FOR UPDATE',
+              [uuid(request.params.id), p.id],
+            )
+          ).rows[0];
+          if (!row) throw new HttpError(404, 'Offering not found.');
+          if (active) {
+            const catalog = (
+              await db.query(
+                'SELECT item,approved FROM broker_catalog WHERE id=$1 AND source_mode=$2 FOR SHARE',
+                [row.catalog_id, ctx.wick.mode],
+              )
+            ).rows[0];
+            if (!catalog?.approved)
+              throw new HttpError(409, 'This configuration is no longer approved.');
+            assertProviderCatalog(p, catalog.item);
+            if (p.policy.allowedCatalogIds && !p.policy.allowedCatalogIds.includes(row.catalog_id))
+              throw new HttpError(403, 'Provider policy excludes this configuration.');
+          }
+          const updated = (
+            await db.query(
+              'UPDATE broker_offerings SET active=$2,revision=revision+1 WHERE id=$1 RETURNING *',
+              [row.id, active],
+            )
+          ).rows[0];
+          return offeringView({
+            ...updated,
+            simulated: p.simulated,
+            cloud_provider: p.cloud_provider,
+          });
+        },
+      ),
+    );
   });
   app.get('/api/provider/activity', async (request) => {
     const p = await getProvider(ctx.pool, await ctx.requireActor(request, ['provider']));

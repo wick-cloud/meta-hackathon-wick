@@ -1,0 +1,40 @@
+{
+  "version": "0.1.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/wick-cloud/meta-hackathon-wick.git"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "name": "@wick-cloud/broker-mcp",
+  "description": "Wick Broker local MCP server",
+  "bin": {
+    "wick-broker-mcp": "./dist/index.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "dependencies": {
+    "@wick-cloud/broker-sdk": "0.1.0",
+    "@wick-cloud/broker-cli": "0.1.0",
+    "@modelcontextprotocol/server": "2.4.0",
+    "zod": "^4.1.12"
+  }
+}

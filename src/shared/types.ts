@@ -1,3 +1,4 @@
+import type { BrokerKeyAuthority } from './developer.js';
 export type Role = 'buyer' | 'provider' | 'admin';
 export type Mode = 'fixture' | 'real';
 export interface Actor {
@@ -6,6 +7,7 @@ export interface Actor {
   name: string;
   role: Role;
   providerId?: string;
+  apiKey?: BrokerKeyAuthority;
 }
 export interface CatalogItem {
   id: string;

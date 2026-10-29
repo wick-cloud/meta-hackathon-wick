@@ -7,7 +7,7 @@ import { existsSync } from 'node:fs';
 import { ZodError } from 'zod';
 import type { Config } from './config.js';
 import { createPool, migrate } from './db.js';
-import { createAuth, createRequireActor, registerAuth } from './auth.js';
+import { createAuth, createRequireActor, registerAuth, registerBrokerKeyAccess } from './auth.js';
 import { HttpError, type AppContext } from './context.js';
 import { createWickAdapter } from './integrations/wick.js';
 import type { WickAdapter } from './integrations/types.js';
@@ -17,8 +17,11 @@ import { registerMarketplace, startMarketplaceWorkers, getCatalog } from './mark
 import { registerMuse } from './muse/index.js';
 import { registerNegotiation } from './marketplace/negotiation.js';
 import { registerOrders } from './orders.js';
+import { publicCatalogView } from './public-views.js';
+import { registerOpenApi } from './openapi.js';
 import { registerAgreements, startAgreementWorkers } from './agreements/index.js';
 import { registerAgreementBilling } from './agreement-billing.js';
+import { registerDeveloperKeys } from './developer-keys.js';
 export async function buildApp(
   config: Config,
   options: { wrapWick?: (adapter: WickAdapter) => WickAdapter; clientRoot?: string } = {},
@@ -55,9 +58,11 @@ export async function buildApp(
     muse: createMuseAdapter(config),
     requireActor: createRequireActor(auth, pool),
   };
+  registerBrokerKeyAccess(app, ctx.requireActor);
   let closing = false;
   app.addHook('onRequest', async (request, reply) => {
     reply
+      .header('X-Request-Id', request.id)
       .header('X-Content-Type-Options', 'nosniff')
       .header('Referrer-Policy', 'same-origin')
       .header('X-Frame-Options', 'DENY');
@@ -83,6 +88,8 @@ export async function buildApp(
     if (error instanceof ZodError)
       return reply.status(400).send({
         error: 'Please check the supplied values.',
+        code: 'invalid_request',
+        requestId: request.id,
         details: error.issues.map((i) => ({ field: i.path.join('.'), message: i.message })),
       });
     const status =
@@ -96,7 +103,24 @@ export async function buildApp(
         { name: (error as Error).name, code: (error as { code?: string }).code },
         'Request failed',
       );
+    const retryAfter = (error as { retryAfter?: number }).retryAfter;
+    if (retryAfter !== undefined) reply.header('Retry-After', String(retryAfter));
+    const code =
+      typeof (error as { code?: unknown }).code === 'string' && status < 500
+        ? (error as { code: string }).code
+        : ((
+            {
+              400: 'invalid_request',
+              401: 'unauthorized',
+              403: 'forbidden',
+              404: 'not_found',
+              409: 'conflict',
+              429: 'rate_limited',
+            } as Record<number, string>
+          )[status] ?? 'service_unavailable');
     return reply.status(status).send({
+      code,
+      requestId: request.id,
       error:
         status >= 500
           ? 'The service could not complete this request. Please try again.'
@@ -115,6 +139,7 @@ export async function buildApp(
   });
   await app.register(websocket, { options: { maxPayload: 33792, perMessageDeflate: false } });
   await registerAuth(app, auth, config);
+  await registerDeveloperKeys(app, ctx);
   app.get('/api/me', async (request) => {
     try {
       const user = await ctx.requireActor(request);
@@ -122,7 +147,10 @@ export async function buildApp(
         user,
         modes: { wick: config.wickMode, muse: config.museMode },
         commissionBps: 1500,
-        catalog: await getCatalog(ctx),
+        catalog:
+          !user.apiKey || user.apiKey.scopes.includes('catalog:read')
+            ? (await getCatalog(ctx)).map(publicCatalogView)
+            : [],
       };
     } catch (error) {
       if (error instanceof HttpError && error.statusCode === 401)
@@ -132,8 +160,9 @@ export async function buildApp(
   });
   app.get('/api/catalog', async (request) => {
     await ctx.requireActor(request);
-    return { items: await getCatalog(ctx) };
+    return { items: (await getCatalog(ctx)).map(publicCatalogView) };
   });
+  registerOpenApi(app);
   await registerMarketplace(app, ctx);
   registerOrders(app, ctx);
   await registerAgreements(app, ctx);
@@ -152,7 +181,9 @@ export async function buildApp(
         request.url.startsWith('/assets/') ||
         request.method !== 'GET'
       )
-        return reply.code(404).send({ error: 'Not found.' });
+        return reply
+          .code(404)
+          .send({ error: 'Not found.', code: 'not_found', requestId: request.id });
       return reply.sendFile('index.html');
     });
   } else if (config.nodeEnv === 'development') {

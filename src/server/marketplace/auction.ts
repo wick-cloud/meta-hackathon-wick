@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { clientOperationKey, enforceKeyLimit, withOperation } from '../operations.js';
 import type { Pool, PoolClient } from 'pg';
 import { availableForBids } from './policy.js';
 import { availableForInterval, globalAvailableForInterval } from '../agreements/calendar.js';
@@ -62,161 +63,189 @@ export async function createRequest(
   for (const key of ['git', 'repository', 'repo', 'task', 'command', 'agent'])
     if (key in body)
       throw new HttpError(400, 'Environment requests cannot contain workload execution fields.');
-  return transaction(ctx.pool, async (db) => {
-    if (priorRequestId) {
-      const prior = (
-        await db.query('SELECT * FROM broker_requests WHERE id=$1 AND buyer_id=$2 FOR UPDATE', [
-          priorRequestId,
-          actor.id,
-        ])
-      ).rows[0];
-      if (!prior) throw new HttpError(404, 'Request not found.');
-      if (!['no_offers', 'failed', 'cancelled'].includes(prior.status))
-        throw new HttpError(409, 'Only a finished unsuccessful attempt can be retried.');
-      if (prior.resolution_request_id) {
-        const resolved = (
-          await db.query('SELECT * FROM broker_requests WHERE id=$1', [prior.resolution_request_id])
-        ).rows[0];
-        if (resolved?.prior_request_id === prior.id && !resolved.negotiation_intent_id)
-          return requestView(resolved);
-        throw new HttpError(409, 'This request was already resolved by an accepted alternative.');
-      }
-      if (
-        (
-          await db.query(
-            'SELECT 1 FROM broker_vms WHERE request_id=$1 AND cleanup_confirmed_at IS NULL',
-            [prior.id],
+  enforceKeyLimit(actor.apiKey, 'maxAuctionCents', maxPriceCents);
+  const operation = clientOperationKey(body.operationKey, Boolean(actor.apiKey));
+  return transaction(ctx.pool, async (db) =>
+    withOperation(
+      db,
+      actor,
+      priorRequestId ? 'orders.retry' : 'orders.create',
+      operation,
+      {
+        description,
+        catalogId,
+        region,
+        matchAcrossProviders,
+        durationMinutes,
+        maxPriceCents,
+        requirements: { cpu, memoryGb, ...(gpu ? { gpu } : {}) },
+        priorRequestId: priorRequestId ?? null,
+        mode: ctx.wick.mode,
+      },
+      async () => {
+        if (priorRequestId) {
+          const prior = (
+            await db.query('SELECT * FROM broker_requests WHERE id=$1 AND buyer_id=$2 FOR UPDATE', [
+              priorRequestId,
+              actor.id,
+            ])
+          ).rows[0];
+          if (!prior) throw new HttpError(404, 'Request not found.');
+          if (!['no_offers', 'failed', 'cancelled'].includes(prior.status))
+            throw new HttpError(409, 'Only a finished unsuccessful attempt can be retried.');
+          if (prior.resolution_request_id) {
+            const resolved = (
+              await db.query('SELECT * FROM broker_requests WHERE id=$1', [
+                prior.resolution_request_id,
+              ])
+            ).rows[0];
+            if (resolved?.prior_request_id === prior.id && !resolved.negotiation_intent_id)
+              return requestView(resolved);
+            throw new HttpError(
+              409,
+              'This request was already resolved by an accepted alternative.',
+            );
+          }
+          if (
+            (
+              await db.query(
+                'SELECT 1 FROM broker_vms WHERE request_id=$1 AND cleanup_confirmed_at IS NULL',
+                [prior.id],
+              )
+            ).rowCount
           )
-        ).rowCount
-      )
-        throw new HttpError(409, 'Wait for the prior environment cleanup before retrying.');
-      if ((prior.catalog_snapshot.sourceMode ?? 'fixture') !== ctx.wick.mode)
-        throw new HttpError(409, 'The integration mode changed. Review a new request.');
-    }
-    const result = await db.query(
-      'SELECT item,approved FROM broker_catalog WHERE id=$1 AND source_mode=$2 FOR SHARE',
-      [catalogId, ctx.wick.mode],
-    );
-    const catalog = result.rows[0]?.item as CatalogItem | undefined;
-    if (!catalog || !result.rows[0].approved)
-      throw new HttpError(400, 'Choose an administrator-approved configuration.');
-    let pricing;
-    if (ctx.wick.mode === 'real') {
-      try {
-        assertManagedCustomerRoute(catalog);
-        requireFreshManagedRate(catalog);
-        pricing = managedPricing(catalog);
-      } catch (error) {
-        throw new HttpError(400, (error as Error).message);
-      }
-    }
-    if (!catalog.durationMinutes.includes(durationMinutes))
-      throw new HttpError(
-        400,
-        'This configuration does not support the exact selected rental duration.',
-      );
-    if (
-      (region !== 'any' && catalog.region !== region) ||
-      catalog.cpu < cpu ||
-      catalog.memoryGb < memoryGb ||
-      (gpu && (gpu === 'any' ? !catalog.gpu : catalog.gpu !== gpu))
-    )
-      throw new HttpError(
-        400,
-        'The configuration does not satisfy the requested region and resources.',
-      );
-    const frozen = {
-      ...catalog,
-      approved: true,
-      sourceMode: ctx.wick.mode,
-      ...(pricing ? { pricing } : {}),
-    };
-    let eligibleCatalogs: Row[] | undefined;
-    if (matchAcrossProviders) {
-      const rows = (
-        await db.query(
-          `SELECT id,item FROM broker_catalog WHERE approved AND source_mode=$1
+            throw new HttpError(409, 'Wait for the prior environment cleanup before retrying.');
+          if ((prior.catalog_snapshot.sourceMode ?? 'fixture') !== ctx.wick.mode)
+            throw new HttpError(409, 'The integration mode changed. Review a new request.');
+        }
+        const result = await db.query(
+          'SELECT item,approved FROM broker_catalog WHERE id=$1 AND source_mode=$2 FOR SHARE',
+          [catalogId, ctx.wick.mode],
+        );
+        const catalog = result.rows[0]?.item as CatalogItem | undefined;
+        if (!catalog || !result.rows[0].approved)
+          throw new HttpError(400, 'Choose an administrator-approved configuration.');
+        let pricing;
+        if (ctx.wick.mode === 'real') {
+          try {
+            assertManagedCustomerRoute(catalog);
+            requireFreshManagedRate(catalog);
+            pricing = managedPricing(catalog);
+          } catch (error) {
+            throw new HttpError(400, (error as Error).message);
+          }
+        }
+        if (!catalog.durationMinutes.includes(durationMinutes))
+          throw new HttpError(
+            400,
+            'This configuration does not support the exact selected rental duration.',
+          );
+        if (
+          (region !== 'any' && catalog.region !== region) ||
+          catalog.cpu < cpu ||
+          catalog.memoryGb < memoryGb ||
+          (gpu && (gpu === 'any' ? !catalog.gpu : catalog.gpu !== gpu))
+        )
+          throw new HttpError(
+            400,
+            'The configuration does not satisfy the requested region and resources.',
+          );
+        const frozen = {
+          ...catalog,
+          approved: true,
+          sourceMode: ctx.wick.mode,
+          ...(pricing ? { pricing } : {}),
+        };
+        let eligibleCatalogs: Row[] | undefined;
+        if (matchAcrossProviders) {
+          const rows = (
+            await db.query(
+              `SELECT id,item FROM broker_catalog WHERE approved AND source_mode=$1
            AND ($1 <> 'real' OR item->>'provider'=ANY($2::text[]))
            AND (item->>'cpu')::numeric >= $3 AND (item->>'memoryGb')::numeric >= $4
            AND ($5='any' OR item->>'region'=$5)
            AND item->'durationMinutes' @> $6::jsonb
            ORDER BY id LIMIT $7 FOR SHARE`,
+              [
+                ctx.wick.mode,
+                [...CLOUD_PROVIDERS],
+                cpu,
+                memoryGb,
+                region,
+                JSON.stringify([durationMinutes]),
+                MAX_MATCH_CATALOGS + 1,
+              ],
+            )
+          ).rows;
+          if (rows.length > MAX_MATCH_CATALOGS)
+            throw new HttpError(
+              400,
+              'Too many matching configurations. Choose a region or narrower resources.',
+            );
+          eligibleCatalogs = rows
+            .map((row) => ({ ...row.item, id: row.id }) as CatalogItem)
+            .filter((item) =>
+              catalogSatisfiesRequest(item, {
+                requirements: { cpu, memoryGb, ...(gpu ? { gpu } : {}) },
+                region,
+                duration_minutes: durationMinutes,
+              }),
+            )
+            .map((item) => {
+              try {
+                if (ctx.wick.mode === 'real') {
+                  assertManagedCustomerRoute(item);
+                  requireFreshManagedRate(item);
+                }
+                return {
+                  ...item,
+                  approved: true,
+                  sourceMode: ctx.wick.mode,
+                  ...(ctx.wick.mode === 'real' ? { pricing: managedPricing(item) } : {}),
+                };
+              } catch (error) {
+                throw new HttpError(400, (error as Error).message);
+              }
+            });
+          if (!eligibleCatalogs.length)
+            throw new HttpError(
+              400,
+              'No approved configuration satisfies the reviewed requirements.',
+            );
+        }
+        const r = await db.query(
+          `INSERT INTO broker_requests(buyer_id,description,catalog_id,catalog_snapshot,region,duration_minutes,max_price_cents,requirements,prior_request_id,source_api_key_id)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
           [
-            ctx.wick.mode,
-            [...CLOUD_PROVIDERS],
-            cpu,
-            memoryGb,
+            actor.id,
+            description,
+            catalogId,
+            {
+              ...frozen,
+              ...(eligibleCatalogs ? { matchMode: 'compatible', eligibleCatalogs } : {}),
+            },
             region,
-            JSON.stringify([durationMinutes]),
-            MAX_MATCH_CATALOGS + 1,
+            durationMinutes,
+            maxPriceCents,
+            { cpu, memoryGb, ...(gpu ? { gpu } : {}) },
+            priorRequestId || null,
+            actor.apiKey?.id ?? null,
           ],
-        )
-      ).rows;
-      if (rows.length > MAX_MATCH_CATALOGS)
-        throw new HttpError(
-          400,
-          'Too many matching configurations. Choose a region or narrower resources.',
         );
-      eligibleCatalogs = rows
-        .map((row) => ({ ...row.item, id: row.id }) as CatalogItem)
-        .filter((item) =>
-          catalogSatisfiesRequest(item, {
-            requirements: { cpu, memoryGb, ...(gpu ? { gpu } : {}) },
-            region,
-            duration_minutes: durationMinutes,
-          }),
-        )
-        .map((item) => {
-          try {
-            if (ctx.wick.mode === 'real') {
-              assertManagedCustomerRoute(item);
-              requireFreshManagedRate(item);
-            }
-            return {
-              ...item,
-              approved: true,
-              sourceMode: ctx.wick.mode,
-              ...(ctx.wick.mode === 'real' ? { pricing: managedPricing(item) } : {}),
-            };
-          } catch (error) {
-            throw new HttpError(400, (error as Error).message);
-          }
-        });
-      if (!eligibleCatalogs.length)
-        throw new HttpError(400, 'No approved configuration satisfies the reviewed requirements.');
-    }
-    const r = await db.query(
-      `INSERT INTO broker_requests(buyer_id,description,catalog_id,catalog_snapshot,region,duration_minutes,max_price_cents,requirements,prior_request_id)
-      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
-      [
-        actor.id,
-        description,
-        catalogId,
-        {
-          ...frozen,
-          ...(eligibleCatalogs ? { matchMode: 'compatible', eligibleCatalogs } : {}),
-        },
-        region,
-        durationMinutes,
-        maxPriceCents,
-        { cpu, memoryGb, ...(gpu ? { gpu } : {}) },
-        priorRequestId || null,
-      ],
-    );
-    const request = r.rows[0];
-    if (priorRequestId) {
-      await db.query('UPDATE broker_requests SET resolution_request_id=$2 WHERE id=$1', [
-        priorRequestId,
-        request.id,
-      ]);
-      await db.query(
-        "UPDATE broker_intents SET status='resolved' WHERE source_request_id=$1 AND status='open'",
-        [priorRequestId],
-      );
-    }
-    await enqueue(ctx, db, QUEUES.close, { requestId: request.id }, 30);
-    const providers = await db.query(
-      `SELECT p.id FROM broker_providers p WHERE p.policy->>'autoBid'='true'
+        const request = r.rows[0];
+        if (priorRequestId) {
+          await db.query('UPDATE broker_requests SET resolution_request_id=$2 WHERE id=$1', [
+            priorRequestId,
+            request.id,
+          ]);
+          await db.query(
+            "UPDATE broker_intents SET status='resolved' WHERE source_request_id=$1 AND status='open'",
+            [priorRequestId],
+          );
+        }
+        await enqueue(ctx, db, QUEUES.close, { requestId: request.id }, 30);
+        const providers = await db.query(
+          `SELECT p.id FROM broker_providers p WHERE p.policy->>'autoBid'='true'
        AND ($3::boolean=false OR $4 <> 'real' OR p.cloud_provider IS NOT NULL)
        AND EXISTS(SELECT 1 FROM broker_catalog c
          JOIN LATERAL(SELECT 1 FROM broker_offerings o WHERE o.provider_id=p.id
@@ -226,17 +255,19 @@ export async function createRequest(
          AND (p.policy->'allowedCatalogIds' IS NULL OR p.policy->'allowedCatalogIds'='null'::jsonb
               OR p.policy->'allowedCatalogIds' ? c.id))
        ORDER BY (p.cloud_provider IS NOT NULL) DESC,p.id LIMIT $2`,
-      [
-        (eligibleCatalogs ?? [frozen]).map((item) => item.id),
-        8,
-        matchAcrossProviders,
-        ctx.wick.mode,
-      ],
-    );
-    for (const p of providers.rows)
-      await enqueue(ctx, db, QUEUES.auto, { requestId: request.id, providerId: p.id });
-    return requestView(request);
-  });
+          [
+            (eligibleCatalogs ?? [frozen]).map((item) => item.id),
+            8,
+            matchAcrossProviders,
+            ctx.wick.mode,
+          ],
+        );
+        for (const p of providers.rows)
+          await enqueue(ctx, db, QUEUES.auto, { requestId: request.id, providerId: p.id });
+        return requestView(request);
+      },
+    ),
+  );
 }
 
 interface PublishedMatch {
@@ -335,120 +366,138 @@ export async function submitBid(
   ctx: AppContext,
   actor: Actor,
   requestId: string,
-  input: { totalPriceCents: number; offeringId?: string },
+  input: { totalPriceCents: number; offeringId?: string; operationKey?: string },
   source: 'manual' | 'auto' = 'manual',
 ) {
   const price = integer(input.totalPriceCents, 'Total price');
-  return transaction(ctx.pool, async (db) => {
-    await db.query("SELECT pg_advisory_xact_lock(hashtext('broker-global-vm-admission'))");
-    const request = (
-      await db.query('SELECT * FROM broker_requests WHERE id=$1 FOR UPDATE', [requestId])
-    ).rows[0];
-    if (!request) throw new HttpError(404, 'Request not found.');
-    const deadline = (
-      await db.query(
-        'SELECT clock_timestamp()<closes_at AS eligible FROM broker_requests WHERE id=$1',
-        [requestId],
-      )
-    ).rows[0].eligible;
-    if (request.status !== 'open' || !deadline)
-      throw new HttpError(409, 'This auction has closed. Late bids are not accepted.');
-    const provider = await getProvider(db, actor);
-    await db.query('SELECT id FROM broker_providers WHERE id=$1 FOR UPDATE', [provider.id]);
-    const p = (await db.query('SELECT * FROM broker_providers WHERE id=$1', [provider.id])).rows[0];
-    const policy = p.policy;
-    if (source === 'auto' && !policy.autoBid)
-      throw new HttpError(409, 'Automatic bidding was disabled before submission.');
-    if (
-      price > request.max_price_cents ||
-      price < policy.minimumPriceCents ||
-      (policy.maxPriceCents !== undefined && price > policy.maxPriceCents)
-    )
-      throw new HttpError(400, 'Price is outside the customer budget or provider pricing policy.');
-    const match = (await publishedMatches(ctx, db, request, p, input.offeringId))[0]!;
-    const offering = match.offering;
-    let pricing;
-    if (ctx.wick.mode === 'real') {
-      try {
-        pricing = acceptedBidQuote(offering.pricing, request.duration_minutes, price);
-      } catch (error) {
-        throw new HttpError(409, (error as Error).message);
-      }
-    }
-    const existing = (
-      await db.query('SELECT id FROM broker_bids WHERE request_id=$1 AND provider_id=$2', [
-        requestId,
-        p.id,
-      ])
-    ).rows[0];
-    if (existing) throw new HttpError(409, 'This provider already submitted a binding bid.');
-    const held = Number(
-      (
-        await db.query(
-          'SELECT count(*)::int AS n FROM broker_holds WHERE provider_id=$1 AND released_at IS NULL',
-          [p.id],
-        )
-      ).rows[0].n,
-    );
-    if (availableForBids(p.total_capacity, held, policy) < 1)
-      throw new HttpError(409, 'All simulated supplier slots are already reserved.');
-    const interval = instantReservationInterval(request);
-    if ((await availableForInterval(ctx, db, p.id, interval.startsAt, interval.endsAt)) < 1)
-      throw new HttpError(409, 'This rental would overlap already booked capacity.');
-    const scheduled = await db.query(
-      "SELECT 1 FROM broker_agreement_bookings WHERE tstzrange(starts_at,ends_at,'[)') && tstzrange($1::timestamptz,$2::timestamptz,'[)') LIMIT 1",
-      [interval.startsAt, interval.endsAt],
-    );
-    if (
-      scheduled.rowCount &&
-      (await globalAvailableForInterval(
-        ctx,
-        db,
-        interval.startsAt,
-        interval.endsAt,
-        undefined,
-        request.id,
-      )) < 1
-    )
-      throw new HttpError(
-        409,
-        'The concurrent VM limit is committed to scheduled capacity for this rental interval.',
-      );
-    const bid = (
-      await db.query(
-        `WITH acceptance AS MATERIALIZED (SELECT clock_timestamp() AS accepted_at) INSERT INTO broker_bids(request_id,provider_id,offering_id,offering_snapshot,total_price_cents,created_at) SELECT $1,$2,$3,$4,$5,accepted_at FROM acceptance WHERE accepted_at<(SELECT closes_at FROM broker_requests WHERE id=$1) RETURNING *`,
-        [
-          requestId,
-          p.id,
-          offering.id,
-          {
-            ...offeringView(offering),
-            bidSource: source,
-            catalog: { ...match.frozen, sourceMode: ctx.wick.mode },
-            simulated: p.simulated,
-            cloudProvider: p.cloud_provider,
-            revenueShare: revenueShare(price),
-            ...(pricing ? { pricing } : {}),
-          },
-          price,
-        ],
-      )
-    ).rows[0];
-    if (!bid)
-      throw new HttpError(
-        409,
-        'This auction closed while capacity was being reserved. Late bids are not accepted.',
-      );
-    await db.query('INSERT INTO broker_holds(bid_id,provider_id) VALUES($1,$2)', [bid.id, p.id]);
-    await activity(
+  const key = clientOperationKey(input.operationKey, Boolean(actor.apiKey));
+  return transaction(ctx.pool, async (db) =>
+    withOperation(
       db,
-      p.id,
-      requestId,
-      'bid',
-      'Submitted a fixed-price bid and reserved one simulated capacity slot.',
-    );
-    return bidView({ ...bid, provider_name: p.name });
-  });
+      actor,
+      'provider.bids.create',
+      key,
+      { requestId, price, offeringId: input.offeringId ?? null, source },
+      async () => {
+        await db.query("SELECT pg_advisory_xact_lock(hashtext('broker-global-vm-admission'))");
+        const request = (
+          await db.query('SELECT * FROM broker_requests WHERE id=$1 FOR UPDATE', [requestId])
+        ).rows[0];
+        if (!request) throw new HttpError(404, 'Request not found.');
+        const deadline = (
+          await db.query(
+            'SELECT clock_timestamp()<closes_at AS eligible FROM broker_requests WHERE id=$1',
+            [requestId],
+          )
+        ).rows[0].eligible;
+        if (request.status !== 'open' || !deadline)
+          throw new HttpError(409, 'This auction has closed. Late bids are not accepted.');
+        const provider = await getProvider(db, actor);
+        await db.query('SELECT id FROM broker_providers WHERE id=$1 FOR UPDATE', [provider.id]);
+        const p = (await db.query('SELECT * FROM broker_providers WHERE id=$1', [provider.id]))
+          .rows[0];
+        const policy = p.policy;
+        if (source === 'auto' && !policy.autoBid)
+          throw new HttpError(409, 'Automatic bidding was disabled before submission.');
+        if (
+          price > request.max_price_cents ||
+          price < policy.minimumPriceCents ||
+          (policy.maxPriceCents !== undefined && price > policy.maxPriceCents)
+        )
+          throw new HttpError(
+            400,
+            'Price is outside the customer budget or provider pricing policy.',
+          );
+        const match = (await publishedMatches(ctx, db, request, p, input.offeringId))[0]!;
+        const offering = match.offering;
+        let pricing;
+        if (ctx.wick.mode === 'real') {
+          try {
+            pricing = acceptedBidQuote(offering.pricing, request.duration_minutes, price);
+          } catch (error) {
+            throw new HttpError(409, (error as Error).message);
+          }
+        }
+        const existing = (
+          await db.query('SELECT id FROM broker_bids WHERE request_id=$1 AND provider_id=$2', [
+            requestId,
+            p.id,
+          ])
+        ).rows[0];
+        if (existing) throw new HttpError(409, 'This provider already submitted a binding bid.');
+        const held = Number(
+          (
+            await db.query(
+              'SELECT count(*)::int AS n FROM broker_holds WHERE provider_id=$1 AND released_at IS NULL',
+              [p.id],
+            )
+          ).rows[0].n,
+        );
+        if (availableForBids(p.total_capacity, held, policy) < 1)
+          throw new HttpError(409, 'All simulated supplier slots are already reserved.');
+        const interval = instantReservationInterval(request);
+        if ((await availableForInterval(ctx, db, p.id, interval.startsAt, interval.endsAt)) < 1)
+          throw new HttpError(409, 'This rental would overlap already booked capacity.');
+        const scheduled = await db.query(
+          "SELECT 1 FROM broker_agreement_bookings WHERE tstzrange(starts_at,ends_at,'[)') && tstzrange($1::timestamptz,$2::timestamptz,'[)') LIMIT 1",
+          [interval.startsAt, interval.endsAt],
+        );
+        if (
+          scheduled.rowCount &&
+          (await globalAvailableForInterval(
+            ctx,
+            db,
+            interval.startsAt,
+            interval.endsAt,
+            undefined,
+            request.id,
+          )) < 1
+        )
+          throw new HttpError(
+            409,
+            'The concurrent VM limit is committed to scheduled capacity for this rental interval.',
+          );
+        const bid = (
+          await db.query(
+            `WITH acceptance AS MATERIALIZED (SELECT clock_timestamp() AS accepted_at) INSERT INTO broker_bids(request_id,provider_id,offering_id,offering_snapshot,total_price_cents,source_api_key_id,created_at) SELECT $1,$2,$3,$4,$5,$6,accepted_at FROM acceptance WHERE accepted_at<(SELECT closes_at FROM broker_requests WHERE id=$1) RETURNING *`,
+            [
+              requestId,
+              p.id,
+              offering.id,
+              {
+                ...offeringView(offering),
+                bidSource: source,
+                catalog: { ...match.frozen, sourceMode: ctx.wick.mode },
+                simulated: p.simulated,
+                cloudProvider: p.cloud_provider,
+                revenueShare: revenueShare(price),
+                ...(pricing ? { pricing } : {}),
+              },
+              price,
+              actor.apiKey?.id ?? null,
+            ],
+          )
+        ).rows[0];
+        if (!bid)
+          throw new HttpError(
+            409,
+            'This auction closed while capacity was being reserved. Late bids are not accepted.',
+          );
+        await db.query('INSERT INTO broker_holds(bid_id,provider_id) VALUES($1,$2)', [
+          bid.id,
+          p.id,
+        ]);
+        await activity(
+          db,
+          p.id,
+          requestId,
+          'bid',
+          'Submitted a fixed-price bid and reserved one simulated capacity slot.',
+        );
+        return bidView({ ...bid, provider_name: p.name });
+      },
+    ),
+  );
 }
 
 export async function closeAuction(ctx: AppContext, requestId: string) {

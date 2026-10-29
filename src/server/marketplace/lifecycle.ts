@@ -1,3 +1,5 @@
+import type { Actor } from '../../shared/types.js';
+import { withOperation } from '../operations.js';
 import type { AppContext } from '../context.js';
 import type { WickEnvironment } from '../integrations/types.js';
 import {
@@ -438,26 +440,41 @@ async function retryCleanup(ctx: AppContext, vmId: string, attempt: number, mess
   });
 }
 
-export async function terminateVm(ctx: AppContext, buyerId: string, vmId: string) {
-  return transaction(ctx.pool, async (db) => {
-    const vm = (
-      await db.query('SELECT * FROM broker_vms WHERE id=$1 AND buyer_id=$2 FOR UPDATE', [
-        vmId,
-        buyerId,
-      ])
-    ).rows[0];
-    if (!vm) return false;
-    if (vm.cleanup_confirmed_at) return true;
-    await db.query(
-      "UPDATE broker_vms SET status='terminating',termination_requested_at=COALESCE(termination_requested_at,now()),cleanup_attempts=0 WHERE id=$1",
-      [vmId],
-    );
-    if (!vm.ready_at)
-      await db.query(
-        "UPDATE broker_requests SET status='cancelled',failure_reason='Cancelled before terminal readiness; no charge.' WHERE id=$1",
-        [vm.request_id],
-      );
-    await enqueue(ctx, db, QUEUES.cleanup, { vmId });
-    return true;
-  });
+export async function terminateVm(
+  ctx: AppContext,
+  buyerId: string,
+  vmId: string,
+  actor?: Actor,
+  operationKey?: string,
+) {
+  return transaction(ctx.pool, async (db) =>
+    withOperation(
+      db,
+      actor ?? { id: buyerId },
+      'vms.terminate',
+      operationKey,
+      { vmId },
+      async () => {
+        const vm = (
+          await db.query('SELECT * FROM broker_vms WHERE id=$1 AND buyer_id=$2 FOR UPDATE', [
+            vmId,
+            buyerId,
+          ])
+        ).rows[0];
+        if (!vm) return false;
+        if (vm.cleanup_confirmed_at) return true;
+        await db.query(
+          "UPDATE broker_vms SET status='terminating',termination_requested_at=COALESCE(termination_requested_at,now()),cleanup_attempts=0 WHERE id=$1",
+          [vmId],
+        );
+        if (!vm.ready_at)
+          await db.query(
+            "UPDATE broker_requests SET status='cancelled',failure_reason='Cancelled before terminal readiness; no charge.' WHERE id=$1",
+            [vm.request_id],
+          );
+        await enqueue(ctx, db, QUEUES.cleanup, { vmId });
+        return true;
+      },
+    ),
+  );
 }
