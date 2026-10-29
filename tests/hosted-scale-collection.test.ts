@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const state = vi.hoisted(() => ({
   now: 0,
   dropProvider: 'provider-blaxel',
+  dropStage: 'T0' as 'T0' | 'T1',
   rows: [] as Record<string, any>[],
   inputs: [] as { vmId: string; provider: string; data: string; at: number }[],
   opened: [] as string[],
@@ -14,7 +15,16 @@ const state = vi.hoisted(() => ({
   agedFinalCohort: false,
   finalHoldPolls: 0,
   finalAgedAt: 0,
-  sockets: new Map<string, { readyState: number; lastInputAt: number; close(): void }>(),
+  foreignBlaxelAfterProof: false,
+  errorOnBlaxelT1: false,
+  errorBeforeBlaxelClose: false,
+  errorHealthyAfterDiagnostic: false,
+  healthyErrorInjected: false,
+  journalPath: '',
+  sockets: new Map<
+    string,
+    { readyState: number; lastInputAt: number; close(): void; emitError(): void }
+  >(),
   onDelay: undefined as (() => void) | undefined,
   get: vi.fn(),
   terminate: vi.fn(),
@@ -80,7 +90,16 @@ vi.mock('ws', async () => {
             /printf '\\nHOSTED_%s%s_(T0|T1|RESIZE)\\n' '([a-f0-9]+)' '([a-f0-9]+)'/g,
           ),
         ];
-        if (this.provider === state.dropProvider && markers.some((m) => m[1] === 'T0')) return;
+        if (
+          state.errorOnBlaxelT1 &&
+          this.provider === 'provider-blaxel' &&
+          markers.some((m) => m[1] === 'T1')
+        ) {
+          queueMicrotask(() => this.emitError());
+          return;
+        }
+        if (this.provider === state.dropProvider && markers.some((m) => m[1] === state.dropStage))
+          return;
         const output =
           'synthetic-shell$ ' +
           markers.map((m) => '\r\nHOSTED_' + m[2] + m[3] + '_' + m[1] + '\r\n').join('');
@@ -100,6 +119,28 @@ vi.mock('ws', async () => {
         if (this.readyState === 3) return;
         this.readyState = 3;
         queueMicrotask(() => this.emit('close'));
+        if (state.errorHealthyAfterDiagnostic && this.provider === 'provider-blaxel') {
+          const completed = readFileSync(state.journalPath, 'utf8')
+            .trim()
+            .split('\n')
+            .map((line) => JSON.parse(line));
+          if (
+            completed.some(
+              (r) => r.kind === 'terminal-diagnostic-completed' && r.vmId === this.vmId,
+            )
+          ) {
+            state.errorHealthyAfterDiagnostic = false;
+            state.healthyErrorInjected = true;
+            const healthy = state.rows.find((r) => r.provider.provider === 'e2b')!;
+            queueMicrotask(() => state.sockets.get(healthy.vmId)!.emitError());
+          }
+        }
+      }
+      emitError() {
+        this.emit(
+          'message',
+          Buffer.from(JSON.stringify({ type: 'error', message: 'inert generic terminal error' })),
+        );
       }
     },
   };
@@ -150,6 +191,7 @@ describe('explicit Blaxel timeout collection with inert full-run fixtures', () =
     vi.clearAllMocks();
     state.now = Date.now();
     state.dropProvider = 'provider-blaxel';
+    state.dropStage = 'T0';
     state.rows = [];
     state.inputs = [];
     state.opened = [];
@@ -158,6 +200,11 @@ describe('explicit Blaxel timeout collection with inert full-run fixtures', () =
     state.agedFinalCohort = false;
     state.finalHoldPolls = 0;
     state.finalAgedAt = 0;
+    state.foreignBlaxelAfterProof = false;
+    state.errorOnBlaxelT1 = false;
+    state.errorBeforeBlaxelClose = false;
+    state.errorHealthyAfterDiagnostic = false;
+    state.healthyErrorInjected = false;
     state.sockets = new Map();
     vi.spyOn(Date, 'now').mockImplementation(() => state.now);
     state.create.mockImplementation(() => {
@@ -170,6 +217,7 @@ describe('explicit Blaxel timeout collection with inert full-run fixtures', () =
     mkdirSync(control, { recursive: true, mode: 0o700 });
     directory = mkdtempSync(resolve(control, 'offline-collection-'));
     journalPath = resolve(directory, 'journal.jsonl');
+    state.journalPath = journalPath;
     settingsPath = resolve(directory, 'settings.json');
     writeFileSync(settingsPath, JSON.stringify(settings), { mode: 0o600 });
     runId = randomUUID();
@@ -235,10 +283,18 @@ describe('explicit Blaxel timeout collection with inert full-run fixtures', () =
     state.get.mockImplementation(async (id: string) => {
       const r = findNative(id);
       if (!r.terminated) state.nativeRunningSeen.add(id);
+      const blaxelAfterProof =
+        !r.terminated &&
+        r.provider.provider === 'provider-blaxel' &&
+        state.inputs.some((input) => input.vmId === r.vmId && input.data.includes('_T1'));
+      if (blaxelAfterProof && state.errorBeforeBlaxelClose) state.sockets.get(r.vmId)!.emitError();
       return {
         id,
         name: 'wick-broker-' + r.vmId.slice(0, 8),
-        organizationId: settings.wick.organizationId,
+        organizationId:
+          blaxelAfterProof && state.foreignBlaxelAfterProof
+            ? 'foreign-inert-org'
+            : settings.wick.organizationId,
         groupId: settings.wick.groupId,
         provider: r.provider.provider,
         profile: 'micro',
@@ -389,7 +445,10 @@ describe('explicit Blaxel timeout collection with inert full-run fixtures', () =
       .trim()
       .split('\n')
       .map((line) => JSON.parse(line));
-  async function run(policy?: 'collect-blaxel-timeouts', requestedPolicy?: 'strict') {
+  async function run(
+    policy?: 'collect-blaxel-timeouts' | 'compute-with-blaxel-diagnostics',
+    requestedPolicy?: 'strict',
+  ) {
     if (!existsSync(journalPath)) {
       if (policy) records[0].terminalPolicy = policy;
       writeFileSync(journalPath, records.map((r) => JSON.stringify(r)).join('\n') + '\n', {
@@ -548,5 +607,139 @@ describe('explicit Blaxel timeout collection with inert full-run fixtures', () =
     expect(finalInputs).toHaveLength(15);
     expect(new Set(finalInputs.map((i) => i.vmId)).size).toBe(15);
     assertBoundedCleanup(20);
+  });
+
+  it('deliberately closes five successful initial Blaxel diagnostics and preserves a fifteen-terminal compute-only result', async () => {
+    state.dropProvider = '';
+    const result = await run('compute-with-blaxel-diagnostics');
+    expect(result).toMatchObject({
+      computeValidationPassed: true,
+      validationPassed: false,
+      passed: false,
+      validationFailure: 'ALL_PROVIDER_TERMINAL_OVERLAP_NOT_VALIDATED',
+      attemptedRequests: 20,
+      successfulBlaxelDiagnostics: 5,
+      knownBlaxelTerminalFailures: 0,
+      simultaneousTerminals: 15,
+      shellStateAndCwdProofs: 15,
+      peakRunning: 20,
+      invoiceCount: 20,
+    });
+    expect(result.terminalHoldMs).toBeGreaterThanOrEqual(30000);
+    expect(result.terminalResults['provider-blaxel']).toMatchObject({
+      attempted: 5,
+      initialProofs: 5,
+      proven: 0,
+      failedProofs: 0,
+      diagnosticClosed: 5,
+      closedAfterKnownFailure: 0,
+    });
+    for (const provider of ['e2b', 'daytona', 'modal'])
+      expect(result.terminalResults[provider]).toMatchObject({
+        attempted: 5,
+        proven: 5,
+        failedProofs: 0,
+        diagnosticClosed: 0,
+      });
+    expect(Object.values(result.distribution)).toEqual([5, 5, 5, 5]);
+    expect(state.nativeRunningSeen.size).toBe(20);
+    expect(
+      journalRecords(journalPath).filter((r) => r.kind === 'terminal-proof-failed'),
+    ).toHaveLength(0);
+    assertBoundedCleanup(20);
+  });
+
+  it('treats a fresh native scope failure before a diagnostic close as fatal', async () => {
+    state.dropProvider = '';
+    state.foreignBlaxelAfterProof = true;
+    const result = await run('compute-with-blaxel-diagnostics');
+    expect(result).toMatchObject({
+      computeValidationPassed: false,
+      validationPassed: false,
+      passed: false,
+      attemptedRequests: 4,
+      successfulBlaxelDiagnostics: 0,
+      knownBlaxelTerminalFailures: 0,
+    });
+    expect(result.terminalResults['provider-blaxel']).toMatchObject({
+      diagnosticClosed: 0,
+      failedProofs: 0,
+    });
+    assertBoundedCleanup(4);
+  });
+
+  it('keeps known Blaxel T1 timeouts distinct from successful diagnostic closures', async () => {
+    state.dropStage = 'T1';
+    const result = await run('compute-with-blaxel-diagnostics');
+    expect(result).toMatchObject({
+      computeValidationPassed: true,
+      validationPassed: false,
+      passed: false,
+      attemptedRequests: 20,
+      simultaneousTerminals: 15,
+      successfulBlaxelDiagnostics: 0,
+      knownBlaxelTerminalFailures: 5,
+    });
+    expect(result.terminalResults['provider-blaxel']).toMatchObject({
+      initialProofs: 0,
+      diagnosticClosed: 0,
+      failedProofs: 5,
+      closedAfterKnownFailure: 5,
+    });
+    const failures = journalRecords(journalPath).filter((r) => r.kind === 'terminal-proof-failed');
+    expect(failures).toHaveLength(5);
+    expect(
+      failures.every(
+        (r) => r.provider === 'provider-blaxel' && r.phase === 't1' && r.collected === true,
+      ),
+    ).toBe(true);
+    assertBoundedCleanup(20);
+  });
+
+  it.each(['during-proof', 'before-deliberate-close'])(
+    'never collects a generic Blaxel terminal error %s',
+    async (phase) => {
+      state.dropProvider = '';
+      state.errorOnBlaxelT1 = phase === 'during-proof';
+      state.errorBeforeBlaxelClose = phase === 'before-deliberate-close';
+      const result = await run('compute-with-blaxel-diagnostics');
+      expect(result).toMatchObject({
+        computeValidationPassed: false,
+        validationPassed: false,
+        passed: false,
+        attemptedRequests: 4,
+        successfulBlaxelDiagnostics: 0,
+        knownBlaxelTerminalFailures: 0,
+      });
+      expect(result.terminalResults['provider-blaxel']).toMatchObject({
+        diagnosticClosed: 0,
+        failedProofs: 0,
+      });
+      expect(
+        journalRecords(journalPath).filter((r) => r.kind === 'terminal-proof-failed'),
+      ).toHaveLength(0);
+      assertBoundedCleanup(4);
+    },
+  );
+
+  it('keeps healthy-provider errors fatal after a Blaxel diagnostic deliberately closes', async () => {
+    state.dropProvider = '';
+    state.errorHealthyAfterDiagnostic = true;
+    const result = await run('compute-with-blaxel-diagnostics');
+    expect(state.healthyErrorInjected).toBe(true);
+    expect(result).toMatchObject({
+      computeValidationPassed: false,
+      validationPassed: false,
+      passed: false,
+      attemptedRequests: 4,
+      successfulBlaxelDiagnostics: 1,
+      knownBlaxelTerminalFailures: 0,
+    });
+    const rows = journalRecords(journalPath),
+      healthy = state.rows.find((r) => r.provider.provider === 'e2b')!;
+    expect(rows.some((r) => r.kind === 'terminal-failure' && r.vmId === healthy.vmId)).toBe(true);
+    expect(rows.filter((r) => r.kind === 'terminal-proof-failed')).toHaveLength(0);
+    expect(rows.some((r) => r.kind === 'request-intent' && r.item > 4)).toBe(false);
+    assertBoundedCleanup(4);
   });
 });
