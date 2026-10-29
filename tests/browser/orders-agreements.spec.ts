@@ -981,18 +981,39 @@ test('Funding estimate rounds each partial-hour VM window before target and mini
 test('Server-confirmed DST quote overrides this device and rejected calendars never create an order', async ({
   page,
 }) => {
-  const writes = await fixture(page, 'buyer', () => undefined);
+  await page.clock.install({ time: new Date('2025-10-29T12:00:00Z') });
+  const writes = await fixture(page, 'buyer', (path, method, body) => {
+    if (path !== '/api/agreements/preview' || method !== 'POST' || body.windowStart !== '00:00')
+      return undefined;
+    const quote = agreementEstimate(body),
+      windows = agreementWindows(body);
+    const shift = (value: string) => new Date(Date.parse(value) + 3600000).toISOString();
+    const first = windows[0]!;
+    // Model a server/device rule difference even when runtime tzdata versions agree.
+    // Shifting every endpoint equally keeps the valid window's elapsed cost unchanged.
+    windows[0] = {
+      startsAt: shift(first.startsAt),
+      discountEndsAt: shift(first.discountEndsAt),
+      endsAt: shift(first.endsAt),
+    };
+    return {
+      maxAmountCents: quote.maximum,
+      minimumAmountCents: quote.minimum,
+      windows,
+      timeZone: body.timeZone,
+    };
+  });
   await page.goto('/agreements/new');
   await page.getByLabel('Agreement name', { exact: true }).fill('Calendar validation');
   await page.getByLabel('Schedule time zone (IANA)', { exact: true }).fill('America/Vancouver');
-  await page.getByLabel('First local date', { exact: true }).fill('2026-10-29');
+  await page.getByLabel('First local date', { exact: true }).fill('2025-10-30');
   await page.getByLabel('Target slots per window', { exact: true }).fill('20');
   await page.getByLabel('Minimum approved per window', { exact: true }).fill('12');
   await page.getByLabel('Window opens', { exact: true }).fill('00:00');
   await page.getByLabel('Discount ends', { exact: true }).fill('06:00');
   await page.getByLabel('Reserve a normal-rate continuation').check();
   const funding = page.locator('.market-two-column > aside');
-  // The Node fixture uses the server's timezone database, independently of Chromium.
+  // Historical DST fixes the funding expectation independently of current timezone changes.
   await page.getByRole('button', { name: 'Review agreement', exact: true }).click();
   await expect(
     page.getByRole('heading', { name: 'Review capacity agreement', exact: true }),
@@ -1006,7 +1027,10 @@ test('Server-confirmed DST quote overrides this device and rejected calendars ne
     ),
   ).toBeVisible();
   await expect(
-    page.getByRole('cell', { name: '2026-11-01 14:00:00 UTC', exact: true }),
+    page.getByRole('cell', { name: '2025-10-30 08:00:00 UTC', exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole('cell', { name: '2025-11-02 14:00:00 UTC', exact: true }),
   ).toBeVisible();
   expect(writes).toHaveLength(0);
   await page.getByRole('button', { name: 'Edit request', exact: true }).click();
@@ -1019,7 +1043,7 @@ test('Server-confirmed DST quote overrides this device and rejected calendars ne
   await expect(
     page.getByRole('button', { name: 'Fund & request capacity', exact: true }),
   ).toHaveCount(0);
-  await page.getByLabel('First local date', { exact: true }).fill('2026-03-08');
+  await page.getByLabel('First local date', { exact: true }).fill('2025-03-09');
   await page.getByLabel('Window opens', { exact: true }).fill('02:30');
   await page.getByRole('button', { name: 'Review agreement', exact: true }).click();
   await expect(page.getByRole('alert')).toContainText('daylight-saving transition');
@@ -1032,7 +1056,7 @@ test('Server-confirmed DST quote overrides this device and rejected calendars ne
   );
   await expect(funding.getByRole('heading', { level: 2 })).not.toContainText(/\$0|NaN/);
   await expect(page.getByRole('button', { name: 'Review agreement', exact: true })).toBeDisabled();
-  await page.getByLabel('First local date', { exact: true }).fill('2026-10-29');
+  await page.getByLabel('First local date', { exact: true }).fill('2025-10-30');
   await page.getByLabel('Window opens', { exact: true }).fill('');
   await expect(funding.getByRole('heading', { level: 2 })).toHaveText(
     'Complete the schedule for an estimate',
