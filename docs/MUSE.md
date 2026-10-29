@@ -1,6 +1,22 @@
-# Muse strategy and reviewed negotiation
+# Muse Spark Open on Baseten
 
-The deployed app uses **fixture Muse by user choice**. This change keeps `MUSE_MODE=fixture`; it does not make Meta calls or enable task mode. Fixture receipts say `modelCalled: false`. The real adapter implements the public `muse-wonder-1.0` structured-output contract for future separately authorized validation, without claiming live account access, schema acceptance, latency, or model quality.
+Real Muse mode uses **Muse Spark Open · Baseten**, with the exact hackathon model identifier **`meta-models/muse-spark-open-1026`**. `MUSE_MODE=fixture` remains an explicit deterministic mode: its receipts say no model call, and fixture behavior never substitutes for a failed real request. Selecting real mode does not imply every decision called a model; ineligible bids and other deterministic decisions retain `modelCalled: false`.
+
+Muse prepares editable proposals. It does not authorize spending, change policies, publish offerings, accept alternatives or start customer VMs by itself. Customers keep control of their terminal and commands.
+
+## Where Muse is used
+
+| Flow                        | Proposal endpoint                              | What the model contributes                                         | Required next step                                                            |
+| --------------------------- | ---------------------------------------------- | ------------------------------------------------------------------ | ----------------------------------------------------------------------------- |
+| Buyer environment           | `POST /api/muse/translate`                     | Approved configuration and supported resource requirements         | Buyer reviews before starting an auction                                      |
+| Provider capacity strategy  | `POST /api/provider/policy/propose`            | Editable limits using that provider's policy, capacity and catalog | Provider applies reviewed limits with revision and operation key              |
+| Provider bid                | `POST /api/provider/requests/:id/propose`      | Select the server-priced quote or decline                          | Saved policy, capacity and auction deadline are rechecked before any bid hold |
+| Provider offerings          | `POST /api/provider/offerings/propose`         | Select approved candidates from bounded aggregate unmet demand     | Provider reviews and publishes                                                |
+| Buyer alternatives          | `POST /api/intents/:id/propose`                | Select concrete eligible candidate IDs                             | Buyer explicitly accepts a frozen offer                                       |
+| Buyer agreement schedule    | `POST /api/agreements/draft`                   | Extract explicitly stated dates, hours, quantities and price caps  | Buyer edits, obtains the authoritative server quote and consents to funding   |
+| Provider scheduled offering | `POST /api/provider/scheduled-offerings/draft` | Extract an editable discount/availability schedule                 | Provider reviews rates, capacity and cutoff before publishing                 |
+
+Both schedule drafts use the same real transport. Unknown facts remain unset; prices are integer USD cents per VM-hour. A draft reserves no credit or capacity, and does not create a VM. The agreement review uses server-confirmed UTC windows and a maximum reservation ceiling; the model cannot bypass that preview or consent. See [Orders and funded agreements](orders-and-agreements.md).
 
 ## Provider Capacity Manager
 
@@ -45,16 +61,36 @@ Suggestions select approved configurations using server-priced **30-minute publi
 
 ## Real adapter contract and privacy
 
-The public Meta contract is Chat Completions at `https://api.meta.ai/v1/chat/completions`, model `muse-wonder-1.0`, Bearer authorization and strict `response_format.json_schema`. Every schema object uses `additionalProperties: false`, all properties are required, and nullable fields express optional decisions. Requests explicitly set `reasoning_effort: 'low'`; `none` is not used. A response must have exactly one choice with `finish_reason === 'stop'`; missing/truncated/refused/malformed/hallucinated output fails closed. Only validated `message.content` is read; `reasoning_content` is never exposed.
+`src/shared/muse.ts` owns the fixed model ID and public display/provider labels. The real adapter sends non-streaming Chat Completions requests to **`https://inference.baseten.co/v1/chat/completions`** with Bearer authentication, `model: "meta-models/muse-spark-open-1026"`, `max_tokens: 8192` and strict `response_format.json_schema`. It does not send `reasoning_effort` or `max_completion_tokens`. The endpoint and authentication follow [Baseten Chat Completions](https://docs.baseten.co/reference/inference-api/chat-completions); see [Baseten structured outputs](https://docs.baseten.co/inference/structured-outputs) for model-specific support. Baseten documents that Muse accepts `json_schema` but does **not** enforce it. Broker therefore includes the schema in the system prompt and locally validates every returned final proposal; `strict: true` in the request is not a provider-enforcement guarantee.
 
-Calls have no automatic retry, an eight-second deadline, 1,600 completion tokens, 64 KiB input/output bounds, redirect rejection and a six-call process concurrency bound. Actor rate limits bound interactive operations. No model/network call runs under SQL transactions or row/advisory locks. Failed real calls never fall back to fixture mode.
+Every schema object disallows extra properties, requires its declared properties and uses nullable fields for optional decisions. Broker requires one complete choice with `finish_reason: "stop"`, parses **only the final `message.content`**, then validates the domain proposal. Separate `reasoning_content` is ignored: it is never displayed, used as a decision receipt, returned to the browser or logged. Decision receipts contain bounded application facts and validated decisions, not the model's private reasoning. Missing, truncated, refused, malformed or ineligible results fail explicitly; real mode never falls back to fixtures. See [Baseten reasoning response fields](https://docs.baseten.co/inference/model-apis/reasoning).
 
-Explicit projections exclude credentials, Wick org/group identifiers, buyer identity, repositories, terminal contents and other providers' policies. Common pasted secret patterns are redacted from free text. This is a bounded requirements assistant, not a general secret detector; descriptions should contain requirements only. Model prompts/responses, reasoning and terminal transcripts are not logged. The product never runs agents, tasks, setup scripts, repositories, diagnostics or customer commands for Muse.
+The default interactive deadline is 45 seconds. Bid suggestions have an eight-second maximum, further limited by the remaining database-clock auction budget; a late result cannot revive an expired auction. Calls have no automatic retries, 64 KiB request/response bounds, redirect rejection and a default six-call process concurrency bound. Actor rate limits also apply. Model/network calls stay outside SQL transactions and row/advisory locks.
 
-Official references: [models](https://dev.meta.ai/docs/models), [structured output](https://dev.meta.ai/docs/structured-output), [Chat Completions](https://dev.meta.ai/docs/protocols/chat-completions), [schemas](https://dev.meta.ai/docs/api-reference/chat-completions/schemas), [reasoning](https://dev.meta.ai/docs/reasoning). Offline fixtures verify application behavior and documented envelopes; they do not establish live Meta interoperability.
+Set these **server-only** variables for real inference:
+
+```text
+MUSE_MODE=real
+BASETEN_API_KEY=<private Baseten API key>
+META_API_BASE=https://inference.baseten.co/v1
+```
+
+`BASETEN_API_KEY` is canonical. `META_API_KEY` remains a backward-compatible alias; a non-empty `BASETEN_API_KEY` takes precedence. `META_API_BASE` defaults to the Baseten URL above and must be a plain HTTPS API base. No model override is required: the hackathon model ID is fixed in shared code. Keep keys in a private server environment or Railway service variables, never `VITE_*` variables, browser storage, source files, screenshots or a public repository. Setting these variables does not by itself deploy or verify a hosted app.
+
+Explicit prompt projections exclude credentials, Wick organization/group identifiers, buyer identity, repositories, terminal contents and other providers' policies. Common pasted secret patterns are redacted from free text. This is a bounded requirements assistant, not a general secret detector; descriptions should contain requirements only. Prompts, raw responses, reasoning and terminal transcripts are not logged. Muse never runs agents, tasks, setup scripts, repositories, diagnostics or customer commands.
 
 ## Verification and migration
 
-Migrations `007_capacity_policy.sql`, `008_negotiation.sql` and `009_policy_apply_receipt.sql` are additive. Migration 009 stores only the latest provider Apply receipt and extends revision tracking to consume each new Apply. They preserve authentication, existing policies/holds, original requests and historical quotes. Parent-controlled publication/cutover must retain the existing private environment, keep fixture Muse, migrate without reseeding, and run exactly one Broker process.
+Offline tests exercise fixture behavior, exact model/transport envelopes, final-content parsing, reasoning exclusion, request bounds, sanitized failures, policy isolation and deterministic validation. Browser fixtures separately exercise reviewed UI behavior without any paid API calls.
 
-Focused offline tests: `tests/capacity-policy.test.ts`, `tests/negotiation.test.ts`, `tests/muse-negotiation-adapter.test.ts`, `tests/muse-demand-db.test.ts`, plus existing Muse/marketplace regressions. The isolated browser harness exercises strategy review/apply, unsupported intent/flexibility, exact offer acceptance, fixture VM/terminal/invoice/cleanup and offering review/publish through actual authentication and HTTP APIs. After the parent-review repairs, all 303 offline tests across 19 suites and all nine isolated browser cases passed, along with typecheck and isolated production builds. See [HANDOFF.md](../HANDOFF.md) for exact results and the historical live Wick evidence boundary.
+A controlled live smoke on 2026-10-29 passed all **seven** adapter flows with the exact Baseten model, JSON-schema requests and local validation of final content: translation, capacity policy, bid, offering suggestions, alternatives, buyer agreement draft and provider schedule draft. It used a synthetic approved catalog, made **zero database writes and zero Wick/VM allocations**, and did not deploy Railway. This confirms those inference/adapter paths for that run; it does not establish production deployment status or native VM enforcement.
+
+To repeat that bounded inference-only diagnostic deliberately, supply the private server key locally and run:
+
+```sh
+npx tsx scripts/verify-baseten-muse.ts --live
+```
+
+The `--live` flag is required and permits seven real Baseten inference calls. The script requires `BASETEN_API_KEY` or its legacy alias, does not connect to PostgreSQL or Wick, and emits a redacted pass/fail summary. Ordinary CI remains fixture-only and does not need inference credentials.
+
+No database migration is needed to change the Muse transport or model label. Existing policies, holds, accounts, accepted quotes and financial history remain under their normal migration and review rules. Never reseed accounts to switch model modes. Keep one Broker process for the Railway deployment and follow [Railway configuration](RAILWAY.md) when setting private runtime variables. Earlier provider-scale evidence used Muse fixtures; it is a separate verification boundary from the Baseten inference smoke.

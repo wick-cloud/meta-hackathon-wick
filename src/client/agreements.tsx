@@ -22,7 +22,7 @@ import type {
   CreditHistory,
   CreditWallet,
 } from '../shared/agreements';
-import { api, dateTime, money, post } from './api';
+import { museLabel, api, dateTime, money, post } from './api';
 import { agreementEstimate, agreementWindows } from '../shared/schedule';
 export { agreementEstimate } from '../shared/schedule';
 import {
@@ -384,7 +384,7 @@ export function AgreementComposer() {
                       {suggestion.mode === 'fixture'
                         ? 'Fixture draft · no model call'
                         : suggestion.modelCalled
-                          ? 'Muse draft · review required'
+                          ? `${museLabel} · review required`
                           : 'Prepared locally · no model call'}
                     </strong>
                     <p>{suggestion.explanation}</p>

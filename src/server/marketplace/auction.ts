@@ -656,9 +656,10 @@ function isoDate(value: unknown) {
 
 export async function proposeBid(ctx: AppContext, actor: Actor, requestId: string) {
   const provider = await getProvider(ctx.pool, actor);
+  const budgetStartedAt = performance.now();
   const request = (
     await ctx.pool.query(
-      "SELECT * FROM broker_requests WHERE id=$1 AND status='open' AND closes_at>clock_timestamp()",
+      "SELECT *,EXTRACT(EPOCH FROM(closes_at-clock_timestamp()))*1000 AS remaining_ms FROM broker_requests WHERE id=$1 AND status='open' AND closes_at>clock_timestamp()",
       [requestId],
     )
   ).rows[0];
@@ -688,7 +689,19 @@ export async function proposeBid(ctx: AppContext, actor: Actor, requestId: strin
         constraints: ['No model call or capacity reservation.', 'No payment due.'],
       },
     };
+  // The database clock owns the auction deadline. Monotonic elapsed time
+  // conservatively includes the intervening eligibility reads and leaves room
+  // for the binding submission's own SQL deadline/capacity recheck.
+  const remainingMs = Math.floor(
+    Number(request.remaining_ms) - (performance.now() - budgetStartedAt) - 1000,
+  );
+  if (!Number.isFinite(remainingMs) || remainingMs < 1)
+    throw new HttpError(
+      409,
+      'Too little auction time remains for a Muse bid proposal. Manual bidding remains available while the auction is open.',
+    );
   const proposal = await ctx.muse.proposeBid({
+    timeoutMs: Math.min(8000, remainingMs),
     request: {
       description: request.description,
       catalogId: match.catalog.id,

@@ -65,13 +65,24 @@ describe('scheduled Muse drafts', () => {
     const fetcher = vi.fn(async (_url: unknown, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body));
       expect(body.response_format.json_schema.name).toBe('wick_scheduled_draft');
-      expect(body.model).toBe('muse-wonder-1.0');
+      expect(body.model).toBe('meta-models/muse-spark-open-1026');
+      expect(body.max_tokens).toBe(8192);
+      expect(body).not.toHaveProperty('reasoning_effort');
+      expect(body).not.toHaveProperty('max_completion_tokens');
       expect(String(init?.body)).not.toContain('org-private');
       expect(String(init?.body)).not.toContain('group-private');
       expect(String(init?.body)).not.toContain('pasted-password');
       return new Response(
         JSON.stringify({
-          choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(value) } }],
+          choices: [
+            {
+              finish_reason: 'stop',
+              message: {
+                content: JSON.stringify(value),
+                reasoning_content: 'private-schedule-reasoning',
+              },
+            },
+          ],
         }),
         { status: 200 },
       );
@@ -95,6 +106,7 @@ describe('scheduled Muse drafts', () => {
       draft: { minimumQuantity: 12, targetQuantity: 20 },
     });
     expect(result.explanation).toContain('No capacity or credit was reserved');
+    expect(JSON.stringify(result)).not.toContain('private-schedule-reasoning');
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
   it('reports fixture mode without invoking the network', async () => {

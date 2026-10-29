@@ -10,8 +10,7 @@ import { fixedQuote, managedPricing } from '../src/shared/pricing.js';
 
 async function main() {
   const config = loadConfig();
-  if (config.wickMode !== 'real' || config.museMode !== 'fixture')
-    throw new Error('Setup requires explicit WICK_MODE=real and MUSE_MODE=fixture.');
+  if (config.wickMode !== 'real') throw new Error('Setup requires explicit WICK_MODE=real.');
   const command = process.argv[2];
   if (!['--list', '--apply', '--apply-providers'].includes(command ?? ''))
     throw new Error(

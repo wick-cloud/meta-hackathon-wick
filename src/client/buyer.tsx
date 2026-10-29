@@ -29,6 +29,7 @@ import {
 } from 'lucide-react';
 import {
   api,
+  museLabel,
   cloudRouteName,
   regionName,
   dateTime,
@@ -345,7 +346,7 @@ export function NewEnvironment() {
             Muse suggests an approved configuration. You can edit every choice before submitting.
           </p>
           <span className="quiet-badge">
-            {modes.muse === 'fixture' ? 'Fixture mode · no model call' : 'Meta Muse API enabled'}
+            {modes.muse === 'fixture' ? 'Fixture mode · no model call' : museLabel}
           </span>
         </aside>
       </div>

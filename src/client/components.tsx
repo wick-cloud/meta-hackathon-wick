@@ -17,7 +17,7 @@ import {
   Sparkles,
 } from 'lucide-react';
 import type { Mode, Receipt } from '../shared/types';
-import { api, statusLabel, type Session } from './api';
+import { api, museLabel, statusLabel, type Session } from './api';
 
 export const NavigationContext = createContext<(path: string) => void>(() => {});
 export const SessionContext = createContext<Session>({
@@ -357,7 +357,9 @@ export function ReceiptCard({
             ? 'Fixture · no model call'
             : modelCalled === false
               ? 'Validated locally · no model call'
-              : 'Muse'}
+              : mode === 'real' || modelCalled === true
+                ? museLabel
+                : 'Muse'}
         </span>
       </div>
       <div className="receipt-group">

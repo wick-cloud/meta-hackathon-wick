@@ -1064,3 +1064,64 @@ test('Server-confirmed DST quote overrides this device and rejected calendars ne
   await expect(page.getByRole('button', { name: 'Review agreement', exact: true })).toBeDisabled();
   expect(writes).toHaveLength(0);
 });
+
+test('Real Muse policy proposal identifies Spark Open on Baseten and remains an unapplied draft', async ({
+  page,
+}) => {
+  const writes = await fixture(page, 'provider', (path, method) =>
+    path === '/api/me'
+      ? {
+          user: {
+            id: 'user-one',
+            name: 'Fixture Provider',
+            email: 'provider@fixture.invalid',
+            role: 'provider',
+          },
+          modes: { wick: 'fixture', muse: 'real' },
+          catalog,
+        }
+      : path === '/api/provider/policy/propose' && method === 'POST'
+        ? {
+            policy: {
+              autoBid: true,
+              minimumPriceCents: 100,
+              basePriceCents: 200,
+              maxPriceCents: 300,
+              allowedCatalogIds: ['micro'],
+              reserveSlots: 1,
+            },
+            baseRevision: 1,
+            capacity: { total: 20, held: 0, available: 20 },
+            mode: 'real',
+            modelCalled: true,
+            receipt: {
+              observed: ['Keep one slot spare.'],
+              decision: 'Review the proposed limits before applying them.',
+              constraints: ['No policy or capacity changed.'],
+            },
+            reasoning_content: 'PRIVATE_REASONING_MUST_NOT_RENDER',
+          }
+        : undefined,
+  );
+  await page.goto('/provider/policy');
+  await page.locator('summary[aria-label="Environment mode"]').click();
+  await expect(page.locator('.environment-popover')).toContainText('Muse Spark Open · Baseten');
+  await expect(page.locator('.environment-popover')).toContainText(
+    'meta-models/muse-spark-open-1026',
+  );
+  await page.keyboard.press('Escape');
+  await page
+    .getByLabel('Natural-language selling strategy')
+    .fill('Keep one slot spare and prepare editable pricing limits.');
+  await page.getByRole('button', { name: 'Propose editable limits', exact: true }).click();
+  await expect(
+    page.getByRole('heading', { name: 'Proposed limits · not active', exact: true }),
+  ).toBeVisible();
+  await expect(page.locator('.muse-receipt .tiny-label')).toHaveText('Muse Spark Open · Baseten');
+  await expect(page.locator('#reserve-slots')).toHaveValue('1');
+  expect(Number(await page.locator('#base-price').inputValue())).toBe(2);
+  await expect(page.getByText('PRIVATE_REASONING_MUST_NOT_RENDER', { exact: false })).toHaveCount(
+    0,
+  );
+  expect(writes.map((write) => write.path)).toEqual(['/api/provider/policy/propose']);
+});

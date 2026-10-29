@@ -145,6 +145,8 @@ export interface MuseAdapter {
     availableCapacity: number;
     catalog: CatalogItem[];
     suggestedTotalPriceCents?: number;
+    /** Internal remaining-auction budget; never included in the model prompt. */
+    timeoutMs?: number;
   }): Promise<BidProposal>;
   proposeOfferings(input: {
     demand: unknown[];
