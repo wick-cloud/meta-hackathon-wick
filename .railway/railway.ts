@@ -32,6 +32,7 @@ export default defineRailway(() => {
       WICK_ORGANIZATION_ID: preserve(),
       WICK_GROUP_ID: preserve(),
       META_API_BASE: preserve(),
+      BASETEN_API_KEY: preserve(),
       META_API_KEY: preserve(),
       MAX_CONCURRENT_VMS: preserve(),
       LOG_LEVEL: preserve(),

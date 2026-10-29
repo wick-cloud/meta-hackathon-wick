@@ -199,7 +199,7 @@ describe('explicit Muse fixture mode', () => {
   });
 });
 
-describe('real Meta structured-output contract', () => {
+describe('real Baseten Muse contract with local validation', () => {
   it('validates fractional GiB model output and declares numeric memory in the offline schema contract', async () => {
     const memoryGb = 3814 / 1024;
     const boat = { ...catalog[0]!, memoryGb };
@@ -221,10 +221,11 @@ describe('real Meta structured-output contract', () => {
     const result = await adapter.translate('2 CPUs with 4 GB RAM', catalog);
     const [url, request] = fetcher.mock.calls[0]!;
     const body = JSON.parse(request!.body as string);
-    expect(String(url)).toBe('https://api.meta.ai/v1/chat/completions');
+    expect(String(url)).toBe('https://inference.baseten.co/v1/chat/completions');
     expect(request!.headers).toMatchObject({ Authorization: 'Bearer test-server-secret' });
     expect(request!.redirect).toBe('error');
     expect(body.model).toBe(MUSE_MODEL);
+    expect(body.model).toBe('meta-models/muse-spark-open-1026');
     expect(body.response_format).toMatchObject({
       type: 'json_schema',
       json_schema: {
@@ -234,8 +235,12 @@ describe('real Meta structured-output contract', () => {
       },
     });
     expect(body.messages).toHaveLength(2);
-    expect(body.max_completion_tokens).toBe(1600);
-    expect(body.reasoning_effort).toBe('low');
+    expect(body.max_tokens).toBe(8192);
+    expect(body).not.toHaveProperty('max_completion_tokens');
+    expect(body).not.toHaveProperty('reasoning_effort');
+    expect(body.messages[0].content).toContain(
+      JSON.stringify(body.response_format.json_schema.schema),
+    );
     expect(result.mode).toBe('real');
     expect(result.proposal.requirements).toEqual({ cpu: 2, memoryGb: 4 });
     expect(fetcher).toHaveBeenCalledTimes(1);
@@ -256,6 +261,36 @@ describe('real Meta structured-output contract', () => {
       expect(JSON.stringify(result.receipt)).not.toContain(secret);
     }
     expect(body).toContain('[redacted]');
+  });
+  it('reads final JSON only and never exposes upstream reasoning or provider metadata', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          id: 'upstream-completion-private',
+          model: MUSE_MODEL,
+          usage: { completion_tokens: 250, completion_tokens_details: { reasoning_tokens: 200 } },
+          choices: [
+            {
+              finish_reason: 'stop',
+              message: {
+                role: 'assistant',
+                reasoning_content: 'private model reasoning should never leave the adapter',
+                content: JSON.stringify(translateOutput),
+              },
+            },
+          ],
+        }),
+      ),
+    );
+    const adapter = createMuseAdapter(
+      { museMode: 'real', metaApiKey: 'test-server-secret' },
+      { fetch: fetcher },
+    );
+    const result = await adapter.translate('2 CPU and 4 GB RAM', catalog);
+    expect(result.proposal).toMatchObject({ catalogId: 'small', durationMinutes: 30 });
+    expect(JSON.stringify(result)).not.toContain('private model reasoning');
+    expect(JSON.stringify(result)).not.toContain('upstream-completion-private');
+    expect(JSON.stringify(result)).not.toContain('reasoning_tokens');
   });
   it('ignores extraneous private policy fields and does not share other supplier information', async () => {
     const { fetcher, adapter } = realAdapter({
@@ -450,6 +485,87 @@ describe('bounded failures without fixture fallback', () => {
     expect(signal?.aborted).toBe(true);
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
+  it.each([undefined, 60_000])(
+    'caps bid calls at 8 seconds and advisory calls at 45 seconds without retries (configured timeout %s)',
+    async (configuredTimeout) => {
+      vi.useFakeTimers();
+      try {
+        const signals: AbortSignal[] = [];
+        const fetcher = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
+          signals.push(init!.signal as AbortSignal);
+          return new Promise(() => {});
+        });
+        const adapter = createMuseAdapter(
+          { museMode: 'real', metaApiKey: 'secret' },
+          { fetch: fetcher, timeoutMs: configuredTimeout },
+        );
+        const bid = expect(adapter.proposeBid(bidInput())).rejects.toMatchObject({
+          statusCode: 504,
+          code: 'timeout',
+        });
+        const manual = expect(adapter.translate('Linux', catalog)).rejects.toMatchObject({
+          statusCode: 504,
+          code: 'timeout',
+        });
+        await vi.advanceTimersByTimeAsync(7999);
+        expect(signals.map((signal) => signal.aborted)).toEqual([false, false]);
+        await vi.advanceTimersByTimeAsync(1);
+        await bid;
+        expect(signals.map((signal) => signal.aborted)).toEqual([true, false]);
+        await vi.advanceTimersByTimeAsync(36999);
+        expect(signals.map((signal) => signal.aborted)).toEqual([true, false]);
+        await vi.advanceTimersByTimeAsync(1);
+        await manual;
+        expect(signals.map((signal) => signal.aborted)).toEqual([true, true]);
+        expect(fetcher).toHaveBeenCalledTimes(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+  it.each([
+    { remaining: 1750, configured: undefined, deadline: 1750 },
+    { remaining: 1750, configured: 500, deadline: 500 },
+  ])(
+    'honors the smaller remaining auction budget without sending it to the model: %j',
+    async ({ remaining, configured, deadline }) => {
+      vi.useFakeTimers();
+      try {
+        let signal: AbortSignal | undefined;
+        const fetcher = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
+          signal = init?.signal as AbortSignal;
+          return new Promise(() => {});
+        });
+        const adapter = createMuseAdapter(
+          { museMode: 'real', metaApiKey: 'test-server-secret' },
+          { fetch: fetcher, timeoutMs: configured },
+        );
+        const result = expect(
+          adapter.proposeBid({ ...bidInput(), timeoutMs: remaining }),
+        ).rejects.toMatchObject({ statusCode: 504, code: 'timeout' });
+        await vi.advanceTimersByTimeAsync(deadline - 1);
+        expect(signal?.aborted).toBe(false);
+        await vi.advanceTimersByTimeAsync(1);
+        await result;
+        expect(signal?.aborted).toBe(true);
+        expect(fetcher).toHaveBeenCalledTimes(1);
+        expect(String(fetcher.mock.calls[0]![1]?.body)).not.toContain('timeoutMs');
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+  it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY])(
+    'does not dispatch a bid for an exhausted or invalid auction budget: %s',
+    async (timeoutMs) => {
+      const { adapter, fetcher } = realAdapter({ decision: 'bid', catalogId: 'small' });
+      await expect(adapter.proposeBid({ ...bidInput(), timeoutMs })).rejects.toMatchObject({
+        statusCode: 504,
+        code: 'timeout',
+      });
+      expect(fetcher).not.toHaveBeenCalled();
+    },
+  );
   it('bounds concurrent calls without queuing more paid work', async () => {
     let finish: (response: Response) => void = () => {};
     const fetcher = vi.fn<typeof fetch>().mockImplementation(
@@ -476,6 +592,10 @@ describe('bounded failures without fixture fallback', () => {
       completion(translateOutput, { finish_reason: 'length' }),
       completion(translateOutput, { finish_reason: undefined }),
       completion(translateOutput, { message: { refusal: 'refused', content: null } }),
+      completion(translateOutput, {
+        message: { reasoning_content: JSON.stringify(translateOutput), content: null },
+      }),
+      completion(translateOutput, { message: { content: '```json\n{}\n```' } }),
       new Response('{invalid json'),
       new Response('x'.repeat(65_537)),
     ];
@@ -505,6 +625,14 @@ describe('bounded failures without fixture fallback', () => {
 });
 
 describe('credential redaction', () => {
+  it('redacts raw Baseten keys before model transmission and receipt construction', async () => {
+    const secret = 'b10_syntheticTestKey.syntheticTestSecretValue123';
+    const { adapter, fetcher } = realAdapter(translateOutput);
+    const result = await adapter.translate(`2 CPU and 4 GB RAM ${secret}`, catalog);
+    expect(fetcher.mock.calls[0]![1]!.body).not.toContain(secret);
+    expect(JSON.stringify(result)).not.toContain(secret);
+    expect(redactMuseText(secret)).toBe('[redacted credential]');
+  });
   it('removes private keys, basic auth, named tokens and credential-bearing URLs', () => {
     const result = redactMuseText(
       '-----BEGIN PRIVATE KEY-----\nprivate-pem\n-----END PRIVATE KEY----- Basic dXNlcjpwYXNz refresh_token=private-token https://user:password@example.com/x',

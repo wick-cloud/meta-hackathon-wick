@@ -49,9 +49,9 @@ Add PostgreSQL 16 or newer and wait for it to become available. Generate the app
 | `BETTER_AUTH_SECRET` | A private random value of at least 32 characters; keep it across deploys |
 | `WICK_MODE`          | `fixture` for first-time account setup                                   |
 | `MUSE_MODE`          | `fixture`                                                                |
-| `MAX_CONCURRENT_VMS` | `20` for the four-provider marketplace; local default remains `2`        |
+| `MAX_CONCURRENT_VMS` | `20` (also the local default)                                            |
 
-Let Railway supply `PORT`; the server honors it. Put keys only in server service variables. Muse stays in fixture mode until real Meta access is configured deliberately. There is no Broker markup variable: the platform commission is fixed at 15% of provider gross rental revenue, leaving 85% before compute costs, with no added buyer fee.
+Let Railway supply `PORT`; the server honors it. Put keys only in server service variables. Keep Muse in fixture mode during initial account setup. Enable real Muse Spark Open inference using the private Baseten variables below. There is no Broker markup variable: the platform commission is fixed at 15% of provider gross rental revenue, leaving 85% before compute costs, with no added buyer fee.
 
 ## First-time invited accounts
 
@@ -97,11 +97,29 @@ railway ssh --service wick-broker -- npm run configure:real:production -- --appl
 
 This creates new credential accounts only when absent, binds each workspace to its native cloud configurations, and retires the selected legacy suppliers' automatic bidding and active real offerings. It preserves existing passwords, sessions, reservations, fixture records and frozen financial history. Existing-role or cloud-binding collisions fail rather than resetting or repurposing an account. Five slots per workspace are configured allocations within the shared 20-VM limit, not a claim about measured upstream capacity.
 
-Display names are E2B, Daytona, Baseten and Modal. Baseten is the requested account label for the underlying Blaxel route, whose Wick ID is `provider-blaxel`. It does not establish company affiliation or a Baseten API integration. Boat remains excluded. See [provider marketplace setup](provider-marketplace.md) for exact environment names and the coverage record, and [real Wick operations](REAL_WICK.md) for managed-route checks and rate freshness. Real buyer allocations consume Wick credits; invoices and earnings remain demo records without collected payments or payouts.
+Display names are E2B, Daytona, Baseten and Modal. Baseten is the requested account label for the underlying Blaxel route, whose Wick ID is `provider-blaxel`. That compute-account label does not establish company affiliation or turn the Blaxel VM route into a Baseten compute service. Separately, real Muse inference uses the actual Baseten Model API described below. Boat remains excluded. See [provider marketplace setup](provider-marketplace.md) for exact environment names and the coverage record, and [real Wick operations](REAL_WICK.md) for managed-route checks and rate freshness. Real buyer allocations consume Wick credits; invoices and earnings remain demo records without collected payments or payouts.
 
 Keep the permanent pre-deploy command as `npm run db:migrate:production`. Provider setup must not become part of startup or every deployment. If an operator temporarily uses a one-time pre-deploy setup hook because a container console is unavailable, restore the migration-only command after successful setup and verify the restored service settings. Do not put the seed command in that hook.
 
 The older `--apply` command remains available for explicitly selected unbound demo suppliers using `REAL_CATALOG_IDS` and `REAL_SUPPLIER_EMAILS`; it refuses cloud-bound accounts. Use `--apply-providers` for these four workspaces.
+
+## Enable real Muse Spark Open on Baseten
+
+Muse runs inside the existing Broker service; it needs no additional Railway app, worker or database. Real inference calls Baseten's hosted Chat Completions API with the fixed hackathon model **`meta-models/muse-spark-open-1026`**. Wick and Muse modes are independent: real Muse can prepare reviewed proposals while Wick remains in fixture mode.
+
+Set the following private app-service variables, then deploy the updated application:
+
+| Variable          | Real-mode value                                                     |
+| ----------------- | ------------------------------------------------------------------- |
+| `MUSE_MODE`       | `real`                                                              |
+| `BASETEN_API_KEY` | Private Baseten API key; never a build argument or browser variable |
+| `META_API_BASE`   | `https://inference.baseten.co/v1` (the default)                     |
+
+`BASETEN_API_KEY` is the canonical credential. The legacy `META_API_KEY` alias is still accepted, with a non-empty canonical key taking precedence. Keep the key in Railway service variables; do not put it in `.railway/railway.ts`, the repository, a public log, `VITE_*` variables or browser storage. No extra model environment variable is needed.
+
+The server sends a JSON schema and includes it in the prompt, then locally validates only final `message.content`. Muse accepts but does not enforce `json_schema` on Baseten, so the request is not a provider-enforcement guarantee. Separate reasoning is not shown, returned to browsers or logged. Invalid or failed real inference produces a visible error and leaves manual controls available; it never silently switches to fixture output. Proposals still require the same policy, price, schedule and consent checks before any binding action. See [Muse integration and seven-flow verification](MUSE.md) for the transport bounds, privacy rules and opt-in inference-only smoke command.
+
+After deployment, check `/health` and `/ready`, then open **Environment mode** in the top bar. Real Muse identifies **Muse Spark Open · Baseten** and the exact model ID; fixture mode explicitly says no model calls. Exercise a reviewed proposal before applying any policy or funding an agreement. Configuration/source changes and the local synthetic smoke do not establish that Railway has deployed successfully; record that separately after verification.
 
 ## Redeploys and verification
 

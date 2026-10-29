@@ -10,6 +10,9 @@ import type {
   ManagedPricing,
   RevenueShare,
 } from '../shared/types';
+import { MUSE_DISPLAY_NAME, MUSE_PROVIDER } from '../shared/muse';
+export { MUSE_DISPLAY_NAME, MUSE_MODEL, MUSE_PROVIDER } from '../shared/muse';
+export const museLabel = `${MUSE_DISPLAY_NAME} · ${MUSE_PROVIDER}`;
 
 export interface Session {
   user: Actor | null;

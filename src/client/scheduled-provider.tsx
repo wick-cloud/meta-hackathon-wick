@@ -18,7 +18,7 @@ import type {
   ScheduledOffering,
   ScheduledOfferingInput,
 } from '../shared/agreements';
-import { api, money, moneyMicros, post, type Dashboard } from './api';
+import { museLabel, api, money, moneyMicros, post, type Dashboard } from './api';
 import {
   DetailRow,
   EmptyState,
@@ -269,7 +269,7 @@ export function ProviderScheduled() {
                         {suggestion.mode === 'fixture'
                           ? 'Fixture draft · no model call'
                           : suggestion.modelCalled
-                            ? 'Muse draft · review before publishing'
+                            ? `${museLabel} · review before publishing`
                             : 'Prepared locally · no model call'}
                       </strong>
                       <p>{suggestion.explanation}</p>

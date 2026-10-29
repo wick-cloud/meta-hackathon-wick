@@ -103,6 +103,7 @@ try {
           WICK_MODE: 'fixture',
           MUSE_MODE: 'fixture',
           WICK_API_KEY: '',
+          BASETEN_API_KEY: '',
           META_API_KEY: '',
           SEED_BUYER_EMAIL: actors[0]!.email,
           E2E_BUYER_EMAIL: actors[0]!.email,

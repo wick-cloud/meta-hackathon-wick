@@ -23,6 +23,19 @@ export { createAgreement, cancelUnmatched, previewAgreement } from './service.js
 export { matchAgreement } from './matching.js';
 
 export async function registerAgreements(app: FastifyInstance, ctx: AppContext) {
+  const draftCalls = new Map<string, { count: number; resetsAt: number }>();
+  function limitDrafts(actorId: string) {
+    const now = Date.now();
+    for (const [id, entry] of draftCalls) if (entry.resetsAt <= now) draftCalls.delete(id);
+    const entry = draftCalls.get(actorId) ?? { count: 0, resetsAt: now + 60000 };
+    if (entry.count >= 10 || (draftCalls.size >= 1000 && !draftCalls.has(actorId)))
+      throw new HttpError(
+        429,
+        'Muse scheduled draft limit reached. Try again in a minute or use manual controls.',
+      );
+    entry.count++;
+    draftCalls.set(actorId, entry);
+  }
   await registerCreditRoutes(app, ctx);
   await registerProviderAgreementRoutes(app, ctx);
   app.post('/api/agreements/preview', async (request) => {
@@ -60,7 +73,8 @@ export async function registerAgreements(app: FastifyInstance, ctx: AppContext) 
     app.post(
       provider ? '/api/provider/scheduled-offerings/draft' : '/api/agreements/draft',
       async (request) => {
-        await ctx.requireActor(request, provider ? ['provider'] : ['buyer']);
+        const actor = await ctx.requireActor(request, provider ? ['provider'] : ['buyer']);
+        limitDrafts(actor.id);
         const prompt = shortText((request.body as { prompt?: unknown })?.prompt, 'Prompt');
         const catalog = (
           await ctx.pool.query(

@@ -221,7 +221,9 @@ describe('capacity strategy review contract', () => {
       capacity: { ...capacity, credential: 'capacity-secret' } as typeof capacity,
     });
     const request = JSON.parse(fetcher.mock.calls[0]![1]!.body as string);
-    expect(request.reasoning_effort).toBe('low');
+    expect(request.max_tokens).toBe(8192);
+    expect(request).not.toHaveProperty('reasoning_effort');
+    expect(request).not.toHaveProperty('max_completion_tokens');
     assertStrict(request.response_format.json_schema.schema);
     expect(request.response_format.json_schema.strict).toBe(true);
     for (const secret of [

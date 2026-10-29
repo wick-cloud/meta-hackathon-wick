@@ -19,7 +19,15 @@ import {
   Wallet,
   CalendarClock,
 } from 'lucide-react';
-import { api, post, type Session } from './api';
+import {
+  api,
+  post,
+  museLabel,
+  MUSE_DISPLAY_NAME,
+  MUSE_MODEL,
+  MUSE_PROVIDER,
+  type Session,
+} from './api';
 import { ErrorBox, Link, NavigationContext, SessionContext, Spinner } from './components';
 import { NewEnvironment, RequestReview, AuctionPage, MyVMs, VMDetail, Invoices } from './buyer';
 import { AlternativeComposer, AlternativeDetail, AlternativeList } from './negotiation';
@@ -479,11 +487,11 @@ export default function App() {
                   <Sparkles size={16} />
                 </span>
                 <div>
-                  <strong>Meta Muse</strong>
+                  <strong>{MUSE_DISPLAY_NAME}</strong>
                   <span>
                     {session.modes.muse === 'fixture'
                       ? 'Fixture · no model calls'
-                      : 'AI drafts enabled'}
+                      : `${MUSE_PROVIDER} · AI drafts enabled`}
                   </span>
                 </div>
               </div>
@@ -549,9 +557,15 @@ export default function App() {
                         : 'VM usage consumes the configured Wick account’s compute credits.'}
                     </p>
                     <p>
-                      {session.modes.muse === 'fixture'
-                        ? 'Muse fixture · no model calls'
-                        : 'Meta Muse API enabled'}
+                      {session.modes.muse === 'fixture' ? (
+                        'Muse fixture · no model calls'
+                      ) : (
+                        <>
+                          {museLabel}
+                          <br />
+                          <code>{MUSE_MODEL}</code>
+                        </>
+                      )}
                     </p>
                     <p>Pilot pricing · no payment collected</p>
                   </div>

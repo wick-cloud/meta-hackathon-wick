@@ -1,7 +1,7 @@
 import './negotiation.css';
 import { useEffect, useState, type FormEvent } from 'react';
 import { ArrowRight, ChevronLeft, Sparkles } from 'lucide-react';
-import { ApiError, api, dateTime, money, post, type EnvironmentRequest } from './api';
+import { museLabel, ApiError, api, dateTime, money, post, type EnvironmentRequest } from './api';
 import {
   DetailRow,
   EmptyState,
@@ -472,7 +472,7 @@ export function AlternativeComposer({ sourceRequestId }: { sourceRequestId?: str
               <span className="tiny-label">
                 {modes.muse === 'fixture'
                   ? 'Fixture Muse · no model call'
-                  : 'Muse proposals require review'}{' '}
+                  : `${museLabel} · review required`}{' '}
                 · No payment due
               </span>
               <ErrorBox error={error} />
@@ -698,8 +698,12 @@ export function AlternativeDetail({ id }: { id: string }) {
               {offer.providerName} · {money(offer.totalPriceCents)} fixed total
             </p>
             <span className="tiny-label">
-              {offer.mode === 'fixture' ? 'Fixture Muse' : 'Muse'} ·{' '}
-              {offer.modelCalled ? 'Model called' : 'No model call'} · No payment due
+              {offer.mode === 'fixture'
+                ? 'Fixture Muse · No model call'
+                : offer.modelCalled
+                  ? museLabel
+                  : 'Validated locally · no model call'}{' '}
+              · No payment due
             </span>
             <p>
               {offer.after.cpu} vCPU · {offer.after.memoryGb} GiB · {offer.after.region} ·{' '}

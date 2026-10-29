@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import { z } from 'zod';
+import { MUSE_API_BASE } from '../shared/muse.js';
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().int().min(1).max(65535).default(3000),
@@ -13,7 +14,8 @@ const envSchema = z.object({
   WICK_API_KEY: z.string().optional(),
   WICK_ORGANIZATION_ID: z.string().default('demo-organization'),
   WICK_GROUP_ID: z.string().default('demo-group'),
-  META_API_BASE: z.string().url().default('https://api.meta.ai/v1'),
+  META_API_BASE: z.string().url().default(MUSE_API_BASE),
+  BASETEN_API_KEY: z.string().optional(),
   META_API_KEY: z.string().optional(),
   MAX_CONCURRENT_VMS: z.coerce.number().int().min(1).max(20).default(20),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
@@ -41,8 +43,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
       e.WICK_GROUP_ID === 'demo-group')
   )
     throw new Error('Real Wick mode requires API key, organization and group IDs.');
-  if (e.MUSE_MODE === 'real' && !e.META_API_KEY)
-    throw new Error('Real Muse mode requires META_API_KEY.');
+  const museApiKey = e.BASETEN_API_KEY || e.META_API_KEY;
+  if (e.MUSE_MODE === 'real' && !museApiKey)
+    throw new Error('Real Muse mode requires BASETEN_API_KEY (or the legacy META_API_KEY).');
   if (e.NODE_ENV === 'production' && !e.APP_URL.startsWith('https://'))
     throw new Error('Production APP_URL must use HTTPS.');
   return {
@@ -59,7 +62,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     wickOrganizationId: e.WICK_ORGANIZATION_ID,
     wickGroupId: e.WICK_GROUP_ID,
     metaApiBase: e.META_API_BASE,
-    metaApiKey: e.META_API_KEY,
+    metaApiKey: museApiKey,
     maxConcurrentVms: e.MAX_CONCURRENT_VMS,
     logLevel: e.LOG_LEVEL,
   };

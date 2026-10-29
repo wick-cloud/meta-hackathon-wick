@@ -34,6 +34,8 @@ import { AgreementCharges } from './agreement-charges';
 import {
   ApiError,
   api,
+  museLabel,
+  MUSE_MODEL,
   cloudRouteName,
   regionName,
   dateTime,
@@ -221,7 +223,7 @@ export function ProviderCapacity() {
           </p>
           <p>
             <Link className="text-link" href="/provider/policy">
-              Edit pricing and reserve policy <ArrowRight size={14} />
+              Review a selling strategy with Muse <ArrowRight size={14} />
             </Link>
           </p>
           <form onSubmit={save}>
@@ -403,7 +405,7 @@ export function ProviderPolicy() {
         description="Set your selling strategy and keep 85% of rental revenue. Review your limits before applying them."
       >
         <span className="quiet-badge">
-          {modes.muse === 'fixture' ? 'Fixture Muse · no model calls' : 'Muse · reviewed proposals'}
+          {modes.muse === 'fixture' ? 'Fixture Muse · no model calls' : museLabel}
         </span>
       </PageHeader>
       <section className="card">
@@ -651,9 +653,7 @@ export function ProviderPolicy() {
                     deadline.
                   </p>
                   <span className="tiny-label">
-                    {modes.muse === 'fixture'
-                      ? 'Fixture proposals · no model calls'
-                      : 'Powered by muse-wonder-1.0'}
+                    {modes.muse === 'fixture' ? 'Fixture proposals · no model calls' : museLabel}
                   </span>
                 </div>
               </div>
@@ -1064,7 +1064,7 @@ export function ProviderOfferings() {
           <span>
             {modes.muse === 'fixture'
               ? 'Fixture suggestions · no model calls'
-              : 'muse-wonder-1.0 · approved configurations only'}
+              : `${museLabel} · approved configurations`}
           </span>
         </div>
         <button className="button muse-button" onClick={() => void propose()} disabled={!!busy}>
@@ -1596,7 +1596,9 @@ export function AdminConfig({ onUpdated }: { onUpdated: () => void }) {
             <span className="mode-stat">{modes.muse === 'fixture' ? 'Fixture' : 'Real API'}</span>
           }
           note={
-            modes.muse === 'fixture' ? 'No model calls or model success claims' : 'muse-wonder-1.0'
+            modes.muse === 'fixture'
+              ? 'Simulated responses · no model calls'
+              : `${museLabel} · ${MUSE_MODEL}`
           }
           icon={<Sparkles size={18} />}
         />
