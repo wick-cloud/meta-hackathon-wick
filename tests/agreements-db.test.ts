@@ -272,6 +272,36 @@ describe.skipIf(!url)('funded manual agreements (real disposable PostgreSQL)', (
     expect(amounts).toHaveLength(7);
     expect(amounts.every((r) => r.unit_price_cents === 100 && r.quantity === 12)).toBe(true);
   });
+  it('retains replacement supply when a cheaper booked offer cannot top up its frozen revision', async () => {
+    const first = await createAgreement(ctx, buyer, input());
+    await pool.query('UPDATE broker_providers SET total_capacity=20 WHERE id=$1', [providerId]);
+    await pool.query(
+      'UPDATE broker_scheduled_offerings SET discount_rate_cents_per_hour=9,revision=2 WHERE id=$1',
+      [scheduledId],
+    );
+    await pool.query(
+      `INSERT INTO broker_scheduled_offerings(provider_id,operation_key,input_fingerprint,catalog_id,name,kind,time_zone,weekdays,window_start,window_end,available_until,capacity_quantity,discount_rate_cents_per_hour,normal_rate_cents_per_hour)
+       VALUES($1,'replacement-supply','test','micro','Replacement supply','capacity_window','UTC',ARRAY[0,1,2,3,4,5,6],'00:00','06:00','08:00',8,10,20)`,
+      [providerId],
+    );
+    await matchAgreement(ctx, first.agreement.id);
+    expect(
+      (
+        await pool.query(
+          'SELECT approved_quantity FROM broker_agreement_windows WHERE agreement_id=$1',
+          [first.agreement.id],
+        )
+      ).rows.map((w) => w.approved_quantity),
+    ).toEqual(Array(7).fill(20));
+    expect(
+      (
+        await pool.query(
+          'SELECT quantity,unit_price_cents FROM broker_agreement_bookings WHERE agreement_id=$1 AND scheduled_offering_id=$2',
+          [first.agreement.id, scheduledId],
+        )
+      ).rows,
+    ).toEqual(Array(7).fill({ quantity: 12, unit_price_cents: 100 }));
+  });
   it('allows legacy unrestricted provider policies while serializing competing agreements against one calendar', async () => {
     await pool.query("UPDATE broker_providers SET policy='{}' WHERE id=$1", [providerId]);
     await grant(other, 20000);
@@ -750,6 +780,56 @@ describe.skipIf(!url)('funded manual agreements (real disposable PostgreSQL)', (
     expect(ctx.wick.create).not.toHaveBeenCalled();
     await app.close();
   });
+  it('does not let duplicate cheap offers from one nearly full supplier hide other available capacity', async () => {
+    await pool.query('UPDATE broker_providers SET total_capacity=1 WHERE id=$1', [providerId]);
+    await pool.query(
+      `INSERT INTO broker_scheduled_offerings(provider_id,operation_key,input_fingerprint,catalog_id,name,kind,time_zone,weekdays,window_start,window_end,available_until,capacity_quantity,discount_rate_cents_per_hour,normal_rate_cents_per_hour)
+       SELECT $1,'limited-cheap-'||n,'test','micro','Cheap one-slot supplier','capacity_window','UTC',ARRAY[0,1,2,3,4,5,6],'00:00','06:00','08:00',1,1,2 FROM generate_series(1,70)n`,
+      [providerId],
+    );
+    const free = (
+      await pool.query(
+        `INSERT INTO broker_providers(user_id,name,total_capacity,policy) VALUES('second-provider','Available supplier',8,'{"allowedCatalogIds":["micro"]}') RETURNING id`,
+      )
+    ).rows[0];
+    await pool.query(
+      `INSERT INTO broker_scheduled_offerings(provider_id,operation_key,input_fingerprint,catalog_id,name,kind,time_zone,weekdays,window_start,window_end,available_until,capacity_quantity,discount_rate_cents_per_hour,normal_rate_cents_per_hour)
+       VALUES($1,'second-provider-offer','test','micro','Available at a higher price','capacity_window','UTC',ARRAY[0,1,2,3,4,5,6],'00:00','06:00','08:00',8,10,20)`,
+      [free.id],
+    );
+    const result = await createAgreement(ctx, buyer, {
+      ...input(),
+      minimumQuantity: 8,
+      targetQuantity: 9,
+    });
+    expect(result.agreement.status).toBe('approved');
+    expect(result.agreement.windows.map((w) => w.approvedQuantity)).toEqual(Array(7).fill(9));
+    expect(result.bookings.filter((b) => b.providerId === providerId)).toHaveLength(7);
+    expect(
+      result.bookings
+        .filter((b) => b.providerId === providerId)
+        .every((b) => b.quantity === 1 && b.unitPriceCents === 10),
+    ).toBe(true);
+    expect(
+      result.bookings
+        .filter((b) => b.providerId === free.id)
+        .every((b) => b.quantity === 8 && b.unitPriceCents === 100),
+    ).toBe(true);
+  });
+  it('retains distinct one-slot offerings needed to fill the same supplier capacity', async () => {
+    await pool.query('UPDATE broker_providers SET total_capacity=20 WHERE id=$1', [providerId]);
+    await pool.query('UPDATE broker_scheduled_offerings SET active=false');
+    await pool.query(
+      `INSERT INTO broker_scheduled_offerings(provider_id,operation_key,input_fingerprint,catalog_id,name,kind,time_zone,weekdays,window_start,window_end,available_until,capacity_quantity,discount_rate_cents_per_hour,normal_rate_cents_per_hour)
+       SELECT $1,'distinct-slot-'||n,'test','micro','Distinct one-slot offering','capacity_window','UTC',ARRAY[0,1,2,3,4,5,6],'00:00','06:00','08:00',1,10,20 FROM generate_series(1,20)n`,
+      [providerId],
+    );
+    const result = await createAgreement(ctx, buyer, { ...input(), minimumQuantity: 20 });
+    expect(result.agreement.status).toBe('approved');
+    expect(result.agreement.windows.map((w) => w.approvedQuantity)).toEqual(Array(7).fill(20));
+    expect(result.bookings).toHaveLength(140);
+    expect(result.bookings.every((b) => b.quantity === 1 && b.unitPriceCents === 100)).toBe(true);
+  });
   it.each(['booked', 'physical'] as const)(
     'filters 70 cheaper offers from a provider with no %s headroom before the candidate limit',
     async (kind) => {
@@ -829,6 +909,11 @@ describe.skipIf(!url)('funded manual agreements (real disposable PostgreSQL)', (
     } finally {
       spy.mockRestore();
     }
+    // Exercise both overlap reads and the existing-booking join with remaining
+    // capacity; a full supplier would short-circuit before that join executes.
+    await pool.query('UPDATE broker_providers SET total_capacity=20 WHERE id=$1', [providerId]);
+    await pool.query('ANALYZE broker_agreement_bookings');
+    await pool.query('ANALYZE broker_agreement_windows');
     const before = (await pool.query(`EXPLAIN(ANALYZE,BUFFERS,FORMAT JSON) ${sql}`, values))
       .rows[0]['QUERY PLAN'][0].Plan;
     const old = await bookedCurrent(true);

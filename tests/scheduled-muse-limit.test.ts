@@ -6,6 +6,8 @@ import { HttpError, type AppContext } from '../src/server/context.js';
 describe('authenticated scheduled Muse draft budgets (offline model)', () => {
   let app: FastifyInstance, now: number;
   const query = vi.fn(async (sql: string) => {
+    if (sql === 'SELECT * FROM broker_providers WHERE user_id=$1')
+      return { rows: [{ policy: {} }] };
     if (!sql.startsWith('SELECT id,item,approved FROM broker_catalog'))
       throw new Error('Scheduled drafts must remain read-only.');
     return {

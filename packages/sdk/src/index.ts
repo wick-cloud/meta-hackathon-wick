@@ -205,7 +205,10 @@ export class BrokerClient {
         if (response.status === 204) value = undefined;
         else {
           const declared = Number(response.headers.get('content-length'));
-          if (Number.isFinite(declared) && declared > 2 * 1024 * 1024) throw new Error();
+          if (Number.isFinite(declared) && declared > 2 * 1024 * 1024) {
+            await response.body?.cancel().catch(() => {});
+            throw new Error();
+          }
           // Bounded API pages are small. Read incrementally to also bound chunked responses.
           if (!response.body) throw new Error();
           const reader = response.body.getReader();
@@ -228,6 +231,18 @@ export class BrokerClient {
           value = JSON.parse(Buffer.concat(chunks).toString('utf8'));
         }
       } catch {
+        // A fetch can resolve its headers before its body is interrupted. Preserve
+        // cancellation and uncertain-mutation recovery semantics through body reads.
+        if (options.signal?.aborted)
+          throw new BrokerError('Broker request was cancelled.', {
+            code: 'cancelled',
+            operationKey: op,
+          });
+        if (timeout.aborted)
+          throw new BrokerError(
+            'Broker request timed out. The operation may still be in progress.',
+            { code: 'timeout', operationKey: op },
+          );
         throw new BrokerError('Broker returned an invalid or oversized API response.', {
           status: response.status,
           code: 'invalid_response',

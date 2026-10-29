@@ -195,4 +195,78 @@ describe('Broker CLI machine operations', () => {
     expect(input.setRawMode).toHaveBeenLastCalledWith(false);
     expect(terminal.close).toHaveBeenCalled();
   });
+  it.each([
+    {
+      label: 'UTF-8 split at every byte',
+      chunks: [...Buffer.from('echo café 😀\r')].map((byte) => Buffer.from([byte])),
+      expected: 'echo café 😀\r',
+    },
+    {
+      label: 'a pending character joined to a full input frame',
+      chunks: [
+        Buffer.from('😀').subarray(0, 2),
+        Buffer.concat([Buffer.from('😀').subarray(2), Buffer.from('a'.repeat(32766))]),
+      ],
+      expected: '😀' + 'a'.repeat(32766),
+    },
+    {
+      label: 'a multibyte paste larger than one frame',
+      chunks: [Buffer.from('é😀'.repeat(12000))],
+      expected: 'é😀'.repeat(12000),
+    },
+    {
+      label: 'an incomplete UTF-8 character at EOF',
+      chunks: [Buffer.from([0xe2, 0x82])],
+      expected: '\ufffd',
+    },
+    {
+      label: 'Ctrl-C forwarding and Ctrl-] detachment',
+      chunks: [Buffer.from('\u0003'), Buffer.from('\u001d')],
+      expected: '\u0003',
+      detach: true,
+    },
+  ])('preserves $label and restores the TTY', async ({ chunks, expected, detach }) => {
+    const input = new PassThrough() as PassThrough & CliIO['input'];
+    input.isTTY = true;
+    input.isRaw = true;
+    input.setRawMode = vi.fn();
+    const output = io();
+    output.input = input;
+    output.output.isTTY = true;
+    let finish!: () => void, started!: () => void;
+    const ended = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const ready = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const terminal = {
+      write: vi.fn((_data: string) => {}),
+      resize: vi.fn(),
+      ack: vi.fn(),
+      close: vi.fn(() => finish()),
+      async *[Symbol.asyncIterator]() {
+        started();
+        yield { type: 'ready' };
+        await ended;
+      },
+    };
+    const attached = attachTerminal(
+      { vms: { terminal: vi.fn(async () => terminal) } } as unknown as BrokerClient,
+      'vm-one',
+      output,
+    );
+    await ready;
+    for (const chunk of chunks) input.write(chunk);
+    if (!detach) input.end();
+    await attached;
+    const frames = terminal.write.mock.calls.map(([data]) => data);
+    expect(frames.join('')).toBe(expected);
+    expect(frames.every((frame) => Buffer.byteLength(frame) <= 32768)).toBe(true);
+    expect(input.setRawMode).toHaveBeenLastCalledWith(true);
+    expect(input.listenerCount('data')).toBe(0);
+    expect(input.listenerCount('end')).toBe(0);
+    expect(input.isPaused()).toBe(true);
+    expect(terminal.close).toHaveBeenCalled();
+  });
 });

@@ -236,6 +236,214 @@ test('Try again only GETs the original request and requires a new explicit aucti
   expect(writes[0].path).toBe('/api/requests');
 });
 
+test('Retrying a revoked configuration requires an explicit available replacement', async ({
+  page,
+}) => {
+  const writes = await fixture(page, 'buyer', (path, method) =>
+    path === `/api/requests/${id}`
+      ? { request: { ...request, catalogId: 'revoked-configuration' }, bids: [] }
+      : path === '/api/requests' && method === 'POST'
+        ? { ...request, id: 'replacement-request', status: 'open' }
+        : path === '/api/requests/replacement-request'
+          ? { request: { ...request, id: 'replacement-request', status: 'open' }, bids: [] }
+          : undefined,
+  );
+  await page.goto(`/new?copy=${id}`);
+  await expect(page).toHaveURL(/requests\/review/);
+  const configuration = page.getByRole('combobox', { name: /^Configuration\b/ });
+  await expect(configuration).toHaveValue('revoked-configuration');
+  await expect(configuration.locator('option:checked')).toHaveText(
+    'Choose an available configuration',
+  );
+  await expect(
+    page.getByRole('button', { name: 'Start 30-second auction', exact: true }),
+  ).toBeDisabled();
+  expect(writes).toHaveLength(0);
+
+  await configuration.selectOption('micro');
+  await expect(configuration).toHaveValue('micro');
+  await page.getByRole('button', { name: 'Start 30-second auction', exact: true }).click();
+  await expect(page).toHaveURL(/requests\/replacement-request/);
+  expect(writes).toHaveLength(1);
+  expect(writes[0].body.catalogId).toBe('micro');
+});
+
+test('Returning to the description preserves the manually reviewed environment choices', async ({
+  page,
+}) => {
+  const writes = await fixture(page, 'buyer', (path, method) =>
+    path === '/api/me'
+      ? {
+          user: {
+            id: 'user-one',
+            name: 'Fixture User',
+            email: 'buyer@fixture.invalid',
+            role: 'buyer',
+          },
+          modes: { wick: 'real', muse: 'fixture' },
+          catalog: [
+            ...catalog,
+            {
+              ...catalog[0],
+              id: 'large',
+              name: 'Large Linux',
+              profile: 'large',
+              cpu: 8,
+              memoryGb: 16,
+              region: 'eu',
+            },
+          ],
+        }
+      : path === '/api/requests' && method === 'POST'
+        ? { ...request, id: 'edited-request', status: 'open' }
+        : path === '/api/requests/edited-request'
+          ? { request: { ...request, id: 'edited-request', status: 'open' }, bids: [] }
+          : undefined,
+  );
+  await page.goto('/new');
+  await page.getByLabel('Describe your environment').fill('My environment');
+  await page.getByRole('button', { name: 'Review manually', exact: true }).click();
+  await page.getByRole('combobox', { name: /^Reference configuration\b/ }).selectOption('large');
+  await page.getByLabel('Let compatible providers compete', { exact: false }).uncheck();
+  await page.getByRole('combobox', { name: 'Rental duration', exact: true }).selectOption('60');
+  await page.getByLabel('Minimum vCPUs', { exact: true }).fill('4');
+  await page.getByLabel('Minimum memory (GiB)', { exact: true }).fill('8');
+  await page.getByLabel('Maximum total price (USD)', { exact: false }).fill('3.21');
+  await page.getByRole('link', { name: 'Back to description', exact: true }).click();
+  await page.getByLabel('Describe your environment').fill('My updated environment');
+  await page.getByRole('button', { name: 'Review manually', exact: true }).click();
+
+  await expect(page.getByRole('combobox', { name: /^Configuration\b/ })).toHaveValue('large');
+  await expect(
+    page.getByLabel('Let compatible providers compete', { exact: false }),
+  ).not.toBeChecked();
+  await expect(page.getByRole('combobox', { name: 'Region', exact: true })).toHaveValue('eu');
+  await expect(page.getByRole('combobox', { name: 'Rental duration', exact: true })).toHaveValue(
+    '60',
+  );
+  await expect(page.getByLabel('Minimum vCPUs', { exact: true })).toHaveValue('4');
+  await expect(page.getByLabel('Minimum memory (GiB)', { exact: true })).toHaveValue('8');
+  await expect(page.getByLabel('Maximum total price (USD)', { exact: false })).toHaveValue('3.21');
+  expect(writes).toHaveLength(0);
+  await page.getByRole('button', { name: 'Start 30-second auction', exact: true }).click();
+  await expect(page).toHaveURL(/requests\/edited-request/);
+  expect(writes).toHaveLength(1);
+  expect(writes[0].body).toMatchObject({
+    description: 'My updated environment',
+    catalogId: 'large',
+    region: 'eu',
+    matchAcrossProviders: false,
+    durationMinutes: 60,
+    requirements: { cpu: 4, memoryGb: 8 },
+    maxPriceCents: 321,
+  });
+});
+
+test('Auction history shows the completed rental and preserves the winning offer', async ({
+  page,
+}, testInfo) => {
+  let reads = 0;
+  await page.clock.install();
+  const writes = await fixture(page, 'buyer', (path) =>
+    path === `/api/requests/${id}`
+      ? (reads++,
+        {
+          request: { ...request, status: 'ready', winningBidId: 'winning-bid' },
+          bids: [
+            {
+              id: 'winning-bid',
+              providerId: 'provider-one',
+              providerName: 'Fixture E2B',
+              totalPriceCents: 42,
+              status: 'won',
+              createdAt: iso(-30000),
+            },
+          ],
+          vm: {
+            id: 'completed-vm',
+            requestId: id,
+            status: 'terminated',
+            catalogName: 'Micro Linux',
+            expiresAt: iso(-1000),
+            cleanupPending: false,
+            cleanupConfirmedAt: iso(0),
+          },
+        })
+      : undefined,
+  );
+  await page.goto(`/requests/${id}`);
+  await expect(page.getByRole('heading', { name: 'Rental completed', exact: true })).toBeVisible();
+  await expect(page.getByText('Winning offer', { exact: true })).toBeVisible();
+  await expect(page.locator('.bid-price')).toContainText('$0.42');
+  await expect(
+    page.getByRole('link', { name: 'View environment history', exact: true }),
+  ).toHaveAttribute('href', '/vms/completed-vm');
+  await expect(
+    page.getByRole('heading', { name: 'Environment ready', exact: true }),
+  ).not.toBeVisible();
+  await page.waitForTimeout(100);
+  const settledReads = reads;
+  await page.clock.fastForward(6000);
+  expect(reads).toBe(settledReads);
+  expect(writes).toHaveLength(0);
+  await page.screenshot({
+    path: testInfo.outputPath('completed-auction-desktop.png'),
+    fullPage: true,
+  });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.screenshot({
+    path: testInfo.outputPath('completed-auction-mobile.png'),
+    fullPage: true,
+  });
+});
+
+test('Auction polling continues after rental expiry until cleanup is confirmed', async ({
+  page,
+}) => {
+  const testNow = Date.now();
+  await page.clock.install({ time: testNow });
+  let reads = 0;
+  let cleaned = false;
+  await fixture(page, 'buyer', (path) =>
+    path === `/api/requests/${id}`
+      ? (reads++,
+        {
+          request: { ...request, status: 'ready' },
+          bids: [],
+          vm: {
+            id: 'ending-vm',
+            requestId: id,
+            status: cleaned ? 'terminated' : 'running',
+            catalogName: 'Micro Linux',
+            expiresAt: new Date(testNow + 5000).toISOString(),
+            cleanupPending: !cleaned,
+            cleanupConfirmedAt: cleaned ? new Date(testNow + 8000).toISOString() : null,
+          },
+        })
+      : undefined,
+  );
+  await page.goto(`/requests/${id}`);
+  await expect(page.getByRole('heading', { name: 'Environment ready', exact: true })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Open environment', exact: true })).toBeVisible();
+  await page.clock.fastForward(5500);
+  await expect(
+    page.getByRole('heading', { name: 'Environment ending', exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText('Your browser terminal is available.', { exact: true }),
+  ).not.toBeVisible();
+  const endingReads = reads;
+  await page.clock.fastForward(2500);
+  await expect.poll(() => reads).toBeGreaterThan(endingReads);
+  cleaned = true;
+  await page.clock.fastForward(2500);
+  await expect(page.getByRole('heading', { name: 'Rental completed', exact: true })).toBeVisible();
+  await page.waitForTimeout(100);
+  const settledReads = reads;
+  await page.clock.fastForward(6000);
+  expect(reads).toBe(settledReads);
+});
+
 test('Agreement review reserves the full target maximum and does not start VMs', async ({
   page,
 }) => {

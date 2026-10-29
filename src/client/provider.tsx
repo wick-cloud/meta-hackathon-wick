@@ -946,6 +946,7 @@ export function ProviderOfferings() {
     dashboard = useResource<Dashboard>('/api/provider/dashboard'),
     approved = catalog.filter(
       (item) =>
+        !!dashboard.data &&
         item.approved &&
         (!dashboard.data?.provider.cloudProvider ||
           item.provider === dashboard.data.provider.cloudProvider) &&
@@ -968,13 +969,26 @@ export function ProviderOfferings() {
       mode: Mode;
       modelCalled?: boolean;
     } | null>(null);
-  let publishPrice: number | undefined = draft.priceCents;
-  let quoteError = '';
+  const selected = approved.find((item) => item.id === draft.catalogId);
+  const firstApprovedId = approved[0]?.id ?? '';
+  useEffect(() => {
+    if (!dashboard.data || selected) return;
+    setDraft((old) => ({
+      ...old,
+      catalogId: firstApprovedId,
+      durationMinutes: undefined,
+      priceBasis: undefined,
+    }));
+  }, [dashboard.data, selected?.id, firstApprovedId]);
+  let publishPrice: number | undefined = selected ? draft.priceCents : undefined;
+  let quoteError = !dashboard.data
+    ? 'Loading your approved configurations and current pricing policy.'
+    : !selected
+      ? 'No configurations are available under your current provider policy.'
+      : '';
   if (modes.wick === 'real' && draft.priceBasis !== 'server-priced-candidate') {
     try {
-      const selected = approved.find((item) => item.id === draft.catalogId);
-      if (!selected || !dashboard.data)
-        throw new Error('Loading your approved configuration and current pricing policy.');
+      if (!selected || !dashboard.data) throw new Error(quoteError);
       publishPrice = Math.max(
         fixedQuote(managedPricing(selected), 30).totalPriceCents,
         dashboard.data.policy.minimumPriceCents,
@@ -987,7 +1001,7 @@ export function ProviderOfferings() {
   }
   async function create(event: FormEvent) {
     event.preventDefault();
-    if (publishPrice === undefined) return;
+    if (!selected || !dashboard.data || publishPrice === undefined) return;
     setBusy('create');
     setActionError('');
     setSuccess('');
@@ -1078,7 +1092,10 @@ export function ProviderOfferings() {
           )}
         </button>
       </div>
-      <ErrorBox error={error || actionError} retry={error ? reload : undefined} />
+      <ErrorBox
+        error={error || actionError || dashboard.error}
+        retry={error ? reload : dashboard.error ? dashboard.reload : undefined}
+      />
       {success && <SuccessBox>{success}</SuccessBox>}
       {suggestions && (
         <section className="card offering-suggestions">
@@ -1162,6 +1179,7 @@ export function ProviderOfferings() {
                 <select
                   id="offering-config"
                   value={draft.catalogId}
+                  disabled={!dashboard.data || !approved.length}
                   onChange={(e) =>
                     setDraft({
                       ...draft,
@@ -1172,6 +1190,11 @@ export function ProviderOfferings() {
                   }
                   required
                 >
+                  {!selected && (
+                    <option value={draft.catalogId} disabled>
+                      {dashboard.data ? 'No approved configurations' : 'Loading configurations…'}
+                    </option>
+                  )}
                   {approved.map((item) => (
                     <option key={item.id} value={item.id}>
                       {item.name}
@@ -1213,7 +1236,6 @@ export function ProviderOfferings() {
                     differ within your policy and the buyer’s budget. Your 85% share must cover the
                     estimated upstream compute cost.
                   </p>
-                  <ErrorBox error={quoteError} />
                 </div>
               )}
               <div className="field">
@@ -1229,11 +1251,12 @@ export function ProviderOfferings() {
                 </div>
               </div>
             </div>
+            <ErrorBox error={quoteError} />
             {publishPrice !== undefined && <ProviderRevenueSplit grossCents={publishPrice} />}
             <div className="form-actions">
               <button
                 className="button primary"
-                disabled={!!busy || !draft.catalogId || publishPrice === undefined}
+                disabled={!!busy || !selected || !dashboard.data || publishPrice === undefined}
               >
                 {busy === 'create' ? (
                   <Spinner label="Publishing" />

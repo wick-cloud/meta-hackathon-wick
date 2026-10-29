@@ -6,6 +6,7 @@ import { open } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { realpathSync } from 'node:fs';
 import type { Readable, Writable } from 'node:stream';
+import { StringDecoder } from 'node:string_decoder';
 import { once } from 'node:events';
 import { OPERATIONS, operationPath, type Operation } from './operations.js';
 import {
@@ -19,6 +20,7 @@ import {
 
 const VERSION = '0.1.0';
 const MAX_INPUT = 65536;
+const MAX_TERMINAL_FRAME = 32768;
 export interface CliIO {
   input: Readable & { isTTY?: boolean; isRaw?: boolean; setRawMode?: (raw: boolean) => void };
   output: Writable & { isTTY?: boolean; columns?: number; rows?: number };
@@ -169,21 +171,41 @@ export async function attachTerminal(client: BrokerClient, id: string, io: CliIO
     rows: io.output.rows ?? 24,
   });
   const wasRaw = io.input.isRaw ?? false;
+  const decoder = new StringDecoder('utf8');
   let inputFailure: unknown;
   const failedInput = (error: unknown) => {
     inputFailure = error;
     terminal.close();
   };
-  const onInput = (chunk: Buffer | string) => {
-    const data = chunk.toString();
+  const writeInput = (data: string) => {
     if (data.includes('\u001d')) {
       terminal.close();
       return;
     } // Ctrl-] detaches; Ctrl-C reaches the guest.
+    const bytes = Buffer.from(data, 'utf8');
+    for (let start = 0; start < bytes.length;) {
+      let end = Math.min(start + MAX_TERMINAL_FRAME, bytes.length);
+      // Move the boundary before any partial UTF-8 code point. Decoding stdin
+      // may join bytes from separate chunks, so its result can exceed one frame.
+      while (end < bytes.length && (bytes[end] & 0xc0) === 0x80) end--;
+      terminal.write(bytes.subarray(start, end).toString('utf8'));
+      start = end;
+    }
+  };
+  const onInput = (chunk: Buffer | string) => {
     try {
-      terminal.write(data);
+      writeInput(decoder.write(typeof chunk === 'string' ? Buffer.from(chunk) : chunk));
     } catch (error) {
       failedInput(error);
+    }
+  };
+  const onEnd = () => {
+    try {
+      writeInput(decoder.end());
+    } catch (error) {
+      failedInput(error);
+    } finally {
+      terminal.close();
     }
   };
   const resize = () => {
@@ -199,7 +221,7 @@ export async function attachTerminal(client: BrokerClient, id: string, io: CliIO
     io.input.setRawMode(true);
     io.input.resume();
     io.input.on('data', onInput);
-    io.input.on('end', stop);
+    io.input.on('end', onEnd);
     io.input.on('error', failedInput);
     io.output.on('resize', resize);
     process.once('SIGTERM', stop);
@@ -215,7 +237,7 @@ export async function attachTerminal(client: BrokerClient, id: string, io: CliIO
   } finally {
     terminal.close();
     io.input.off('data', onInput);
-    io.input.off('end', stop);
+    io.input.off('end', onEnd);
     io.input.off('error', failedInput);
     io.output.off('resize', resize);
     process.off('SIGTERM', stop);

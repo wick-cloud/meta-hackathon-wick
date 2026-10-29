@@ -143,6 +143,20 @@ export function NewEnvironment() {
       );
       return;
     }
+    const reviewed = loadDraft();
+    if (reviewed) {
+      saveDraft({
+        description: description.trim(),
+        catalogId: reviewed.catalogId,
+        region: reviewed.region,
+        matchAcrossProviders: reviewed.matchAcrossProviders,
+        durationMinutes: reviewed.durationMinutes,
+        maxPriceCents: budget,
+        requirements: reviewed.requirements,
+      });
+      navigate('/requests/review');
+      return;
+    }
     const explicitRegion = parseExplicitBuyerDescription(description).region;
     const reference =
       (explicitRegion
@@ -469,6 +483,11 @@ export function RequestReview() {
                 }}
                 required
               >
+                {!selected && (
+                  <option value={draft.catalogId} disabled>
+                    Choose an available configuration
+                  </option>
+                )}
                 {approved.map((item) => (
                   <option value={item.id} key={item.id}>
                     {item.name} · {item.cpu} vCPU · {item.memoryGb} GiB RAM
@@ -687,15 +706,21 @@ export function RequestReview() {
 }
 
 export function AuctionPage({ id }: { id: string }) {
+  const [poll, setPoll] = useState(2000);
   const { data, error, loading, reload } = useResource<{
       request: EnvironmentRequest;
       bids: Bid[];
       vm?: VM | null;
-    }>(`/api/requests/${encodeURIComponent(id)}`, 2000),
-    navigate = useNavigate(),
+    }>(`/api/requests/${encodeURIComponent(id)}`, poll),
     now = useNow();
   const [busy, setBusy] = useState(''),
     [actionError, setActionError] = useState('');
+  useEffect(() => {
+    const settled = data?.vm
+      ? !!data.vm.cleanupConfirmedAt && !data.vm.cleanupPending
+      : !!data && ['no_offers', 'failed', 'cancelled'].includes(data.request.status);
+    setPoll(settled ? 0 : 2000);
+  }, [data]);
   async function action(kind: 'cancel') {
     setBusy(kind);
     setActionError('');
@@ -720,6 +745,13 @@ export function AuctionPage({ id }: { id: string }) {
       a.id.localeCompare(b.id),
   );
   const ended = ['no_offers', 'failed', 'cancelled'].includes(request.status);
+  const rentalEnded =
+    !!vm &&
+    (!!vm.cleanupConfirmedAt ||
+      ['terminating', 'terminated', 'expired', 'failed'].includes(vm.status) ||
+      (!!vm.expiresAt && Date.parse(vm.expiresAt) <= now));
+  const awaitingCleanup = rentalEnded && (!vm?.cleanupConfirmedAt || vm.cleanupPending);
+  const completedRental = request.status === 'ready' && rentalEnded;
   return (
     <>
       <Link href="/orders" className="back-link">
@@ -732,7 +764,11 @@ export function AuctionPage({ id }: { id: string }) {
           open
             ? 'Live auction'
             : request.status === 'ready'
-              ? 'Environment ready'
+              ? completedRental
+                ? awaitingCleanup
+                  ? 'Environment ending'
+                  : 'Rental completed'
+                : 'Environment ready'
               : request.status === 'provisioning'
                 ? 'Provisioning environment'
                 : request.status === 'no_offers'
@@ -749,7 +785,9 @@ export function AuctionPage({ id }: { id: string }) {
               : 'Your specification and winning quote are locked in.'
         }
       >
-        <StatusPill status={request.status} />
+        <StatusPill
+          status={completedRental ? (awaitingCleanup ? 'ending' : 'completed') : request.status}
+        />
       </PageHeader>
       <Steps active={2} />
       <ErrorBox error={error || actionError} retry={error ? reload : undefined} />
@@ -788,7 +826,11 @@ export function AuctionPage({ id }: { id: string }) {
                 <div>
                   <h2>
                     {request.status === 'ready'
-                      ? 'Ready to make it yours'
+                      ? completedRental
+                        ? awaitingCleanup
+                          ? 'Rental ended · cleanup pending'
+                          : 'Your rental is complete'
+                        : 'Ready to make it yours'
                       : request.status === 'provisioning'
                         ? 'Your winning offer is being provisioned'
                         : request.status === 'no_offers'
@@ -800,9 +842,13 @@ export function AuctionPage({ id }: { id: string }) {
                   <p>
                     {ended
                       ? 'No charge for this attempt.'
-                      : request.status === 'provisioning'
-                        ? 'Setup is included in your rental time. We’ll keep you updated.'
-                        : 'A fixed demo invoice is recorded when readiness is confirmed.'}
+                      : completedRental
+                        ? awaitingCleanup
+                          ? 'Terminal access has ended. Provider capacity remains reserved until cleanup is confirmed.'
+                          : 'The winning offer and fixed rental price remain available below.'
+                        : request.status === 'provisioning'
+                          ? 'Setup is included in your rental time. We’ll keep you updated.'
+                          : 'A fixed demo invoice is recorded when readiness is confirmed.'}
                   </p>
                 </div>
               </div>
@@ -884,13 +930,17 @@ export function AuctionPage({ id }: { id: string }) {
               <div>
                 <h3>{vm.catalogName || 'Your environment'}</h3>
                 <p>
-                  {vm.status === 'running'
-                    ? 'Your browser terminal is available.'
-                    : 'Follow setup and exact expiry on your environment page.'}
+                  {rentalEnded
+                    ? awaitingCleanup
+                      ? 'Terminal access has ended. Follow cleanup on your environment page.'
+                      : 'Review the completed rental and its environment history.'
+                    : vm.status === 'running'
+                      ? 'Your browser terminal is available.'
+                      : 'Follow setup and exact expiry on your environment page.'}
                 </p>
               </div>
               <Link href={`/vms/${vm.id}`} className="button primary">
-                Open environment
+                {rentalEnded ? 'View environment history' : 'Open environment'}
                 <ArrowRight size={16} />
               </Link>
             </div>
