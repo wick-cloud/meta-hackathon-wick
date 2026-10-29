@@ -38,10 +38,10 @@ describe('scheduled agreement recurrence and immutable budget', () => {
     });
   });
   it('rejects nonexistent and ambiguous daylight-saving local times', () => {
-    expect(() => localInstant('2026-03-08', '02:30', 'America/Los_Angeles')).toThrow(
+    expect(() => localInstant('2025-03-09', '02:30', 'America/Vancouver')).toThrow(
       /missing or ambiguous/,
     );
-    expect(() => localInstant('2026-11-01', '01:30', 'America/Los_Angeles')).toThrow(
+    expect(() => localInstant('2025-11-02', '01:30', 'America/Vancouver')).toThrow(
       /missing or ambiguous/,
     );
   });

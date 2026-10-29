@@ -10,7 +10,7 @@ describe('authoritative scheduled agreement preview', () => {
   const input: AgreementInput = {
     operationKey: 'readonly-preview-key',
     description: 'Seven-day preview',
-    startDate: '2026-10-29',
+    startDate: '2025-10-30',
     timeZone: 'America/Vancouver',
     windowStart: '00:00',
     windowEnd: '06:00',
@@ -32,7 +32,7 @@ describe('authoritative scheduled agreement preview', () => {
       pool: {
         query: vi.fn(async (sql: string) => {
           expect(sql).toBe('SELECT clock_timestamp() at');
-          return { rows: [{ at: new Date('2026-10-28T00:00:00Z') }] };
+          return { rows: [{ at: new Date('2025-10-29T00:00:00Z') }] };
         }),
         connect: vi.fn(() => {
           throw new Error('Preview must not acquire a transaction or locks.');
@@ -69,9 +69,9 @@ describe('authoritative scheduled agreement preview', () => {
     });
     expect(result.windows).toHaveLength(7);
     expect(result.windows[3]).toEqual({
-      startsAt: '2026-11-01T07:00:00.000Z',
-      discountEndsAt: '2026-11-01T14:00:00.000Z',
-      endsAt: '2026-11-01T16:00:00.000Z',
+      startsAt: '2025-11-02T07:00:00.000Z',
+      discountEndsAt: '2025-11-02T14:00:00.000Z',
+      endsAt: '2025-11-02T16:00:00.000Z',
     });
     expect(ctx.pool.query).toHaveBeenCalledTimes(1);
     expect(ctx.pool.connect).not.toHaveBeenCalled();

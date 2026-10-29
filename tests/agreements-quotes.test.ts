@@ -54,8 +54,8 @@ describe('one shared browser/server scheduled funding calculation', () => {
     expect(validateAgreement(spec, now).maxAmountCents).toBe(420);
   });
   it('charges actual UTC elapsed hours across the November Vancouver transition rather than seven identical local-clock durations', () => {
-    const spec = { ...input, timeZone: 'America/Vancouver' },
-      server = validateAgreement(spec, now),
+    const spec = { ...input, startDate: '2025-10-30', timeZone: 'America/Vancouver' },
+      server = validateAgreement(spec, Date.parse('2025-10-29T00:00:00Z')),
       estimate = agreementEstimate(spec);
     expect(server.windows.map((w) => windowCost(w, 10, 20))).toEqual([
       100, 100, 100, 110, 100, 100, 100,
@@ -65,8 +65,8 @@ describe('one shared browser/server scheduled funding calculation', () => {
     expect(estimate.maximum).toBe(server.maxAmountCents);
   });
   it.each([
-    { startDate: '2026-10-29', windowStart: '01:30', now: '2026-10-28T00:00:00Z' },
-    { startDate: '2026-03-07', windowStart: '02:30', now: '2026-03-06T00:00:00Z' },
+    { startDate: '2025-10-30', windowStart: '01:30', now: '2025-10-29T00:00:00Z' },
+    { startDate: '2025-03-08', windowStart: '02:30', now: '2025-03-07T00:00:00Z' },
   ])(
     'rejects an ambiguous or missing Vancouver endpoint within the complete term: $startDate',
     ({ now, ...values }) => {
@@ -95,7 +95,7 @@ describe('one shared browser/server scheduled funding calculation', () => {
   });
   it('preserves HTTP400 wrapping for existing server schedule helper exports', () => {
     try {
-      localInstant('2026-11-01', '01:30', 'America/Vancouver');
+      localInstant('2025-11-02', '01:30', 'America/Vancouver');
       expect.unreachable();
     } catch (error) {
       expect(error).toBeInstanceOf(HttpError);
