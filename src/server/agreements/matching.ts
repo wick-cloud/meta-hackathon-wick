@@ -130,9 +130,13 @@ export async function matchAgreement(ctx: AppContext, id: string) {
       );
       return;
     }
+    // Keep each provider's cheapest sufficient unbooked supply before the shared
+    // frontier limit; duplicate offers must not hide another provider's capacity.
+    // Retain booked offers separately: a frozen revision can make one unusable
+    // for top-ups, so it must not displace alternative unbooked supply.
     const candidates = (
       await db.query(
-        `WITH wanted AS MATERIALIZED(SELECT * FROM jsonb_to_recordset($8::jsonb) AS w(s timestamptz,d timestamptz,e timestamptz)),
+        `WITH wanted AS MATERIALIZED(SELECT * FROM jsonb_to_recordset($8::jsonb) AS w(id uuid,s timestamptz,d timestamptz,e timestamptz)),
          overlapping AS MATERIALIZED(SELECT w.s window_at,b.provider_id,b.scheduled_offering_id,b.quantity,GREATEST(b.starts_at,w.s) starts_at,LEAST(b.ends_at,w.e) ends_at
            FROM wanted w JOIN broker_agreement_bookings b ON tstzrange(b.starts_at,b.ends_at,'[)')&&tstzrange(w.s,w.e,'[)')),
          events AS(SELECT window_at,'provider' kind,provider_id id,starts_at at,quantity delta FROM overlapping
@@ -149,11 +153,18 @@ export async function matchAgreement(ctx: AppContext, id: string) {
               OR(v.id IS NOT NULL AND v.cleanup_confirmed_at IS NULL AND(v.status NOT IN('running','provisioning') OR v.environment_id IS NULL OR v.expires_at IS NULL OR v.expires_at+interval '120 seconds'>w.s))))
              OR(r.agreement_id IS NOT NULL AND v.expires_at<=w.s AND v.cleanup_confirmed_at IS NULL)) GROUP BY w.s,h.provider_id)
          SELECT DISTINCT ON(x.id) x.* FROM wanted w
-         CROSS JOIN LATERAL(SELECT s.*,to_char(s.created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') offer_created_at,c.item||jsonb_build_object('id',c.id) item,c.approved,c.source_mode,p.name provider_name,p.total_capacity,p.policy,p.cloud_provider
+         CROSS JOIN LATERAL(SELECT ranked.* FROM(
+         SELECT available.*,COALESCE(sum(CASE WHEN prior_booking_id IS NULL THEN offering_free ELSE 0 END)
+           OVER(PARTITION BY provider_id ORDER BY block_cost,created_at,id ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING),0) earlier_capacity
+         FROM(SELECT s.*,to_char(s.created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') offer_created_at,c.item||jsonb_build_object('id',c.id) item,c.approved,c.source_mode,p.name provider_name,p.total_capacity,p.policy,p.cloud_provider,
+         p.total_capacity-COALESCE((p.policy->>'reserveSlots')::int,0)-COALESCE(pp.quantity,0)-COALESCE(ph.quantity,0) provider_free,
+         s.capacity_quantity-COALESCE(op.quantity,0) offering_free,prior.id prior_booking_id,
+         ceil((extract(epoch FROM w.d-w.s)*s.discount_rate_cents_per_hour+extract(epoch FROM w.e-w.d)*s.normal_rate_cents_per_hour)/3600) block_cost
          FROM broker_scheduled_offerings s JOIN broker_catalog c ON c.id=s.catalog_id JOIN broker_providers p ON p.id=s.provider_id
          LEFT JOIN peaks pp ON pp.window_at=w.s AND pp.kind='provider' AND pp.id=p.id
          LEFT JOIN peaks op ON op.window_at=w.s AND op.kind='offering' AND op.id=s.id
          LEFT JOIN physical_holds ph ON ph.window_at=w.s AND ph.provider_id=p.id
+         LEFT JOIN broker_agreement_bookings prior ON prior.window_id=w.id AND prior.scheduled_offering_id=s.id
          WHERE s.active AND c.approved AND c.source_mode=$1 AND($2='any' OR c.item->>'region'=$2)
          AND(c.item->>'cpu')::numeric>=$3 AND(c.item->>'memoryGb')::numeric>=$4
          AND($5::text IS NULL OR($5='any' AND COALESCE(c.item->>'gpu','')<>'') OR c.item->>'gpu'=$5)
@@ -172,7 +183,9 @@ export async function matchAgreement(ctx: AppContext, id: string) {
            AND(local.day+s.window_start::time) AT TIME ZONE s.time_zone<=w.s
            AND(local.day+CASE WHEN s.window_end<=s.window_start THEN 1 ELSE 0 END+s.window_end::time) AT TIME ZONE s.time_zone>=w.d
            AND(local.day+CASE WHEN s.window_end<=s.window_start THEN 1 ELSE 0 END+CASE WHEN s.available_until<s.window_end THEN 1 ELSE 0 END+s.available_until::time) AT TIME ZONE s.time_zone>=w.e)
-         ORDER BY ceil((extract(epoch FROM w.d-w.s)*s.discount_rate_cents_per_hour+extract(epoch FROM w.e-w.d)*s.normal_rate_cents_per_hour)/3600),s.created_at,s.id LIMIT 64)x ORDER BY x.id`,
+         )available)ranked
+         WHERE prior_booking_id IS NOT NULL OR earlier_capacity<provider_free
+         ORDER BY block_cost,created_at,id LIMIT 64)x ORDER BY x.id`,
         [
           ctx.wick.mode,
           spec.region,
@@ -184,7 +197,12 @@ export async function matchAgreement(ctx: AppContext, id: string) {
           JSON.stringify(
             windows
               .filter((w) => !w.settled_at && new Date(w.starts_at) > new Date(a.db_now))
-              .map((w) => ({ s: iso(w.starts_at), d: iso(w.discount_ends_at), e: iso(w.ends_at) })),
+              .map((w) => ({
+                id: w.id,
+                s: iso(w.starts_at),
+                d: iso(w.discount_ends_at),
+                e: iso(w.ends_at),
+              })),
           ),
         ],
       )

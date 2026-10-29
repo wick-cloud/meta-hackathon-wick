@@ -149,6 +149,53 @@ describe('Broker TypeScript client request and recovery contract', () => {
       });
     }
   });
+  it('cancels a declared oversized response without starting to read its body', async () => {
+    const cancel = vi.fn(),
+      pull = vi.fn();
+    const response = new Response(
+      new ReadableStream<Uint8Array>({ cancel, pull }, { highWaterMark: 0 }),
+      { headers: { 'Content-Length': String(2 * 1024 * 1024 + 1) } },
+    );
+    const fetcher = vi.fn(async () => response);
+    await expect(create(fetcher).me()).rejects.toMatchObject({ code: 'invalid_response' });
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(pull).not.toHaveBeenCalled();
+    expect(fetcher).toHaveBeenCalledOnce();
+  });
+  it.each(['cancelled', 'timeout'] as const)(
+    'preserves %s and the operation key when a mutation body stalls after headers',
+    async (code) => {
+      const controller = new AbortController();
+      let bodyStarted!: () => void;
+      const started = new Promise<void>((resolve) => {
+        bodyStarted = resolve;
+      });
+      const fetcher = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        const signal = init!.signal!;
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(stream) {
+              stream.enqueue(Buffer.from('{"id":'));
+              signal.addEventListener('abort', () => stream.error(signal.reason), { once: true });
+              bodyStarted();
+            },
+          }),
+        );
+      });
+      const request = create(fetcher, code === 'timeout' ? 20 : 1000).orders.create(input, {
+        operationKey: 'stable-streamed-order',
+        signal: controller.signal,
+      });
+      const rejected = expect(request).rejects.toMatchObject({
+        code,
+        operationKey: 'stable-streamed-order',
+      });
+      await started;
+      if (code === 'cancelled') controller.abort();
+      await rejected;
+      expect(fetcher).toHaveBeenCalledOnce();
+    },
+  );
   it('times out waits with a saved resource reference and never cancels or resubmits', async () => {
     const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
         ok({ request: { id: 'auction-1', status: 'open' }, bids: [], vm: null }),

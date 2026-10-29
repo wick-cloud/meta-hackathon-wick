@@ -14,6 +14,20 @@ export interface TerminalOptions {
 }
 const MAX_BUFFER = 256 * 1024;
 
+function validateDimensions(cols: number, rows: number) {
+  if (
+    !Number.isInteger(cols) ||
+    !Number.isInteger(rows) ||
+    cols < 2 ||
+    cols > 500 ||
+    rows < 1 ||
+    rows > 200
+  )
+    throw new BrokerError('Terminal dimensions must be 2–500 columns and 1–200 rows.', {
+      code: 'invalid_input',
+    });
+}
+
 /** A customer-owned Broker PTY. Closing this handle never terminates the VM. */
 export class BrokerTerminal implements AsyncIterable<TerminalEvent> {
   #socket: WebSocket;
@@ -62,10 +76,10 @@ export class BrokerTerminal implements AsyncIterable<TerminalEvent> {
             type: 'ready',
             ...(value.mode === 'real' || value.mode === 'fixture' ? { mode: value.mode } : {}),
           };
+          this.resize(options.cols ?? 80, options.rows ?? 24);
           this.#ready = true;
           clearTimeout(timer);
           this.#readyResolve();
-          this.resize(options.cols ?? 80, options.rows ?? 24);
         } else if (value.type === 'output' && typeof value.data === 'string') {
           if (
             value.data.length > Math.ceil(MAX_BUFFER / 3) * 4 ||
@@ -158,6 +172,7 @@ export class BrokerTerminal implements AsyncIterable<TerminalEvent> {
   ): Promise<BrokerTerminal> {
     if (options.signal?.aborted)
       throw new BrokerError('Broker terminal connection was cancelled.', { code: 'cancelled' });
+    validateDimensions(options.cols ?? 80, options.rows ?? 24);
     const socket = new WebSocket(url, {
       headers: { Authorization: `Bearer ${apiKey}` },
       followRedirects: false,
@@ -197,17 +212,7 @@ export class BrokerTerminal implements AsyncIterable<TerminalEvent> {
     this.write(data);
   }
   resize(cols: number, rows: number) {
-    if (
-      !Number.isInteger(cols) ||
-      !Number.isInteger(rows) ||
-      cols < 2 ||
-      cols > 500 ||
-      rows < 1 ||
-      rows > 200
-    )
-      throw new BrokerError('Terminal dimensions must be 2–500 columns and 1–200 rows.', {
-        code: 'invalid_input',
-      });
+    validateDimensions(cols, rows);
     this.#send({ type: 'resize', cols, rows });
   }
   /** Acknowledge output only after the consumer has displayed or read it. */

@@ -1,4 +1,4 @@
-import { afterEach, describe, it, expect } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import { WebSocketServer } from 'ws';
 import { BrokerClient } from '../packages/sdk/src/index.js';
 const servers: WebSocketServer[] = [];
@@ -23,6 +23,22 @@ async function fixture() {
   };
 }
 describe('Broker SDK local terminal protocol', () => {
+  it.each([{ cols: 1 }, { cols: 501 }, { cols: 80.5 }, { rows: 0 }, { rows: 201 }])(
+    'rejects invalid initial dimensions %j before allocating a terminal session',
+    async (options) => {
+      const { server, client } = await fixture();
+      const connected = vi.fn();
+      server.on('connection', (socket) => {
+        connected();
+        socket.send(JSON.stringify({ type: 'ready' }));
+      });
+      await expect(client.vms.terminal('owned-vm', options)).rejects.toMatchObject({
+        code: 'invalid_input',
+      });
+      expect(connected).not.toHaveBeenCalled();
+      expect(server.clients.size).toBe(0);
+    },
+  );
   it('uses scoped Bearer headers without browser Origin and acknowledges only consumed output', async () => {
     const { server, client } = await fixture();
     const frames: Record<string, unknown>[] = [];

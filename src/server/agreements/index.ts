@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { HttpError, type AppContext } from '../context.js';
-import { shortText, uuid } from '../marketplace/data.js';
+import { getProvider, shortText, uuid } from '../marketplace/data.js';
 import { agreementDetail } from './data.js';
 import { createAgreement, cancelUnmatched, previewAgreement } from './service.js';
 import { activateAgreement } from './activation.js';
@@ -81,14 +81,32 @@ export async function registerAgreements(app: FastifyInstance, ctx: AppContext) 
         const actor = await ctx.requireActor(request, provider ? ['provider'] : ['buyer']);
         limitDrafts(actor.id);
         const prompt = shortText((request.body as { prompt?: unknown })?.prompt, 'Prompt');
+        const account = provider ? await getProvider(ctx.pool, actor) : undefined;
         const catalog = (
           await ctx.pool.query(
-            'SELECT id,item,approved FROM broker_catalog WHERE approved AND source_mode=$1 ORDER BY id LIMIT 64',
-            [ctx.wick.mode],
+            account
+              ? `SELECT id,item,approved FROM broker_catalog WHERE approved AND source_mode=$1
+                 AND ($2::text IS NULL OR item->>'provider'=$2)
+                 AND ($3::text[] IS NULL OR id=ANY($3::text[])) ORDER BY id LIMIT 64`
+              : 'SELECT id,item,approved FROM broker_catalog WHERE approved AND source_mode=$1 ORDER BY id LIMIT 64',
+            account
+              ? [
+                  ctx.wick.mode,
+                  account.cloud_provider || null,
+                  Array.isArray(account.policy.allowedCatalogIds)
+                    ? account.policy.allowedCatalogIds
+                    : null,
+                ]
+              : [ctx.wick.mode],
           )
         ).rows.map((r) => ({ ...r.item, id: r.id, approved: r.approved }));
         if (!catalog.length)
-          throw new HttpError(409, 'Approve a configuration before drafting a capacity schedule.');
+          throw new HttpError(
+            409,
+            provider
+              ? 'No approved configurations are available under your provider account and policy.'
+              : 'Approve a configuration before drafting a capacity schedule.',
+          );
         if (ctx.muse.mode === 'real') {
           if (!ctx.muse.draftSchedule)
             throw new HttpError(503, 'The scheduled Muse draft adapter is unavailable.');
