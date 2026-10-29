@@ -64,6 +64,16 @@ export interface VM {
   cleanupPending?: boolean;
   pricing?: FixedQuote;
   revenueShare?: RevenueShare;
+  billingSource?: 'instant_vm' | 'scheduled_capacity';
+  agreementId?: string;
+  scheduledWindow?: {
+    windowId: string;
+    startsAt: string;
+    discountEndsAt: string;
+    endsAt: string;
+    discountRateCentsPerHour: number;
+    normalRateCentsPerHour: number;
+  };
 }
 export interface Invoice {
   id: string;
@@ -233,6 +243,13 @@ export const statusLabel = (status: string) =>
     accepted: 'Accepted',
     won: 'Awarded',
     lost: 'Released',
+    approved: 'Approved',
+    active: 'Active',
+    closing: 'Selecting match',
+    completed: 'Completed',
+    ending: 'Ending · cleanup pending',
+    needs_credit: 'Needs credit',
+    credit_release_pending: 'Credit release pending',
   })[status] || status.replaceAll('_', ' ');
 export const rentalSourceLabel = (mode: Mode | undefined) =>
   mode === 'real' ? 'Real Wick VM' : 'Fixture simulation';

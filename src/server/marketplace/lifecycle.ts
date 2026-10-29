@@ -6,6 +6,7 @@ import {
   environmentOwnershipMatches,
 } from '../integrations/discovery.js';
 import { transaction, enqueue, activity, QUEUES } from './db.js';
+import { scheduledActivationReady, scheduledActivationCleaned } from '../agreements/activation.js';
 import type { Row } from './data.js';
 
 const MAX_PROVISION_POLLS = 60;
@@ -107,22 +108,28 @@ export async function markReady(
     await db.query("UPDATE broker_requests SET status='ready',failure_reason=NULL WHERE id=$1", [
       vm.request_id,
     ]);
-    await db.query(
-      `INSERT INTO broker_invoices(vm_id,buyer_id,provider_id,subtotal_cents,total_cents,revenue_share) VALUES($1,$2,$3,$4,$4,$5) ON CONFLICT(vm_id) DO NOTHING`,
-      [
-        vmId,
-        vm.buyer_id,
-        vm.provider_id,
-        vm.quote_snapshot.totalPriceCents,
-        vm.quote_snapshot.revenueShare ?? null,
-      ],
-    );
+    if (vm.quote_snapshot.billingSource === 'scheduled_capacity') {
+      await scheduledActivationReady(ctx, db, vm);
+    } else {
+      await db.query(
+        `INSERT INTO broker_invoices(vm_id,buyer_id,provider_id,subtotal_cents,total_cents,revenue_share) VALUES($1,$2,$3,$4,$4,$5) ON CONFLICT(vm_id) DO NOTHING`,
+        [
+          vmId,
+          vm.buyer_id,
+          vm.provider_id,
+          vm.quote_snapshot.totalPriceCents,
+          vm.quote_snapshot.revenueShare ?? null,
+        ],
+      );
+    }
     await activity(
       db,
       vm.provider_id,
       vm.request_id,
       'ready',
-      'Wick confirmed running and terminal capability. One fixed demo invoice issued; no payment due.',
+      vm.quote_snapshot.billingSource === 'scheduled_capacity'
+        ? 'Scheduled capacity VM is ready. Its booked block is settled separately; no duplicate VM invoice.'
+        : 'Wick confirmed running and terminal capability. One fixed demo invoice issued; no payment due.',
     );
     const delay = Math.max(0, Math.ceil((new Date(vm.expires_at).getTime() - Date.now()) / 1000));
     await enqueue(ctx, db, QUEUES.cleanup, { vmId }, delay);
@@ -155,6 +162,24 @@ async function requestCleanup(ctx: AppContext, vmId: string, reason: string, exp
 export async function provisionVm(ctx: AppContext, vmId: string) {
   const vm = await claim(ctx, vmId, 'provision');
   if (!vm) return;
+  const admissionDeadline = vm.create_input.hardEndAt ?? vm.quote_snapshot.admissionDeadlineAt;
+  if (!vm.environment_id && admissionDeadline && Date.parse(admissionDeadline) <= Date.now()) {
+    if (vm.poll_attempts === 1)
+      await confirmCleanup(
+        ctx,
+        vmId,
+        'The admission deadline elapsed before the first create; no VM was allocated.',
+        true,
+      );
+    else
+      await requestCleanup(
+        ctx,
+        vmId,
+        'The original admission deadline elapsed; prior admission requires reconciliation.',
+        true,
+      );
+    return;
+  }
   try {
     let environment: WickEnvironment;
     if (vm.environment_id) {
@@ -295,6 +320,8 @@ export async function confirmCleanup(
       'UPDATE broker_holds SET released_at=now(),release_reason=$2 WHERE bid_id=$1 AND released_at IS NULL',
       [vm.bid_id, admissionRejected ? 'Rejected before admission' : 'Confirmed Wick cleanup'],
     );
+    if (vm.quote_snapshot.billingSource === 'scheduled_capacity')
+      await scheduledActivationCleaned(ctx, db, vm, { admissionRejected });
     if (!vm.ready_at)
       await db.query(
         "UPDATE broker_requests SET status=CASE WHEN status='cancelled' THEN status ELSE 'failed' END,failure_reason=$2 WHERE id=$1",

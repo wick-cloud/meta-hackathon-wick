@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react';
 import {
   Activity,
   ArrowRight,
+  CalendarClock,
   Check,
   CheckCircle2,
   Clock3,
@@ -29,6 +30,7 @@ import type {
   SupplierPolicy,
 } from '../shared/types';
 import { fixedQuote, managedPricing, revenueShare } from '../shared/pricing';
+import { AgreementCharges } from './agreement-charges';
 import {
   ApiError,
   api,
@@ -116,13 +118,19 @@ export function ProviderCapacity() {
   if (loading) return <Spinner label="Loading your capacity" />;
   if (!data) return <ErrorBox error={error || 'Provider unavailable.'} retry={reload} />;
   const { capacity, provider } = data;
+  const protectedSpare = Math.max(0, capacity.total - capacity.held - capacity.available);
+  const share = (quantity: number) =>
+    `${capacity.total ? Math.min(100, (quantity / capacity.total) * 100) : 0}%`;
   return (
     <>
       <PageHeader
         eyebrow="PROVIDER WORKSPACE"
-        title={`A little room for what’s next.`}
-        description={`${provider.name} · Manage the supply you make available to the marketplace.`}
+        title="Capacity"
+        description={`${provider.name} · Manage runtime allocation and availability.`}
       >
+        <Link href="/provider/scheduled" className="button secondary">
+          <CalendarClock size={16} /> Scheduled capacity
+        </Link>
         <span className="quiet-badge">
           {provider.simulated ? 'Simulated demo supply' : 'Wick-managed allocation'}
         </span>
@@ -136,13 +144,6 @@ export function ProviderCapacity() {
           </p>
         </div>
       )}
-      <div className="info-note">
-        <CircleDollarSign size={18} />
-        <p>
-          You keep 85% of each new rental. Broker takes 15% from your gross rental revenue; no extra
-          fee is added for buyers. <Link href="/provider/earnings">View earnings</Link>
-        </p>
-      </div>
       <div className="stats-grid">
         <StatCard
           label="Total capacity"
@@ -151,13 +152,13 @@ export function ProviderCapacity() {
           icon={<Server size={18} />}
         />
         <StatCard
-          label="Reserved slots"
+          label="Runtime slots held"
           value={capacity.held}
           note="Bids and environments awaiting cleanup"
           icon={<Layers3 size={18} />}
         />
         <StatCard
-          label="Available now"
+          label="Runtime headroom"
           value={capacity.available}
           note={`${data.policy.reserveSlots ?? 0} spare slots protected by policy`}
           icon={<CheckCircle2 size={18} />}
@@ -167,68 +168,60 @@ export function ProviderCapacity() {
       <div className="provider-two-column">
         <section className="card">
           <div className="section-heading">
-            <h2>Capacity overview</h2>
-            <span>{provider.simulated ? 'Demo inventory' : 'Configured allocation'}</span>
+            <h2>Current allocation</h2>
+            <span>{capacity.total} configured slots</span>
           </div>
-          <div className="capacity-slots">
-            {capacity.total > 0 ? (
-              Array.from({ length: Math.min(capacity.total, 24) }, (_, i) => (
-                <div
-                  className={`capacity-slot ${i < capacity.held || i >= capacity.held + capacity.available ? 'held' : 'available'}`}
-                  key={i}
-                >
-                  <Server size={23} />
-                  <strong>Slot {i + 1}</strong>
-                  <span>
-                    {i < capacity.held
-                      ? 'Held'
-                      : i >= capacity.held + capacity.available
-                        ? 'Kept spare'
-                        : 'Available'}
-                  </span>
-                </div>
-              ))
-            ) : (
-              <EmptyState
-                icon={<Server size={24} />}
-                title="No capacity published"
-                description="Add a slot to make your provider eligible to bid."
-              />
-            )}
+          <div
+            className="capacity-meter"
+            role="img"
+            aria-label={`${capacity.held} held, ${protectedSpare} protected spare and ${capacity.available} available of ${capacity.total} configured slots`}
+          >
+            <span className="held" style={{ width: share(capacity.held) }} />
+            <span className="spare" style={{ width: share(protectedSpare) }} />
+            <span className="available" style={{ width: share(capacity.available) }} />
           </div>
-          {capacity.total > 24 && (
-            <p className="small-muted">Showing 24 of {capacity.total} configured slots.</p>
-          )}
-          <div className="capacity-legend">
-            <span>
-              <i className="available-dot" />
-              Available for bids
-            </span>
-            <span>
-              <i className="held-dot" />
-              Held or kept spare
-            </span>
-          </div>
-          <div className="info-note">
-            <ShieldCheck size={17} />
-            <p>
-              Every accepted bid reserves a slot atomically. Losing bids release at auction close; a
-              winning slot stays reserved until Wick confirms cleanup.
-            </p>
+          <dl className="capacity-breakdown">
+            <div>
+              <dt>
+                <i className="dot held" /> Runtime slots held
+              </dt>
+              <dd>{capacity.held}</dd>
+              <p>Bids and environments, including allocations awaiting cleanup.</p>
+            </div>
+            <div>
+              <dt>
+                <i className="dot spare" /> Protected spare
+              </dt>
+              <dd>{protectedSpare}</dd>
+              <p>Headroom retained by your current capacity policy.</p>
+            </div>
+            <div>
+              <dt>
+                <i className="dot available" /> Available for new bids
+              </dt>
+              <dd>{capacity.available}</dd>
+              <p>Configured allocation; upstream capacity and Wick admission still apply.</p>
+            </div>
+          </dl>
+          <div className="capacity-calendar-link">
+            <Link href="/provider/scheduled">
+              <CalendarClock size={15} /> View booked windows <ArrowRight size={14} />
+            </Link>
+            <span>Future commitments are tracked separately.</span>
           </div>
         </section>
         <section className="card">
           <div className="section-heading">
-            <h2>Adjust your capacity</h2>
+            <h2>Allocation settings</h2>
             <Settings2 size={18} />
           </div>
           <p className="muted-text">
-            Publish the VM slots you make available for bids. These are configured allocations;
-            upstream availability and Wick admission still apply.
+            Set the total slots this account makes available. Existing reservations and booked
+            windows remain protected.
           </p>
           <p>
             <Link className="text-link" href="/provider/policy">
-              Open Muse Capacity Manager <ArrowRight size={14} />
+              Edit pricing and reserve policy <ArrowRight size={14} />
             </Link>
           </p>
           <form onSubmit={save}>
@@ -265,6 +258,12 @@ export function ProviderCapacity() {
             </button>
             {saved && <SuccessBox>Capacity updated.</SuccessBox>}
           </form>
+          <div className="capacity-calendar-link">
+            <span>85% provider share · 15% Broker fee</span>
+            <Link href="/provider/earnings">
+              View earnings <ArrowRight size={14} />
+            </Link>
+          </div>
         </section>
       </div>
       <section className="card recent-activity">
@@ -399,8 +398,8 @@ export function ProviderPolicy() {
   return (
     <>
       <PageHeader
-        eyebrow="YOUR PRICING, YOUR RULES"
-        title="Muse Capacity Manager"
+        eyebrow="PROVIDER SETTINGS"
+        title="Pricing & policy"
         description="Set your selling strategy and keep 85% of rental revenue. Review your limits before applying them."
       >
         <span className="quiet-badge">
@@ -872,7 +871,7 @@ export function ProviderRequests() {
     <>
       <PageHeader
         eyebrow="THE MARKETPLACE"
-        title="Find your next match."
+        title="Buyer requests"
         description="Offer a fixed total price for requests that fit your available capacity."
       >
         <button className="button secondary" onClick={reload}>
@@ -1037,8 +1036,8 @@ export function ProviderOfferings() {
   return (
     <>
       <PageHeader
-        eyebrow="YOUR SHELF OF POSSIBILITIES"
-        title="Offer something that fits."
+        eyebrow="PROVIDER SUPPLY"
+        title="Instant offerings"
         description="Publish clear, fixed-price offerings from approved Wick configurations."
       >
         <button
@@ -1355,7 +1354,7 @@ export function ProviderEarnings() {
     <>
       <PageHeader
         eyebrow="PROVIDER EARNINGS"
-        title="Your share, clearly."
+        title="Earnings"
         description="You keep 85% of each new rental. Broker receives 15% from your gross revenue, with no added buyer fee."
       >
         <button className="button secondary" onClick={reload}>
@@ -1370,28 +1369,28 @@ export function ProviderEarnings() {
         <div>
           <h3>Demo earnings · no payouts</h3>
           <p>
-            Each split is fixed with the accepted offer and recorded once the VM is ready. Your
-            share is before compute costs, so it is not profit. No payments or payouts are
-            collected.
+            For instant rentals, each split is fixed with the accepted offer and recorded once the
+            VM is ready. Your share is before compute costs, so it is not profit. No payments or
+            payouts are collected.
           </p>
         </div>
         <span className="quiet-badge">85% you · 15% Broker</span>
       </div>
       <div className="stats-grid">
         <StatCard
-          label="Assessed rental gross"
+          label="Assessed instant-rental gross"
           value={moneyMicros(gross)}
           note="Loaded records with a frozen split"
           icon={<CircleDollarSign size={18} />}
         />
         <StatCard
-          label="Broker commission"
+          label="Instant-rental commission"
           value={moneyMicros(fee)}
           note="15% of the assessed gross"
           icon={<Layers3 size={18} />}
         />
         <StatCard
-          label="Your net revenue"
+          label="Instant-rental net revenue"
           value={moneyMicros(net)}
           note="85%, before your compute costs"
           icon={<CheckCircle2 size={18} />}
@@ -1467,6 +1466,7 @@ export function ProviderEarnings() {
           error={moreError}
         />
       </section>
+      <AgreementCharges provider />
     </>
   );
 }
@@ -1504,8 +1504,8 @@ export function ProviderActivity() {
   return (
     <>
       <PageHeader
-        eyebrow="A CLEAR RECORD"
-        title="See how things are moving."
+        eyebrow="PROVIDER HISTORY"
+        title="Activity"
         description="Your provider’s capacity, bids, counteroffer decisions, and lifecycle activity in one place."
       >
         <button className="button secondary" onClick={reload}>
@@ -1572,7 +1572,7 @@ export function AdminConfig({ onUpdated }: { onUpdated: () => void }) {
     <>
       <PageHeader
         eyebrow="ADMINISTRATION"
-        title="Keep the marketplace in good shape."
+        title="Marketplace configuration"
         description="Approve configurations, manage the customer VM limit, and review recovery work."
       />
       <ErrorBox error={error || actionError} retry={error ? reload : undefined} />
@@ -1713,7 +1713,7 @@ export function AdminConfig({ onUpdated }: { onUpdated: () => void }) {
                 'limit',
                 () =>
                   put('/api/admin/config', {
-                    maxConcurrentVms: limit ?? data.maxConcurrentVms ?? 2,
+                    maxConcurrentVms: limit ?? data.maxConcurrentVms ?? 20,
                   }),
                 'Customer VM limit updated.',
               );
@@ -1727,7 +1727,7 @@ export function AdminConfig({ onUpdated }: { onUpdated: () => void }) {
                 min={1}
                 max={20}
                 step={1}
-                value={limit ?? data.maxConcurrentVms ?? 2}
+                value={limit ?? data.maxConcurrentVms ?? 20}
                 onChange={(e) => setLimit(Number(e.target.value))}
                 required
               />

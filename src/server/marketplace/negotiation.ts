@@ -12,7 +12,8 @@ import {
 } from '../../shared/pricing.js';
 import { HttpError, type AppContext } from '../context.js';
 import { activity, transaction } from './db.js';
-import { awardHeldBid, globalAdmissionAvailable } from './auction.js';
+import { awardHeldBid, globalAdmissionAvailable, instantReservationInterval } from './auction.js';
+import { availableForInterval } from '../agreements/calendar.js';
 import { integer, positiveNumber, shortText, uuid, offeringView, iso, type Row } from './data.js';
 import { availableForBids } from './policy.js';
 import { assertProviderCatalog } from './provider-identity.js';
@@ -660,6 +661,7 @@ export async function acceptCounteroffer(
   const initial = await ownedIntent(ctx, actor, id);
   uuid(offerId);
   return transaction(ctx.pool, async (db) => {
+    await db.query("SELECT pg_advisory_xact_lock(hashtext('broker-global-vm-admission'))");
     const source = await lockSource(db, actor, initial.source_request_id);
     const intent = (
       await db.query('SELECT * FROM broker_intents WHERE id=$1 AND buyer_id=$2 FOR UPDATE', [
@@ -772,6 +774,9 @@ export async function acceptCounteroffer(
     );
     if (availableForBids(p.total_capacity, held, p.policy) < 1)
       throw new HttpError(409, 'The provider no longer has an available slot.');
+    const interval = instantReservationInterval({ duration_minutes: snap.after.durationMinutes });
+    if ((await availableForInterval(ctx, db, p.id, interval.startsAt, interval.endsAt)) < 1)
+      throw new HttpError(409, 'This rental would overlap already booked capacity.');
     if (!(await globalAdmissionAvailable(ctx, db)))
       throw new HttpError(409, 'The concurrent VM limit is reached. No reservation was created.');
     if (

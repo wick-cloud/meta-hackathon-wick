@@ -16,6 +16,9 @@ import { registerTerminal } from './integrations/terminal.js';
 import { registerMarketplace, startMarketplaceWorkers, getCatalog } from './marketplace/index.js';
 import { registerMuse } from './muse/index.js';
 import { registerNegotiation } from './marketplace/negotiation.js';
+import { registerOrders } from './orders.js';
+import { registerAgreements, startAgreementWorkers } from './agreements/index.js';
+import { registerAgreementBilling } from './agreement-billing.js';
 export async function buildApp(
   config: Config,
   options: { wrapWick?: (adapter: WickAdapter) => WickAdapter; clientRoot?: string } = {},
@@ -132,10 +135,14 @@ export async function buildApp(
     return { items: await getCatalog(ctx) };
   });
   await registerMarketplace(app, ctx);
+  registerOrders(app, ctx);
+  await registerAgreements(app, ctx);
+  registerAgreementBilling(app, ctx);
   registerNegotiation(app, ctx);
   await registerMuse(app, ctx);
   await registerTerminal(app, ctx);
   await startMarketplaceWorkers(ctx);
+  await startAgreementWorkers(ctx);
   const clientRoot = resolve(options.clientRoot ?? 'dist/client');
   if (existsSync(resolve(clientRoot, 'index.html'))) {
     await app.register(fastifyStatic, { root: clientRoot, prefix: '/', wildcard: false });

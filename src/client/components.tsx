@@ -57,19 +57,34 @@ export function useResource<T>(path: string, interval = 0) {
       data: T | null;
       error: string;
       loading: boolean;
-    }>({ path, data: null, error: '', loading: true }),
+      refreshing: boolean;
+      updatedAt: number;
+    }>({ path, data: null, error: '', loading: true, refreshing: false, updatedAt: 0 }),
     [version, setVersion] = useState(0);
   useEffect(() => {
     let cancelled = false,
       inFlight = false;
     const controller = new AbortController();
-    setState((old) => (old.path === path ? old : { path, data: null, error: '', loading: true }));
+    setState((old) =>
+      old.path === path
+        ? old
+        : { path, data: null, error: '', loading: true, refreshing: false, updatedAt: 0 },
+    );
     const fetchData = async () => {
       if (inFlight) return;
       inFlight = true;
+      setState((old) => (old.path === path ? { ...old, refreshing: true } : old));
       try {
         const data = await api<T>(path, { signal: controller.signal });
-        if (!cancelled) setState({ path, data, error: '', loading: false });
+        if (!cancelled)
+          setState({
+            path,
+            data,
+            error: '',
+            loading: false,
+            refreshing: false,
+            updatedAt: Date.now(),
+          });
       } catch (err) {
         if (!cancelled)
           setState((old) => ({
@@ -77,26 +92,41 @@ export function useResource<T>(path: string, interval = 0) {
             data: old.path === path ? old.data : null,
             error: err instanceof Error ? err.message : 'Unable to load this page.',
             loading: false,
+            refreshing: false,
+            updatedAt: old.path === path ? old.updatedAt : 0,
           }));
       } finally {
         inFlight = false;
       }
     };
     void fetchData();
+    const onVisible = () => {
+      if (interval && document.visibilityState === 'visible') void fetchData();
+    };
+    document.addEventListener('visibilitychange', onVisible);
     const timer = interval
       ? setInterval(() => {
-          void fetchData();
+          if (document.visibilityState !== 'hidden') void fetchData();
         }, interval)
       : undefined;
     return () => {
       cancelled = true;
       controller.abort();
+      document.removeEventListener('visibilitychange', onVisible);
       if (timer) clearInterval(timer);
     };
   }, [path, interval, version]);
   return state.path === path
     ? { ...state, reload: () => setVersion((v) => v + 1) }
-    : { path, data: null, error: '', loading: true, reload: () => setVersion((v) => v + 1) };
+    : {
+        path,
+        data: null,
+        error: '',
+        loading: true,
+        refreshing: false,
+        updatedAt: 0,
+        reload: () => setVersion((v) => v + 1),
+      };
 }
 export function usePagedResource<T extends { id: string }>(path: string, interval = 0) {
   const first = useResource<{ items: T[]; nextCursor?: string }>(path, interval);
@@ -245,6 +275,39 @@ export function SuccessBox({ children }: { children: ReactNode }) {
       <Check size={17} />
       {children}
     </div>
+  );
+}
+export function MarketDialog({
+  titleId,
+  onClose,
+  busy,
+  children,
+}: {
+  titleId: string;
+  onClose: () => void;
+  busy?: boolean;
+  children: ReactNode;
+}) {
+  const ref = useRef<HTMLDialogElement>(null);
+  const close = useRef(onClose);
+  close.current = onClose;
+  useEffect(() => {
+    const dialog = ref.current!;
+    dialog.showModal();
+    return () => dialog.close();
+  }, []);
+  return (
+    <dialog
+      ref={ref}
+      className="market-dialog"
+      aria-labelledby={titleId}
+      onCancel={(event) => {
+        event.preventDefault();
+        if (!busy) close.current();
+      }}
+    >
+      {children}
+    </dialog>
   );
 }
 export function EmptyState({

@@ -71,6 +71,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL marketplace concurrency and invariants
         BETTER_AUTH_SECRET: 'test-only-auth-secret-with-at-least-32-characters',
         WICK_MODE: 'fixture',
         MUSE_MODE: 'fixture',
+        MAX_CONCURRENT_VMS: '2',
         WICK_ORGANIZATION_ID: 'test-org',
         WICK_GROUP_ID: 'test-group',
       }),

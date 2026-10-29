@@ -61,7 +61,11 @@ export function managedEnvironmentMatches(
     environment.organizationId === input.organizationId &&
     environment.groupId === input.groupId &&
     environment.provider === input.provider &&
-    environment.profile === input.profile,
+    environment.profile === input.profile &&
+    (!input.hardEndAt ||
+      (environment.hardEndAt === input.hardEndAt &&
+        Number.isFinite(Date.parse(environment.expiresAt ?? '')) &&
+        Date.parse(environment.expiresAt!) <= Date.parse(input.hardEndAt))),
   );
 }
 

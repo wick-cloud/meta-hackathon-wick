@@ -11,7 +11,7 @@
 .negotiation-choice input {
   flex: 0 0 auto;
   margin-top: 4px;
-  accent-color: #28745d;
+  accent-color: var(--accent);
 }
 
 .negotiation-cards {

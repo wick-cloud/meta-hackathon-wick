@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
 import { availableForBids } from './policy.js';
+import { availableForInterval, globalAvailableForInterval } from '../agreements/calendar.js';
 import {
   acceptedBidQuote,
   commissionPricing,
@@ -339,6 +340,7 @@ export async function submitBid(
 ) {
   const price = integer(input.totalPriceCents, 'Total price');
   return transaction(ctx.pool, async (db) => {
+    await db.query("SELECT pg_advisory_xact_lock(hashtext('broker-global-vm-admission'))");
     const request = (
       await db.query('SELECT * FROM broker_requests WHERE id=$1 FOR UPDATE', [requestId])
     ).rows[0];
@@ -390,6 +392,28 @@ export async function submitBid(
     );
     if (availableForBids(p.total_capacity, held, policy) < 1)
       throw new HttpError(409, 'All simulated supplier slots are already reserved.');
+    const interval = instantReservationInterval(request);
+    if ((await availableForInterval(ctx, db, p.id, interval.startsAt, interval.endsAt)) < 1)
+      throw new HttpError(409, 'This rental would overlap already booked capacity.');
+    const scheduled = await db.query(
+      "SELECT 1 FROM broker_agreement_bookings WHERE tstzrange(starts_at,ends_at,'[)') && tstzrange($1::timestamptz,$2::timestamptz,'[)') LIMIT 1",
+      [interval.startsAt, interval.endsAt],
+    );
+    if (
+      scheduled.rowCount &&
+      (await globalAvailableForInterval(
+        ctx,
+        db,
+        interval.startsAt,
+        interval.endsAt,
+        undefined,
+        request.id,
+      )) < 1
+    )
+      throw new HttpError(
+        409,
+        'The concurrent VM limit is committed to scheduled capacity for this rental interval.',
+      );
     const bid = (
       await db.query(
         `WITH acceptance AS MATERIALIZED (SELECT clock_timestamp() AS accepted_at) INSERT INTO broker_bids(request_id,provider_id,offering_id,offering_snapshot,total_price_cents,created_at) SELECT $1,$2,$3,$4,$5,accepted_at FROM acceptance WHERE accepted_at<(SELECT closes_at FROM broker_requests WHERE id=$1) RETURNING *`,
@@ -428,6 +452,7 @@ export async function submitBid(
 
 export async function closeAuction(ctx: AppContext, requestId: string) {
   return transaction(ctx.pool, async (db) => {
+    await db.query("SELECT pg_advisory_xact_lock(hashtext('broker-global-vm-admission'))");
     const request = (
       await db.query('SELECT * FROM broker_requests WHERE id=$1 FOR UPDATE', [requestId])
     ).rows[0];
@@ -471,9 +496,9 @@ export async function closeAuction(ctx: AppContext, requestId: string) {
       );
       return;
     }
-    if (!(await globalAdmissionAvailable(ctx, db))) {
+    if (!(await globalAdmissionAvailable(ctx, db, request))) {
       await db.query(
-        "UPDATE broker_requests SET status='failed',failure_reason='The concurrent VM limit is reached. Start a new auction when a VM has finished cleanup.' WHERE id=$1",
+        "UPDATE broker_requests SET status='failed',failure_reason='The concurrent VM limit, booked capacity, or original launch deadline prevents this rental. Review a new auction.' WHERE id=$1",
         [requestId],
       );
       await db.query("UPDATE broker_bids SET status='lost' WHERE request_id=$1", [requestId]);
@@ -488,7 +513,16 @@ export async function closeAuction(ctx: AppContext, requestId: string) {
 }
 
 /** Caller holds the request/provider rows. Shared admission lock covers every award path. */
-export async function globalAdmissionAvailable(ctx: AppContext, db: PoolClient) {
+export function instantReservationInterval(request: Row) {
+  const closesAt = new Date(request.closes_at ?? Date.now()).getTime();
+  const admissionDeadlineAt = new Date(closesAt + 300_000).toISOString();
+  return {
+    startsAt: new Date().toISOString(),
+    admissionDeadlineAt,
+    endsAt: new Date(closesAt + 420_000 + Number(request.duration_minutes) * 60_000).toISOString(),
+  };
+}
+export async function globalAdmissionAvailable(ctx: AppContext, db: PoolClient, request?: Row) {
   await db.query("SELECT pg_advisory_xact_lock(hashtext('broker-global-vm-admission'))");
   const configured =
     (await db.query("SELECT value FROM broker_settings WHERE key='maxConcurrentVms'")).rows[0]
@@ -497,7 +531,23 @@ export async function globalAdmissionAvailable(ctx: AppContext, db: PoolClient) 
     (await db.query('SELECT count(*)::int AS n FROM broker_vms WHERE cleanup_confirmed_at IS NULL'))
       .rows[0].n,
   );
-  return count < Number(configured);
+  if (count >= Number(configured)) return false;
+  if (request) {
+    const interval = instantReservationInterval(request);
+    if (Date.parse(interval.admissionDeadlineAt) <= Date.now()) return false;
+    if (
+      (await globalAvailableForInterval(
+        ctx,
+        db,
+        interval.startsAt,
+        interval.endsAt,
+        undefined,
+        request.id,
+      )) < 1
+    )
+      return false;
+  }
+  return true;
 }
 
 /** Shared frozen quote + VM + provision-job owner; does not call Wick or run workloads. */
@@ -521,7 +571,7 @@ export async function awardHeldBid(ctx: AppContext, db: PoolClient, request: Row
     throw new HttpError(409, 'The winning provider route does not match the frozen configuration.');
   assertProviderCatalog({ cloud_provider: winner.offering_snapshot?.cloudProvider }, catalog);
   if (ctx.wick.mode === 'real') assertManagedCustomerRoute(catalog);
-  if (!(await globalAdmissionAvailable(ctx, db)))
+  if (!(await globalAdmissionAvailable(ctx, db, request)))
     throw new HttpError(409, 'The concurrent VM limit is reached.');
   const requestId = request.id;
   await db.query(
@@ -578,6 +628,7 @@ export async function awardHeldBid(ctx: AppContext, db: PoolClient, request: Row
           : {}),
         offering: winner.offering_snapshot,
         acceptedAt: isoDate(winner.created_at),
+        admissionDeadlineAt: instantReservationInterval(request).admissionDeadlineAt,
         ...(winner.offering_snapshot.pricing ? { pricing: winner.offering_snapshot.pricing } : {}),
       },
     ],

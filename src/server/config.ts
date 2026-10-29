@@ -15,7 +15,7 @@ const envSchema = z.object({
   WICK_GROUP_ID: z.string().default('demo-group'),
   META_API_BASE: z.string().url().default('https://api.meta.ai/v1'),
   META_API_KEY: z.string().optional(),
-  MAX_CONCURRENT_VMS: z.coerce.number().int().min(1).max(20).default(2),
+  MAX_CONCURRENT_VMS: z.coerce.number().int().min(1).max(20).default(20),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
 });
 export function loadConfig(env: NodeJS.ProcessEnv = process.env) {

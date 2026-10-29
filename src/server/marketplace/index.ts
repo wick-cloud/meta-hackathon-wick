@@ -8,6 +8,10 @@ import { createRequest, submitBid, closeAuction, proposeBid } from './auction.js
 import { provisionVm, cleanupVm, terminateVm } from './lifecycle.js';
 import { startCatalogRefresh } from './catalog-refresh.js';
 import { availableForBids, normalizedPolicy, validatePolicy } from './policy.js';
+import {
+  assertProviderFutureCapacity,
+  assertGlobalFutureCapacity,
+} from '../agreements/calendar.js';
 import { assertProviderCatalog, assertProviderCatalogIds } from './provider-identity.js';
 import {
   requestView,
@@ -240,6 +244,7 @@ export async function registerMarketplace(app: FastifyInstance, ctx: AppContext)
         ? undefined
         : integer(body.expectedRevision, 'Expected policy revision', 1);
     return transaction(ctx.pool, async (db) => {
+      await db.query("SELECT pg_advisory_xact_lock(hashtext('broker-global-vm-admission'))");
       const p = (
         await db.query('SELECT * FROM broker_providers WHERE user_id=$1 FOR UPDATE', [actor.id])
       ).rows[0];
@@ -249,6 +254,7 @@ export async function registerMarketplace(app: FastifyInstance, ctx: AppContext)
           409,
           'Capacity or policy changed. Reload and review the current limits.',
         );
+      await assertProviderFutureCapacity(db, p.id, total, Number(p.policy.reserveSlots ?? 0));
       const updated = (
         await db.query(
           'UPDATE broker_providers SET total_capacity=$2 WHERE id=$1 RETURNING policy_revision',
@@ -343,6 +349,7 @@ export async function registerMarketplace(app: FastifyInstance, ctx: AppContext)
     if (Object.keys(input).some((key) => !allowedFields.has(key)))
       throw new HttpError(400, 'Policy Apply contains an unsupported field.');
     return transaction(ctx.pool, async (db) => {
+      await db.query("SELECT pg_advisory_xact_lock(hashtext('broker-global-vm-admission'))");
       const p = (
         await db.query(
           `SELECT *,policy_apply_receipt->'input'=$2::jsonb AS same_apply_input
@@ -370,6 +377,12 @@ export async function registerMarketplace(app: FastifyInstance, ctx: AppContext)
       await assertProviderCatalogIds(db, p, policy.allowedCatalogIds, ctx.wick.mode);
       if ((policy.reserveSlots ?? 0) > p.total_capacity)
         throw new HttpError(400, 'Reserved spare slots cannot exceed your current total capacity.');
+      await assertProviderFutureCapacity(
+        db,
+        p.id,
+        p.total_capacity,
+        Number(policy.reserveSlots ?? 0),
+      );
       // The provider lock and revision trigger make each new Apply consume exactly
       // one revision, including a no-op. Store response and mutation atomically.
       const response = { policy, policyRevision: p.policy_revision + 1 };
@@ -602,10 +615,14 @@ export async function registerMarketplace(app: FastifyInstance, ctx: AppContext)
   app.put('/api/admin/config', async (request) => {
     await ctx.requireActor(request, ['admin']);
     const max = integer((request.body as Row)?.maxConcurrentVms, 'Concurrent VM limit', 1, 20);
-    await ctx.pool.query(
-      "INSERT INTO broker_settings(key,value) VALUES('maxConcurrentVms',$1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-      [max],
-    );
+    await transaction(ctx.pool, async (db) => {
+      await db.query("SELECT pg_advisory_xact_lock(hashtext('broker-global-vm-admission'))");
+      await assertGlobalFutureCapacity(db, max);
+      await db.query(
+        "INSERT INTO broker_settings(key,value) VALUES('maxConcurrentVms',$1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        [max],
+      );
+    });
     return { maxConcurrentVms: max };
   });
   app.put<{ Params: { id: string } }>('/api/admin/catalog/:id', async (request) => {
@@ -669,6 +686,16 @@ function activityView(r: Row) {
 }
 
 export async function startMarketplaceWorkers(ctx: AppContext) {
+  const fundedMismatch = (
+    await ctx.pool.query(
+      "SELECT id FROM broker_agreements WHERE source_mode<>$1 AND (reserved_cents>0 OR (status='approved' AND expires_at>clock_timestamp())) LIMIT 1",
+      [ctx.wick.mode],
+    )
+  ).rows[0];
+  if (fundedMismatch)
+    throw new Error(
+      'Cannot switch Wick mode while a funded agreement in the previous mode remains active. Reconcile its commitments and credit first.',
+    );
   const mismatched = (
     await ctx.pool.query(
       "SELECT id FROM broker_vms WHERE cleanup_confirmed_at IS NULL AND COALESCE(catalog_snapshot->>'sourceMode','fixture')<>$1 LIMIT 1",

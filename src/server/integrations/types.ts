@@ -16,6 +16,7 @@ export interface CreateEnvironmentInput {
   region?: string;
   providerKeyId?: string;
   ttlSeconds: number;
+  hardEndAt?: string;
   maximumPriceMicrosPerSecond?: number;
   visibility: 'private';
 }
@@ -23,6 +24,7 @@ export interface WickEnvironment {
   id: string;
   status: 'pending' | 'provisioning' | 'running' | 'terminating' | 'terminated' | 'failed';
   expiresAt: string | null;
+  hardEndAt?: string;
   createdAt?: string;
   name?: string;
   organizationId?: string;
@@ -85,6 +87,16 @@ export interface WickAdapter {
 }
 export interface MuseAdapter {
   mode: 'fixture' | 'real';
+  draftSchedule?(input: {
+    kind: 'agreement' | 'offering';
+    description: string;
+    catalog: CatalogItem[];
+  }): Promise<{
+    draft: Record<string, unknown>;
+    mode: 'fixture' | 'real';
+    modelCalled: boolean;
+    explanation: string;
+  }>;
   translate(
     description: string,
     catalog: CatalogItem[],

@@ -217,7 +217,7 @@ export function AlternativeComposer({ sourceRequestId }: { sourceRequestId?: str
       </Link>
       <PageHeader
         eyebrow="BUYER CONTROLLED ALTERNATIVES"
-        title="What do you need, and what may change?"
+        title="Request alternatives"
         description="Record unsupported requirements without starting an auction. You approve an exact provider and fixed price before any VM is reserved."
       />
       <form onSubmit={(event) => void save(event)}>
@@ -531,7 +531,7 @@ export function AlternativeList() {
     <>
       <PageHeader
         eyebrow="SAVED BUYER INTENTS"
-        title="Alternatives you control."
+        title="Alternatives"
         description="Nonbinding requirements and proposals stay separate from rentals until you accept an exact offer."
       />
       <Link href="/alternatives/new" className="button primary">
@@ -643,7 +643,7 @@ export function AlternativeDetail({ id }: { id: string }) {
       </Link>
       <PageHeader
         eyebrow="EXPLICIT BUYER REVIEW"
-        title="An alternative is your decision."
+        title="Review alternative"
         description={intent.description}
       />
       <ErrorBox error={error || actionError} retry={error ? reload : undefined} />
