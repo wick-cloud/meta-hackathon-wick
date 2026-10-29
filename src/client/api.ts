@@ -38,6 +38,7 @@ export interface EnvironmentRequest {
 }
 export interface Bid {
   id: string;
+  source?: 'manual' | 'auto' | null;
   providerId: string;
   providerName: string;
   totalPriceCents: number;
@@ -65,6 +66,7 @@ export interface VM {
   priceCents: number;
   failureReason?: string | null;
   cleanupPending?: boolean;
+  cleanupConfirmedAt?: string | null;
   pricing?: FixedQuote;
   revenueShare?: RevenueShare;
   billingSource?: 'instant_vm' | 'scheduled_capacity';
@@ -119,6 +121,7 @@ export interface Offering {
 }
 export interface Activity {
   id: string;
+  requestId?: string | null;
   kind: string;
   message: string;
   createdAt: string;

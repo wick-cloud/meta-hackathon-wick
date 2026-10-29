@@ -677,6 +677,7 @@ function page(rows: Row[], limit: number, map: (r: Row) => unknown) {
 }
 function activityView(r: Row) {
   return {
+    requestId: r.request_id ?? null,
     id: String(r.id),
     kind: r.kind,
     message: r.message,
