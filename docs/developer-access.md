@@ -23,12 +23,12 @@ The client packages are downloadable directly from Broker. Repository access and
 
 ```sh
 npm install \
-  https://meta-hackathon-wick-production.up.railway.app/downloads/0.1.0/wick-cloud-broker-sdk-0.1.0.tgz \
-  https://meta-hackathon-wick-production.up.railway.app/downloads/0.1.0/wick-cloud-broker-cli-0.1.0.tgz \
-  https://meta-hackathon-wick-production.up.railway.app/downloads/0.1.0/wick-cloud-broker-mcp-0.1.0.tgz
+  https://meta-hackathon-wick-production.up.railway.app/downloads/0.1.1/wick-cloud-broker-sdk-0.1.1.tgz \
+  https://meta-hackathon-wick-production.up.railway.app/downloads/0.1.1/wick-cloud-broker-cli-0.1.1.tgz \
+  https://meta-hackathon-wick-production.up.railway.app/downloads/0.1.1/wick-cloud-broker-mcp-0.1.1.tgz
 ```
 
-Use `npx --no-install wick-broker` for the installed CLI. For MCP, configure `node` with the absolute path to the installed `node_modules/@wick-cloud/broker-mcp/dist/index.js`; it uses the same saved origin-bound profile or Broker environment variables. Release hashes and byte sizes are listed at `/downloads/0.1.0/manifest.json`. Published version directories are immutable; client changes require a new package version and a new directory.
+Use `npx --no-install wick-broker` for the installed CLI. For MCP, configure `node` with the absolute path to the installed `node_modules/@wick-cloud/broker-mcp/dist/index.js`; it uses the same saved origin-bound profile or Broker environment variables. Release hashes and byte sizes are listed at `/downloads/0.1.1/manifest.json`. Published version directories are immutable; client changes require a new package version and a new directory.
 
 The standard npm registry commands below apply after registry publication. The direct downloads above are available independently.
 
@@ -152,7 +152,7 @@ Configure an MCP-capable host to launch the local package:
   "mcpServers": {
     "wick-broker": {
       "command": "npx",
-      "args": ["-y", "@wick-cloud/broker-mcp@0.1.0"]
+      "args": ["-y", "@wick-cloud/broker-mcp@0.1.1"]
     }
   }
 }

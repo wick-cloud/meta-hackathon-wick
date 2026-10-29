@@ -17,7 +17,7 @@ Configure a local MCP host to launch:
   "mcpServers": {
     "wick-broker": {
       "command": "npx",
-      "args": ["-y", "@wick-cloud/broker-mcp@0.1.0"]
+      "args": ["-y", "@wick-cloud/broker-mcp@0.1.1"]
     }
   }
 }

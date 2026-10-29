@@ -268,9 +268,9 @@ export function DeveloperKeys() {
         <pre>
           {[
             'npm install \\',
-            `  ${window.location.origin}/downloads/0.1.0/wick-cloud-broker-sdk-0.1.0.tgz \\`,
-            `  ${window.location.origin}/downloads/0.1.0/wick-cloud-broker-cli-0.1.0.tgz \\`,
-            `  ${window.location.origin}/downloads/0.1.0/wick-cloud-broker-mcp-0.1.0.tgz`,
+            `  ${window.location.origin}/downloads/0.1.1/wick-cloud-broker-sdk-0.1.1.tgz \\`,
+            `  ${window.location.origin}/downloads/0.1.1/wick-cloud-broker-cli-0.1.1.tgz \\`,
+            `  ${window.location.origin}/downloads/0.1.1/wick-cloud-broker-mcp-0.1.1.tgz`,
           ].join('\n')}
         </pre>
         <div className="key-setup-grid">
