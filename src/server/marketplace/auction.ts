@@ -423,6 +423,7 @@ export async function submitBid(
           offering.id,
           {
             ...offeringView(offering),
+            bidSource: source,
             catalog: { ...match.frozen, sourceMode: ctx.wick.mode },
             simulated: p.simulated,
             cloudProvider: p.cloud_provider,

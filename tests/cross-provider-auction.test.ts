@@ -223,6 +223,25 @@ describe.skipIf(!databaseUrl)(
       ).resolves.toMatchObject({ totalPriceCents: 20 });
     });
 
+    it('freezes the server-selected bid source for exact auction attribution', async () => {
+      const req = await request();
+      const auto = await submitBid(
+        ctx,
+        providers[0]!.actor,
+        req.id,
+        { totalPriceCents: 20 },
+        'auto',
+      );
+      const manual = await submitBid(ctx, providers[1]!.actor, req.id, { totalPriceCents: 20 });
+      expect(auto.source).toBe('auto');
+      expect(manual.source).toBe('manual');
+      const saved = (
+        await pool.query('SELECT offering_snapshot FROM broker_bids WHERE id=$1', [auto.id])
+      ).rows[0];
+      expect(saved.offering_snapshot.bidSource).toBe('auto');
+      expect(ctx.wick.create).not.toHaveBeenCalled();
+    });
+
     it('does not widen an explicit region to Modal auto or the Blaxel native location', async () => {
       const req = await request({ region: 'us' });
       const snapshot = (await storedRequest(req.id)).catalog_snapshot;

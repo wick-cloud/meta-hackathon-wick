@@ -32,6 +32,7 @@ export const bidView = (r: Row) => ({
   totalPriceCents: r.total_price_cents,
   status: r.status,
   createdAt: iso(r.created_at),
+  source: r.offering_snapshot?.bidSource ?? null,
   simulated: r.offering_snapshot?.simulated ?? true,
   catalogId: r.offering_snapshot?.catalog?.id ?? r.offering_snapshot?.catalogId,
   catalogName: r.offering_snapshot?.catalog?.name,
@@ -93,6 +94,7 @@ export const vmView = (r: Row) => ({
   failureReason: r.failure_reason,
   cleanupPending:
     !r.cleanup_confirmed_at && ['terminating', 'failed', 'expired'].includes(r.status),
+  cleanupConfirmedAt: iso(r.cleanup_confirmed_at),
 });
 export async function getCatalog(ctx: Pick<AppContext, 'pool' | 'wick'>): Promise<CatalogItem[]> {
   const result = await ctx.pool.query(
