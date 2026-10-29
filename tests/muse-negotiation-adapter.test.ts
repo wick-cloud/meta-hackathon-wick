@@ -97,6 +97,80 @@ describe('explicit buyer facts without flexibility inference', () => {
       region: 'moon-east',
     });
   });
+  it.each([
+    'Any region is fine.',
+    'Any region is okay.',
+    'Any region is acceptable.',
+    'No region preference.',
+    'A region and provider with capacity.',
+  ])('does not turn region prose into a location: %s', (description) => {
+    expect(parseExplicitBuyerDescription(description)).toEqual({
+      requirements: {},
+    });
+  });
+  it.each([
+    ['Any available US region and provider is fine.', 'us'],
+    ['Any US region is fine.', 'us'],
+    ['Any region is fine, but only in Singapore.', 'singapore'],
+    ['Use an antarctica region with capacity.', 'antarctica'],
+    ['Any available moon-east region and provider is fine.', 'moon-east'],
+    ['region is unsupported-choice', 'unsupported-choice'],
+    ['region unsupported-choice', 'unsupported-choice'],
+    ['Any region is fine, but region: unsupported-choice', 'unsupported-choice'],
+    ['region: fine', 'fine'],
+    ['region us; optional alternative region=eu', 'us'],
+  ])('preserves a stated location despite surrounding prose: %s', (description, region) => {
+    expect(parseExplicitBuyerDescription(description)).toEqual({
+      requirements: {},
+      region,
+    });
+  });
+  it('allows flexible-region prose while enforcing a named US region in model translation', async () => {
+    const catalog = [
+      {
+        id: 'small',
+        name: 'Small',
+        description: 'Linux',
+        provider: 'fixture',
+        profile: 'small',
+        region: 'us',
+        cpu: 2,
+        memoryGb: 4,
+        approved: true,
+        durationMinutes: [15, 30, 60],
+      },
+    ];
+    const flexible = createMuseAdapter({ museMode: 'fixture' });
+    expect(
+      (await flexible.translate('1 CPU, 2 GiB, Any region is fine.', catalog)).proposal.region,
+    ).toBe('us');
+    const output = {
+      catalogId: 'small',
+      region: 'us',
+      durationMinutes: 15,
+      requirements: { cpu: 1, memoryGb: 2, gpu: null },
+    };
+    const valid = real(output);
+    await expect(
+      valid.adapter.translate(
+        '1 CPU, 2 GiB for 15 minutes. Any available US region and provider is fine.',
+        catalog,
+      ),
+    ).resolves.toMatchObject({
+      mode: 'real',
+      proposal: { region: 'us', durationMinutes: 15 },
+    });
+    expect(valid.fetcher).toHaveBeenCalledTimes(1);
+    const wrong = real({ ...output, region: 'eu' });
+    await expect(
+      wrong.adapter.translate('Any available US region and provider is fine.', [
+        { ...catalog[0]!, region: 'eu' },
+      ]),
+    ).rejects.toThrow('explicitly requested region');
+    await expect(flexible.translate('region is unsupported-choice', catalog)).rejects.toMatchObject(
+      { code: 'unsupported' },
+    );
+  });
   it('preserves unsupported resources, duration, region and decimal budget exactly', () => {
     expect(
       parseExplicitBuyerDescription(
