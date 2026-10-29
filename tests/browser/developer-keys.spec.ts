@@ -102,3 +102,18 @@ test('buyer write permissions reveal required per-operation limits without enabl
   ).toBeVisible();
   await expect(page.locator('body')).toHaveJSProperty('scrollWidth', 390);
 });
+
+test('key setup gives copyable direct downloads and contains mobile overflow', async ({ page }) => {
+  await fixture(page, 'buyer');
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/keys');
+  const install = await page.locator('.key-setup > pre').innerText();
+  expect(install.split('\n')).toHaveLength(4);
+  expect(install).not.toContain('\\n');
+  expect(install).toContain('/downloads/0.1.0/wick-cloud-broker-sdk-0.1.0.tgz');
+  expect(install).toContain('/downloads/0.1.0/wick-cloud-broker-cli-0.1.0.tgz');
+  expect(install).toContain('/downloads/0.1.0/wick-cloud-broker-mcp-0.1.0.tgz');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+});

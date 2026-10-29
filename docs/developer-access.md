@@ -17,6 +17,21 @@ Key management is browser-only. Machine credentials cannot mint keys or invoke a
 
 Buyer limits are **per operation**: maximum auction budget (also applied to accepted alternatives), maximum agreement reservation and maximum activation quantity. They are not a daily or lifetime spending budget. Repeated permitted operations can exceed a single operation’s limit in aggregate. Existing wallet and capacity checks still apply.
 
+## Install the versioned client release
+
+The client packages are downloadable directly from Broker. Repository access and npm publisher authentication are not required. Install all three together so their pinned package dependencies resolve locally:
+
+```sh
+npm install \
+  https://meta-hackathon-wick-production.up.railway.app/downloads/0.1.0/wick-cloud-broker-sdk-0.1.0.tgz \
+  https://meta-hackathon-wick-production.up.railway.app/downloads/0.1.0/wick-cloud-broker-cli-0.1.0.tgz \
+  https://meta-hackathon-wick-production.up.railway.app/downloads/0.1.0/wick-cloud-broker-mcp-0.1.0.tgz
+```
+
+Use `npx --no-install wick-broker` for the installed CLI. For MCP, configure `node` with the absolute path to the installed `node_modules/@wick-cloud/broker-mcp/dist/index.js`; it uses the same saved origin-bound profile or Broker environment variables. Release hashes and byte sizes are listed at `/downloads/0.1.0/manifest.json`. Published version directories are immutable; client changes require a new package version and a new directory.
+
+The standard npm registry commands below apply after registry publication. The direct downloads above are available independently.
+
 ## TypeScript SDK
 
 ```sh
