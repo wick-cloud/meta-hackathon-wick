@@ -29,6 +29,7 @@ import type {
   SupplierPolicy,
 } from '../shared/types';
 import { fixedQuote, managedPricing, revenueShare } from '../shared/pricing';
+import { AgreementCharges } from './agreement-charges';
 import {
   ApiError,
   api,
@@ -1370,28 +1371,28 @@ export function ProviderEarnings() {
         <div>
           <h3>Demo earnings · no payouts</h3>
           <p>
-            Each split is fixed with the accepted offer and recorded once the VM is ready. Your
-            share is before compute costs, so it is not profit. No payments or payouts are
-            collected.
+            For instant rentals, each split is fixed with the accepted offer and recorded once the
+            VM is ready. Your share is before compute costs, so it is not profit. No payments or
+            payouts are collected.
           </p>
         </div>
         <span className="quiet-badge">85% you · 15% Broker</span>
       </div>
       <div className="stats-grid">
         <StatCard
-          label="Assessed rental gross"
+          label="Assessed instant-rental gross"
           value={moneyMicros(gross)}
           note="Loaded records with a frozen split"
           icon={<CircleDollarSign size={18} />}
         />
         <StatCard
-          label="Broker commission"
+          label="Instant-rental commission"
           value={moneyMicros(fee)}
           note="15% of the assessed gross"
           icon={<Layers3 size={18} />}
         />
         <StatCard
-          label="Your net revenue"
+          label="Instant-rental net revenue"
           value={moneyMicros(net)}
           note="85%, before your compute costs"
           icon={<CheckCircle2 size={18} />}
@@ -1467,6 +1468,7 @@ export function ProviderEarnings() {
           error={moreError}
         />
       </section>
+      <AgreementCharges provider />
     </>
   );
 }
@@ -1713,7 +1715,7 @@ export function AdminConfig({ onUpdated }: { onUpdated: () => void }) {
                 'limit',
                 () =>
                   put('/api/admin/config', {
-                    maxConcurrentVms: limit ?? data.maxConcurrentVms ?? 2,
+                    maxConcurrentVms: limit ?? data.maxConcurrentVms ?? 20,
                   }),
                 'Customer VM limit updated.',
               );
@@ -1727,7 +1729,7 @@ export function AdminConfig({ onUpdated }: { onUpdated: () => void }) {
                 min={1}
                 max={20}
                 step={1}
-                value={limit ?? data.maxConcurrentVms ?? 2}
+                value={limit ?? data.maxConcurrentVms ?? 20}
                 onChange={(e) => setLimit(Number(e.target.value))}
                 required
               />

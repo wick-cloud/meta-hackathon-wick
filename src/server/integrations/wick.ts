@@ -78,6 +78,9 @@ export function parseEnvironment(value: unknown): WickEnvironment {
     id: string(raw.id, 'environment.id'),
     status: raw.status as WickEnvironment['status'],
     expiresAt: raw.expiresAt == null ? null : timestamp(raw.expiresAt, 'environment.expiresAt'),
+    ...(raw.hardEndAt == null
+      ? {}
+      : { hardEndAt: timestamp(raw.hardEndAt, 'environment.hardEndAt') }),
     ...(raw.createdAt == null
       ? {}
       : { createdAt: timestamp(raw.createdAt, 'environment.createdAt') }),
@@ -211,6 +214,10 @@ export function parseCatalog(
       cpu: finitePositive(resources.cpu, 'resources.cpu'),
       memoryGb: finitePositive(resources.memoryMiB, 'resources.memoryMiB') / 1024,
       durationMinutes,
+      maxTtlSeconds: maximum,
+      ...(['native', 'supervised', 'none'].includes(String(offer.deadlineEnforcement))
+        ? { deadlineEnforcement: offer.deadlineEnforcement as CatalogItem['deadlineEnforcement'] }
+        : {}),
       approved: false,
       organizationId: config.wickOrganizationId,
       groupId: config.wickGroupId,
@@ -254,13 +261,27 @@ function managedPreviewMatches(value: unknown, input: CreateEnvironmentInput): b
 function createBody(
   input: CreateEnvironmentInput,
 ): CreateEnvironmentInput & { profile: 'micro' | 'small' | 'medium' | 'large' } {
-  if (!RENTAL_SECONDS.includes(input.ttlSeconds) || input.visibility !== 'private') {
+  const scheduled = input.hardEndAt !== undefined;
+  if (
+    !(scheduled
+      ? Number.isSafeInteger(input.ttlSeconds) &&
+        input.ttlSeconds >= 60 &&
+        input.ttlSeconds <= 86400
+      : RENTAL_SECONDS.includes(input.ttlSeconds)) ||
+    input.visibility !== 'private'
+  ) {
     throw new WickApiError(
       'Only private, finite 15, 30, or 60 minute rentals are supported',
       400,
       true,
     );
   }
+  if (
+    scheduled &&
+    (!Number.isFinite(Date.parse(input.hardEndAt!)) ||
+      Date.parse(input.hardEndAt!) < Date.now() + 60_000)
+  )
+    throw new WickApiError('The scheduled hard cutoff is too close or has elapsed', 400, true);
   for (const field of ['organizationId', 'groupId', 'name', 'provider', 'profile'] as const) {
     if (typeof input[field] !== 'string' || !input[field].length || input[field].length > 150) {
       throw new WickApiError(`Invalid Wick create ${field}`, 400, true);
@@ -282,6 +303,7 @@ function createBody(
     provider: input.provider,
     profile: input.profile as 'micro' | 'small' | 'medium' | 'large',
     ttlSeconds: input.ttlSeconds,
+    ...(scheduled ? { hardEndAt: new Date(input.hardEndAt!).toISOString() } : {}),
     visibility: 'private',
     ...(input.region ? { region: input.region } : {}),
     ...(input.providerKeyId ? { providerKeyId: input.providerKeyId } : {}),
@@ -601,6 +623,8 @@ export function fixtureCatalog(
     provider: 'simulated-demo',
     region: 'us-east',
     durationMinutes: [15, 30, 60],
+    maxTtlSeconds: 86400,
+    deadlineEnforcement: 'native' as const,
     approved: true,
     organizationId: config.wickOrganizationId,
     groupId: config.wickGroupId,
@@ -658,6 +682,7 @@ function fixtureEnvironment(row: FixtureRow): WickEnvironment {
           groupId: row.input_json.groupId,
           provider: row.input_json.provider,
           profile: row.input_json.profile,
+          ...(row.input_json.hardEndAt ? { hardEndAt: row.input_json.hardEndAt } : {}),
         }
       : {}),
   };
@@ -714,9 +739,9 @@ function fixtureAdapter(config: WickConfig, pool: Pool): WickAdapter {
         `
         WITH admission AS (SELECT clock_timestamp() AS at)
         INSERT INTO broker_fixture_environments (id,create_key,input_hash,input_json,status,admitted_at,expires_at,ready_at)
-        SELECT $1,$2,$3,$4::jsonb,'provisioning',at,at + $5 * interval '1 second',at + interval '1500 milliseconds' FROM admission
+        SELECT $1,$2,$3,$4::jsonb,'provisioning',at,LEAST(at + $5 * interval '1 second',COALESCE($6::timestamptz,'infinity'::timestamptz)),at + interval '1500 milliseconds' FROM admission
         ON CONFLICT(create_key) DO UPDATE SET create_key=EXCLUDED.create_key RETURNING *`,
-        [`fixture_${randomUUID()}`, key, hash, serialized, body.ttlSeconds],
+        [`fixture_${randomUUID()}`, key, hash, serialized, body.ttlSeconds, body.hardEndAt ?? null],
       );
       const row = rows[0]!;
       if (row.input_hash !== hash)

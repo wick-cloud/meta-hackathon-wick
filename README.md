@@ -2,6 +2,8 @@
 
 A single-process environment marketplace: describe an environment, review an immutable specification, run a 30-second provider auction, and open the winning VM's browser terminal. Customers type their own commands. Wick Broker does not execute customer workloads, inspect repositories, or launch customer agents.
 
+The permanent **Orders** hub retains every auction and funded scheduled agreement. Seven-day agreements reserve Broker pilot credit and future capacity; customers manually start VMs inside accepted windows. See [Orders and funded agreements](docs/orders-and-agreements.md) for the UI, funding model, API and real-provider enforcement boundary.
+
 Node 24 · TypeScript · Fastify · React/Vite · PostgreSQL · Better Auth · pg-boss · xterm.js.
 
 ## Local start
@@ -33,10 +35,10 @@ Seeded identities are `buyer@demo.wick.local`, `supplier-a@demo.wick.local`, `su
 - Providers manage configured capacity, private pricing policy, manual/automatic bidding, approved-configuration offerings, and activity in the same application. Real operator-managed provider accounts are bound to their own upstream cloud; changing a pricing policy cannot widen that identity.
 - Manual and auto bids share a locked capacity reservation path. The lowest total price wins; equal prices use accepted timestamp, then ID. Losing holds release at close. The winner's hold remains until confirmed cleanup.
 - The request specification, awarded offering revision, quote, and create idempotency key are frozen. Retries cannot silently start another auction or extend the rental clock.
-- Exactly one fixed-price demo invoice is issued after Wick confirms both running state and terminal capability. Failed, cancelled, or expired-before-ready environments incur no charge. Early termination after readiness retains the full fixed price. Every invoice says **No payment due**; there are no payments, payouts, or topups.
+- For instant rentals, exactly one fixed-price demo invoice is issued after Wick confirms both running state and terminal capability. Failed, cancelled, or expired-before-ready instant environments incur no charge. Early termination after readiness retains the fixed price. Scheduled capacity is settled separately against reserved Broker pilot credit, including booked idle slots; a scheduled VM never receives an additional instant-rental invoice. There is no external payment collection or payout.
 - The returned Wick admission expiry is authoritative and includes setup time. Reconnecting attaches to the same environment. Disconnecting leaves the rental running; process survival is not guaranteed.
-- Muse has three bounded, validated uses: requirement translation; isolated supplier bid proposal/decline; and offering suggestions from recorded unmatched demand. Manual controls remain available after a visible model failure.
-- Admins approve existing catalog configurations, adjust the default two-VM admission limit, and retry unresolved cleanup reconciliation. No generated setup code or preparation jobs exist.
+- Muse provides bounded, reviewed proposals for requirements, supplier policy, bids, alternatives, offerings and scheduled agreement drafts. Manual controls remain available after a visible model failure. Drafts create no bookings, credit reservations or VMs.
+- Admins approve existing catalog configurations, adjust the default 20-VM admission limit, and retry unresolved cleanup reconciliation. No generated setup code or preparation jobs exist.
 
 Configured provider allocations and customer demo quotes are distinct from Wick's actual operational costs. A configured slot is an operator allocation, not a measurement or guarantee of upstream free capacity.
 
@@ -75,4 +77,4 @@ For an additional local process-restart check, stop the preview and run `npm run
 
 CI explicitly selects fixture adapters and never allocates real compute or uses paid APIs. See [testing notes](docs/testing.md) and [HANDOFF.md](HANDOFF.md) for checks actually run and remaining limits.
 
-Deferred: SSH, file browser, public port previews, snapshots, pause/resume, extensions, longer rentals, supplier setup code, and payments.
+Deferred: SSH, file browser, public port previews, snapshots, pause/resume, unbounded runtime extensions, longer standalone instant rentals, supplier setup code, and external payments. Scheduled initial leases can be longer only where an explicit independent native cutoff contract is available; existing real routes are not assumed certified.

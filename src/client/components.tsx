@@ -83,14 +83,19 @@ export function useResource<T>(path: string, interval = 0) {
       }
     };
     void fetchData();
+    const onVisible = () => {
+      if (interval && document.visibilityState === 'visible') void fetchData();
+    };
+    document.addEventListener('visibilitychange', onVisible);
     const timer = interval
       ? setInterval(() => {
-          void fetchData();
+          if (document.visibilityState !== 'hidden') void fetchData();
         }, interval)
       : undefined;
     return () => {
       cancelled = true;
       controller.abort();
+      document.removeEventListener('visibilitychange', onVisible);
       if (timer) clearInterval(timer);
     };
   }, [path, interval, version]);
@@ -245,6 +250,39 @@ export function SuccessBox({ children }: { children: ReactNode }) {
       <Check size={17} />
       {children}
     </div>
+  );
+}
+export function MarketDialog({
+  titleId,
+  onClose,
+  busy,
+  children,
+}: {
+  titleId: string;
+  onClose: () => void;
+  busy?: boolean;
+  children: ReactNode;
+}) {
+  const ref = useRef<HTMLDialogElement>(null);
+  const close = useRef(onClose);
+  close.current = onClose;
+  useEffect(() => {
+    const dialog = ref.current!;
+    dialog.showModal();
+    return () => dialog.close();
+  }, []);
+  return (
+    <dialog
+      ref={ref}
+      className="market-dialog"
+      aria-labelledby={titleId}
+      onCancel={(event) => {
+        event.preventDefault();
+        if (!busy) close.current();
+      }}
+    >
+      {children}
+    </dialog>
   );
 }
 export function EmptyState({

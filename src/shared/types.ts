@@ -29,6 +29,9 @@ export interface CatalogItem {
   pricingMode?: 'managed' | 'byok';
   managedRouteVerification?: 'organization-catalog-byok-disabled' | 'execution-preview-managed';
   resources?: { cpu: number; memoryGb: number; diskGb?: number; gpu?: string };
+  maxTtlSeconds?: number;
+  /** Explicit upstream attestation; absence never grants scheduled physical cutoff support. */
+  deadlineEnforcement?: 'native' | 'supervised' | 'none';
 }
 export interface ManagedPricing {
   model: 'wick-managed-rate-v1' | 'wick-provider-commission-v1';

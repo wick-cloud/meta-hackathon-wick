@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useState, type FormEvent } from 'react';
 import { fixedQuote, managedPricing } from '../shared/pricing';
 import { parseExplicitBuyerDescription } from '../shared/muse-contracts';
 import { seedAlternativeDraft } from './negotiation';
+import { AgreementCharges } from './agreement-charges';
 import {
   ArrowDownToLine,
   ArrowRight,
@@ -73,13 +74,50 @@ const TerminalPanel = lazy(() =>
 export function NewEnvironment() {
   const { catalog, modes, user } = useSession(),
     navigate = useNavigate();
+  const copyId = new URLSearchParams(window.location.search).get('copy');
   const [description, setDescription] = useState(loadDraft()?.description || ''),
     [busy, setBusy] = useState(false),
     [error, setError] = useState(''),
     [budget, setBudget] = useState(loadDraft()?.maxPriceCents ?? 500),
-    [budgetEdited, setBudgetEdited] = useState(false);
+    [budgetEdited, setBudgetEdited] = useState(false),
+    [copying, setCopying] = useState(!!copyId);
+  useEffect(() => {
+    if (!copyId) return;
+    const controller = new AbortController();
+    let cancelled = false;
+    setCopying(true);
+    setError('');
+    void api<{ request: EnvironmentRequest }>(`/api/requests/${encodeURIComponent(copyId)}`, {
+      signal: controller.signal,
+    })
+      .then(({ request }) => {
+        if (cancelled) return;
+        saveDraft({
+          description: request.description,
+          catalogId: request.catalogId,
+          region: request.region,
+          matchAcrossProviders: request.matchAcrossProviders,
+          durationMinutes: request.durationMinutes,
+          maxPriceCents: request.maxPriceCents,
+          requirements: request.requirements,
+        });
+        navigate('/requests/review');
+      })
+      .catch((err: unknown) => {
+        if (!cancelled)
+          setError(err instanceof Error ? err.message : 'Unable to copy this request.');
+      })
+      .finally(() => {
+        if (!cancelled) setCopying(false);
+      });
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [copyId]);
   const approved = catalog.filter((item) => item.approved),
     first = approved.find((item) => item.profile === 'small') ?? approved[0];
+  if (copying) return <Spinner label="Loading original request for a new review" />;
   function changeDescription(value: string) {
     setDescription(value);
     const explicit = parseExplicitBuyerDescription(value);
@@ -166,6 +204,23 @@ export function NewEnvironment() {
         title="Your next environment starts here."
         description="Tell us what you need. We’ll find the right fit, at a clear price."
       />
+      <div className="market-mode-picker" aria-label="Choose order type">
+        <div className="market-mode selected">
+          <Radio size={20} />
+          <div>
+            <strong>Instant · 30-second auction</strong>
+            <p>One environment, a fixed rental and a live provider auction.</p>
+          </div>
+        </div>
+        <Link href="/agreements/new" className="market-mode">
+          <Layers3 size={20} />
+          <div>
+            <strong>Scheduled · bulk agreement</strong>
+            <p>Book capacity for seven days. Start your VMs when you need them.</p>
+          </div>
+          <ArrowRight size={17} />
+        </Link>
+      </div>
       <Steps active={0} />
       <div className="new-environment-grid">
         <section className="card request-composer">
@@ -414,6 +469,9 @@ export function RequestReview() {
         description="Review your environment before providers start bidding."
       />
       <Steps active={1} />
+      {!selected && (
+        <ErrorBox error="The original configuration is no longer approved. Choose an available configuration before starting a new auction." />
+      )}
       <form onSubmit={submit}>
         <div className="review-grid">
           <section className="card">
@@ -686,13 +744,12 @@ export function AuctionPage({ id }: { id: string }) {
     now = useNow();
   const [busy, setBusy] = useState(''),
     [actionError, setActionError] = useState('');
-  async function action(kind: 'cancel' | 'retry') {
+  async function action(kind: 'cancel') {
     setBusy(kind);
     setActionError('');
     try {
-      const result = await post<EnvironmentRequest>(`/api/requests/${id}/${kind}`);
-      if (kind === 'retry') navigate(`/requests/${result.id}`);
-      else reload();
+      await post<EnvironmentRequest>(`/api/requests/${id}/${kind}`);
+      reload();
     } catch (err) {
       setActionError(err instanceof Error ? err.message : 'Request action failed.');
     } finally {
@@ -713,6 +770,10 @@ export function AuctionPage({ id }: { id: string }) {
   const ended = ['no_offers', 'failed', 'cancelled'].includes(request.status);
   return (
     <>
+      <Link href="/orders" className="back-link">
+        <ChevronLeft size={16} />
+        All orders
+      </Link>
       <PageHeader
         eyebrow="REQUEST MATCHING"
         title={
@@ -884,20 +945,10 @@ export function AuctionPage({ id }: { id: string }) {
           )}
           {ended && (
             <div className="auction-retry">
-              <button
-                className="button primary"
-                onClick={() => void action('retry')}
-                disabled={!!busy}
-              >
-                {busy === 'retry' ? (
-                  <Spinner label="Starting auction" />
-                ) : (
-                  <>
-                    <RefreshCw size={16} />
-                    Try a new auction
-                  </>
-                )}
-              </button>
+              <Link className="button primary" href={`/new?copy=${encodeURIComponent(request.id)}`}>
+                <RefreshCw size={16} />
+                Try again · review first
+              </Link>
               <Link href="/new" className="button secondary">
                 Change requirements
               </Link>
@@ -950,7 +1001,6 @@ export function AuctionPage({ id }: { id: string }) {
 
 export function MyVMs() {
   const vms = usePagedResource<VM>('/api/vms', 5000),
-    requests = usePagedResource<EnvironmentRequest>('/api/requests', 5000),
     now = useNow();
   const [tab, setTab] = useState<'all' | 'active' | 'past'>('all');
   const all = vms.data?.items || [],
@@ -958,9 +1008,6 @@ export function MyVMs() {
     shown = all.filter(
       (vm) => tab === 'all' || (tab === 'active' ? active.includes(vm) : !active.includes(vm)),
     );
-  const pending = (requests.data?.items || []).filter((request) =>
-    ['open', 'no_offers', 'failed'].includes(request.status),
-  );
   return (
     <>
       <PageHeader
@@ -977,7 +1024,7 @@ export function MyVMs() {
         <StatCard
           label="Active environments loaded"
           value={active.length}
-          note="Default limit: 2 actual customer VMs"
+          note="Running, provisioning or cleaning up"
           icon={<Server size={18} />}
         />
         <StatCard
@@ -987,48 +1034,19 @@ export function MyVMs() {
           icon={<SquareTerminal size={18} />}
         />
         <StatCard
-          label="Live auctions loaded"
-          value={(requests.data?.items || []).filter((r) => r.status === 'open').length}
-          note="30-second automatic matching"
+          label="Cleanup pending loaded"
+          value={all.filter((vm) => vm.cleanupPending || vm.status === 'terminating').length}
+          note="Capacity releases after confirmation"
           icon={<Radio size={18} />}
         />
       </div>
-      <ErrorBox
-        error={vms.error || requests.error}
-        retry={() => {
-          vms.reload();
-          requests.reload();
-        }}
-      />
-      {(pending.length > 0 || requests.nextCursor) && (
-        <section className="card pending-requests">
-          <div className="section-heading">
-            <h2>Recent requests</h2>
-            <span>{pending.length} to review</span>
-          </div>
-          {pending.map((request) => (
-            <Link className="pending-request" href={`/requests/${request.id}`} key={request.id}>
-              <span className="icon-tile small neutral">
-                <Radio size={16} />
-              </span>
-              <div>
-                <strong>{request.description || 'Environment request'}</strong>
-                <span>
-                  {request.durationMinutes} min · up to {money(request.maxPriceCents)}
-                </span>
-              </div>
-              <StatusPill status={request.status} />
-              <ArrowRight size={16} />
-            </Link>
-          ))}
-          <LoadMore
-            available={!!requests.nextCursor}
-            loading={requests.loadingMore}
-            onLoad={() => void requests.loadMore()}
-            error={requests.moreError}
-          />
-        </section>
-      )}
+      <ErrorBox error={vms.error} retry={vms.reload} />
+      <p className="market-fleet-note">
+        Looking for an auction or a scheduled agreement?{' '}
+        <Link href="/orders" className="text-link">
+          View all orders <ArrowRight size={13} />
+        </Link>
+      </p>
       <section className="card environments-card">
         <div className="section-heading">
           <h2>My environments</h2>
@@ -1143,7 +1161,9 @@ export function VMDetail({ id }: { id: string }) {
   if (loading) return <Spinner label="Loading environment" />;
   if (!vm) return <ErrorBox error={error || 'Environment unavailable.'} retry={reload} />;
   const active = vm.status === 'running' || vm.status === 'provisioning',
-    isExpired = !!vm.expiresAt && new Date(vm.expiresAt).getTime() <= now;
+    isExpired = !!vm.expiresAt && new Date(vm.expiresAt).getTime() <= now,
+    scheduled = vm.billingSource === 'scheduled_capacity',
+    window = vm.scheduledWindow;
   return (
     <>
       <Link href="/vms" className="back-link">
@@ -1153,7 +1173,7 @@ export function VMDetail({ id }: { id: string }) {
       <PageHeader
         eyebrow={`ENVIRONMENT ${vm.id.slice(0, 8)}`}
         title={vm.catalogName || 'Your environment'}
-        description={`${vm.region} · ${vm.durationMinutes}-minute rental · Private visibility`}
+        description={`${vm.region} · ${scheduled ? 'Booked scheduled capacity' : `${vm.durationMinutes}-minute rental`} · Private visibility`}
       >
         <StatusPill status={vm.status} />
         {active && (
@@ -1169,9 +1189,11 @@ export function VMDetail({ id }: { id: string }) {
             <strong>Terminate this environment?</strong>
             <p>
               Your terminal will disconnect immediately.{' '}
-              {vm.readyAt
-                ? 'The full fixed rental charge still applies.'
-                : 'There is no charge if the environment never became ready.'}{' '}
+              {scheduled
+                ? 'Your booked capacity remains payable; failed starts receive separate adjustments.'
+                : vm.readyAt
+                  ? 'The full fixed rental charge still applies.'
+                  : 'There is no charge if the environment never became ready.'}{' '}
               Capacity is released after Wick confirms cleanup.
             </p>
           </div>
@@ -1185,28 +1207,87 @@ export function VMDetail({ id }: { id: string }) {
       )}
       <div className="stats-grid vm-detail-stats">
         <StatCard
-          label="Time remaining"
+          label={scheduled ? 'Time to hard end' : 'Time remaining'}
           value={active ? remaining(vm.expiresAt, now) : '—'}
-          note="Clock starts at provisioning admission"
+          note={
+            scheduled
+              ? 'Late starts do not extend the window'
+              : 'Clock starts at provisioning admission'
+          }
           icon={<Timer size={18} />}
         />
         <StatCard
-          label="Exact expiry"
+          label={scheduled ? 'Immutable hard end' : 'Exact expiry'}
           value={<span className="date-value">{dateTime(vm.expiresAt)}</span>}
-          note="Setup included · reconnects do not reset expiry"
+          note={
+            scheduled
+              ? 'Termination · save files before this time'
+              : 'Setup included · reconnects do not reset expiry'
+          }
           icon={<Clock3 size={18} />}
         />
         <StatCard
-          label="Fixed rental price"
+          label={scheduled ? 'Booked slot-window total' : 'Fixed rental price'}
           value={money(vm.priceCents)}
           note={
-            vm.readyAt
-              ? 'Ready confirmed · No payment due'
-              : 'Only charged after confirmed readiness'
+            scheduled
+              ? 'Part of your agreement · no additional VM charge'
+              : vm.readyAt
+                ? 'Ready confirmed · No payment due'
+                : 'Only charged after confirmed readiness'
           }
           icon={<CircleDollarSign size={18} />}
         />
       </div>
+      {scheduled && (
+        <section className="card market-panel">
+          <div className="section-heading">
+            <h2>Scheduled capacity · separate clocks</h2>
+            {vm.agreementId && (
+              <Link className="text-link" href={`/orders/${vm.agreementId}`}>
+                View agreement <ArrowRight size={14} />
+              </Link>
+            )}
+          </div>
+          {window && (
+            <>
+              <div className="market-clock-grid">
+                <div>
+                  <span>Window opens</span>
+                  <strong>{dateTime(window.startsAt)}</strong>
+                </div>
+                <div>
+                  <span>Discount ends</span>
+                  <strong>{dateTime(window.discountEndsAt)}</strong>
+                </div>
+                <div>
+                  <span>Hard VM end</span>
+                  <strong>{dateTime(window.endsAt)}</strong>
+                </div>
+              </div>
+              <DetailRow
+                label={active && !isExpired ? 'Current matched rate' : 'Frozen discounted rate'}
+              >
+                {money(
+                  active && !isExpired && now >= Date.parse(window.discountEndsAt)
+                    ? window.normalRateCentsPerHour
+                    : window.discountRateCentsPerHour,
+                )}{' '}
+                / VM-hour
+              </DetailRow>
+              <DetailRow label="Frozen normal rate">
+                {money(window.normalRateCentsPerHour)} / VM-hour
+              </DetailRow>
+            </>
+          )}
+          <p className="field-hint">
+            Your booked capacity is already part of the agreement. The discount boundary changes the
+            billing segment on this same VM; the hard end terminates it. Booked idle capacity
+            remains paid. Start a fresh VM in the next window; retained disk storage is not
+            included.
+          </p>
+        </section>
+      )}
       {vm.failureReason && <ErrorBox error={vm.failureReason} />}
       <Suspense
         fallback={
@@ -1236,9 +1317,12 @@ export function VMDetail({ id }: { id: string }) {
               Private
             </span>
           </DetailRow>
-          <DetailRow label="Rental price">{money(vm.priceCents)} USD · fixed total</DetailRow>
+          <DetailRow label={scheduled ? 'Booked slot-window total' : 'Rental price'}>
+            {money(vm.priceCents)} USD ·{' '}
+            {scheduled ? 'part of agreement commitment' : 'fixed total'}
+          </DetailRow>
           <DetailRow label="Added buyer fee">$0.00</DetailRow>
-          {vm.pricing && (
+          {!scheduled && vm.pricing && (
             <>
               <DetailRow label="Wick compute estimate">
                 {moneyMicros(vm.pricing.upstreamEstimatedComputeMicros)} USD for the full term
@@ -1254,7 +1338,15 @@ export function VMDetail({ id }: { id: string }) {
             </>
           )}
           <div className="card-footer-link">
-            <ArrowLink to={`/requests/${vm.requestId}`}>View auction & winning offer</ArrowLink>
+            {scheduled ? (
+              vm.agreementId && (
+                <ArrowLink to={`/orders/${vm.agreementId}`}>
+                  View scheduled agreement & bookings
+                </ArrowLink>
+              )
+            ) : (
+              <ArrowLink to={`/requests/${vm.requestId}`}>View auction & winning offer</ArrowLink>
+            )}
           </div>
         </section>
         <section className="card rental-guide">
@@ -1331,7 +1423,7 @@ export function Invoices() {
       <PageHeader
         eyebrow="CLEAR FROM THE START"
         title="Every rental, accounted for."
-        description="One fixed demo invoice when your environment is confirmed ready."
+        description="Instant rental invoices and scheduled capacity charges, with no added buyer fee."
       >
         {items.length > 0 && (
           <button className="button secondary" onClick={download}>
@@ -1356,13 +1448,13 @@ export function Invoices() {
       </div>
       <div className="stats-grid">
         <StatCard
-          label="Loaded demo charges"
+          label="Loaded instant charges"
           value={money(items.reduce((total, invoice) => total + amount(invoice), 0))}
           note="Fixed rental totals in USD"
           icon={<CircleDollarSign size={18} />}
         />
         <StatCard
-          label="Loaded invoices"
+          label="Loaded instant invoices"
           value={items.length}
           note="Exactly one invoice per ready environment"
           icon={<CheckCircle2 size={18} />}
@@ -1377,7 +1469,7 @@ export function Invoices() {
       <ErrorBox error={error} retry={reload} />
       <section className="card">
         <div className="section-heading">
-          <h2>Rental invoices</h2>
+          <h2>Instant rental invoices</h2>
           <span>
             {items.length} loaded{nextCursor ? ' · more available' : ''}
           </span>
@@ -1434,11 +1526,12 @@ export function Invoices() {
           error={moreError}
         />
       </section>
+      <AgreementCharges />
       <div className="info-note">
         <ShieldCheck size={17} />
         <p>
-          Failed, cancelled, and expired-before-ready attempts have no charge. Termination after
-          readiness keeps the full fixed rental charge.
+          For instant rentals, failed, cancelled, and expired-before-ready attempts have no charge.
+          Termination after readiness keeps the full fixed rental charge.
         </p>
       </div>
     </>

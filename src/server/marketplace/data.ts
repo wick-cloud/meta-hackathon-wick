@@ -69,6 +69,25 @@ export const vmView = (r: Row) => ({
   region: r.catalog_snapshot?.region,
   durationMinutes: r.create_input?.ttlSeconds / 60,
   priceCents: r.quote_snapshot?.totalPriceCents,
+  billingSource:
+    r.quote_snapshot?.billingSource === 'scheduled_capacity' ? 'scheduled_capacity' : 'instant_vm',
+  ...(r.quote_snapshot?.billingSource === 'scheduled_capacity'
+    ? {
+        agreementId: r.quote_snapshot.agreementId,
+        ...(r.quote_snapshot.scheduledWindow
+          ? {
+              scheduledWindow: {
+                windowId: r.quote_snapshot.scheduledWindow.windowId,
+                startsAt: r.quote_snapshot.scheduledWindow.startsAt,
+                discountEndsAt: r.quote_snapshot.scheduledWindow.discountEndsAt,
+                endsAt: r.quote_snapshot.scheduledWindow.endsAt,
+                discountRateCentsPerHour: r.quote_snapshot.scheduledWindow.discountRateCentsPerHour,
+                normalRateCentsPerHour: r.quote_snapshot.scheduledWindow.normalRateCentsPerHour,
+              },
+            }
+          : {}),
+      }
+    : {}),
   ...(r.quote_snapshot?.pricing ? { pricing: r.quote_snapshot.pricing } : {}),
   ...(r.quote_snapshot?.revenueShare ? { revenueShare: r.quote_snapshot.revenueShare } : {}),
   failureReason: r.failure_reason,
