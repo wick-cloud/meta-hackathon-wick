@@ -23,7 +23,7 @@
     "db:migrate:production": "node dist/scripts/migrate.js",
     "configure:real:production": "node dist/scripts/configure-real.js",
     "build:app": "NODE_ENV=production vite build && tsc -p tsconfig.server.json",
-    "build:packages": "npm run build --workspace @wick-cloud/broker-sdk && npm run build --workspace @wick-cloud/broker-cli && npm run build --workspace @wick-cloud/broker-mcp",
+    "build:packages": "npm run build --workspace @wick-cloud/broker-sdk && npm run build --workspace @wick-cloud/broker-cli && npm run build --workspace @wick-cloud/broker-mcp && npm rebuild --workspace @wick-cloud/broker-cli --workspace @wick-cloud/broker-mcp --ignore-scripts",
     "pretest": "npm run build:packages",
     "test:developer-e2e": "npm run build:packages && tsx tests/developer-access-e2e.ts"
   },

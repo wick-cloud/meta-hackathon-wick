@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createServer } from 'node:http';
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { once } from 'node:events';
 import { resolve } from 'node:path';
 import type { BrokerClient, BrokerTerminal, TerminalEvent } from '@wick-cloud/broker-sdk';
@@ -210,7 +210,122 @@ describe('Broker MCP bounded terminal handles', () => {
     });
   });
 });
+function jsonRpcProcess(child: ChildProcessWithoutNullStreams) {
+  let stdout = '',
+    stderr = '',
+    buffer = '',
+    next = 0;
+  let failure: Error | undefined;
+  const pending = new Map<
+    number,
+    {
+      resolve: (value: any) => void;
+      reject: (error: Error) => void;
+      timer: ReturnType<typeof setTimeout>;
+    }
+  >();
+  const rejectPending = (error: Error) => {
+    failure = error;
+    for (const item of pending.values()) {
+      clearTimeout(item.timer);
+      item.reject(error);
+    }
+    pending.clear();
+  };
+  const exited = new Promise<void>((resolve) => {
+    child.once('error', (error) => {
+      rejectPending(error);
+      resolve();
+    });
+    child.once('exit', (code, signal) => {
+      rejectPending(
+        new Error(
+          `MCP process exited before a response (code ${code}, signal ${signal}): ${stderr}`,
+        ),
+      );
+      resolve();
+    });
+  });
+  child.stdin.on('error', rejectPending);
+  child.stderr.on('data', (chunk) => {
+    stderr += chunk.toString();
+  });
+  child.stdout.on('data', (chunk) => {
+    stdout += chunk.toString();
+    buffer += chunk.toString();
+    for (;;) {
+      const at = buffer.indexOf('\n');
+      if (at < 0) break;
+      const line = buffer.slice(0, at);
+      buffer = buffer.slice(at + 1);
+      let message: { id?: number };
+      try {
+        message = JSON.parse(line);
+      } catch {
+        rejectPending(new Error('Non-protocol stdout'));
+        continue;
+      }
+      const item = message.id === undefined ? undefined : pending.get(message.id);
+      if (item) {
+        clearTimeout(item.timer);
+        pending.delete(message.id!);
+        item.resolve(message);
+      }
+    }
+  });
+  return {
+    get stdout() {
+      return stdout;
+    },
+    get stderr() {
+      return stderr;
+    },
+    call: (method: string, params?: unknown) =>
+      new Promise<any>((resolve, reject) => {
+        if (failure) {
+          reject(failure);
+          return;
+        }
+        const id = ++next;
+        const timer = setTimeout(() => {
+          pending.delete(id);
+          reject(new Error('MCP response deadline: ' + stderr));
+        }, 5000);
+        pending.set(id, { resolve, reject, timer });
+        child.stdin.write(
+          JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n',
+          (error) => {
+            if (error) rejectPending(error);
+          },
+        );
+      }),
+    close: async () => {
+      for (const item of pending.values()) clearTimeout(item.timer);
+      pending.clear();
+      child.stdin.end();
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM');
+      const force = setTimeout(() => child.kill('SIGKILL'), 1000);
+      try {
+        await exited;
+      } finally {
+        clearTimeout(force);
+      }
+    },
+  };
+}
 describe('Broker MCP stdio interoperability', () => {
+  it('rejects pending and later requests immediately when the subprocess exits', async () => {
+    const child = spawn(process.execPath, ['-e', 'process.exit(23)'], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    const rpc = jsonRpcProcess(child);
+    try {
+      await expect(rpc.call('initialize', {})).rejects.toThrow(/exited|EPIPE/);
+      await expect(rpc.call('tools/list', {})).rejects.toThrow(/exited|EPIPE/);
+    } finally {
+      await rpc.close();
+    }
+  });
   it('serves legacy MCP initialization, scoped tools and JSON-only stdout', async () => {
     const key = `wbk_12345678-1234-1234-1234-123456789012.${'a'.repeat(43)}`;
     const api = createServer((req, res) => {
@@ -238,49 +353,8 @@ describe('Broker MCP stdio interoperability', () => {
       },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
-    let stdout = '',
-      stderr = '',
-      buffer = '';
-    let next = 0;
-    const pending = new Map<
-      number,
-      {
-        resolve: (value: any) => void;
-        reject: (error: Error) => void;
-        timer: ReturnType<typeof setTimeout>;
-      }
-    >();
-    child.stdout.on('data', (chunk) => {
-      stdout += chunk.toString();
-      buffer += chunk.toString();
-      for (;;) {
-        const at = buffer.indexOf('\n');
-        if (at < 0) break;
-        const line = buffer.slice(0, at);
-        buffer = buffer.slice(at + 1);
-        try {
-          const message = JSON.parse(line);
-          const item = pending.get(message.id);
-          if (item) {
-            clearTimeout(item.timer);
-            pending.delete(message.id);
-            item.resolve(message);
-          }
-        } catch {
-          for (const item of pending.values()) item.reject(new Error('Non-protocol stdout'));
-        }
-      }
-    });
-    child.stderr.on('data', (chunk) => {
-      stderr += chunk.toString();
-    });
-    const call = (method: string, params?: unknown) =>
-      new Promise<any>((resolve, reject) => {
-        const id = ++next;
-        const timer = setTimeout(() => reject(new Error('MCP response deadline: ' + stderr)), 5000);
-        pending.set(id, { resolve, reject, timer });
-        child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
-      });
+    const rpc = jsonRpcProcess(child);
+    const call = rpc.call;
     try {
       const initialized = await call('initialize', {
         protocolVersion: '2025-11-25',
@@ -298,14 +372,12 @@ describe('Broker MCP stdio interoperability', () => {
       );
       const account = await call('tools/call', { name: 'account_get', arguments: {} });
       expect(account.result.structuredContent.data.user.email).toBe('buyer@test.invalid');
-      expect(stdout).not.toContain(key);
-      expect(stderr).not.toContain(key);
-      for (const line of stdout.trim().split('\n')) expect(JSON.parse(line).jsonrpc).toBe('2.0');
+      expect(rpc.stdout).not.toContain(key);
+      expect(rpc.stderr).not.toContain(key);
+      for (const line of rpc.stdout.trim().split('\n'))
+        expect(JSON.parse(line).jsonrpc).toBe('2.0');
     } finally {
-      for (const item of pending.values()) clearTimeout(item.timer);
-      child.stdin.end();
-      child.kill('SIGTERM');
-      await once(child, 'exit');
+      await rpc.close();
       await new Promise<void>((resolve, reject) =>
         api.close((error) => (error ? reject(error) : resolve())),
       );
