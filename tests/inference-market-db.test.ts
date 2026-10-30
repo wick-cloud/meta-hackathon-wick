@@ -229,6 +229,76 @@ describe.skipIf(!url)(
       }
     });
 
+    it('settles concurrent sub-cent purchases without overspending or losing the 15% split', async () => {
+      const g = await grant(0.03),
+        key = await agent(g.id);
+      const quantities = { inputTokens: 100, outputTokens: 1 };
+      const quote = (await quotes(ctx, key.actor, quantities)).items[0]!;
+      expect(quote.priceCents).toBe(0.02);
+      const bodies = [0, 1].map(() => ({
+        ...quantities,
+        mode: 'instant',
+        quoteId: quote.quoteId,
+        maxTotalCents: 0.02,
+        operationKey: randomUUID(),
+      }));
+      const attempts = await Promise.allSettled(
+        bodies.map((input) => createTokenOrder(ctx, key.actor, input)),
+      );
+      expect(attempts.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+      const winnerIndex = attempts.findIndex((r) => r.status === 'fulfilled');
+      const awarded = await createTokenOrder(ctx, key.actor, bodies[winnerIndex]);
+      const detail = await tokenOrderDetail(ctx, key.actor, awarded.id);
+      expect(detail.grant).toMatchObject({
+        fundedCents: 0.03,
+        availableCents: 0.01,
+        heldCents: 0,
+        spentCents: 0.02,
+      });
+      expect(detail.pack!.revenueShare).toMatchObject({
+        grossCents: 0.02,
+        brokerFeeMicros: '30',
+        providerNetMicros: '170',
+      });
+      expect(await creditWalletView(pool, owner.id)).toMatchObject({
+        balanceCents: 4999.98,
+        reservedCents: 0.01,
+        availableCents: 4999.97,
+      });
+      expect(
+        (
+          await pool.query(
+            "SELECT count(*)::int n FROM broker_credit_ledger WHERE grant_id=$1 AND kind='token_purchase'",
+            [g.id],
+          )
+        ).rows[0].n,
+      ).toBe(1);
+      await closeGrant(ctx, owner, g.id, { operationKey: randomUUID() });
+      expect(await creditWalletView(pool, owner.id)).toMatchObject({
+        balanceCents: 4999.98,
+        reservedCents: 0,
+        availableCents: 4999.98,
+      });
+    });
+    it('rejects excess currency precision at both the HTTP owner and database boundary', async () => {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/inference/grants',
+        headers: { cookie, origin },
+        payload: { operationKey: randomUUID(), name: 'Too precise', budgetCents: 0.001 },
+      });
+      expect(response.statusCode).toBe(400);
+      await expect(
+        pool.query('UPDATE broker_credit_wallets SET balance_cents=$2 WHERE buyer_id=$1', [
+          owner.id,
+          0.001,
+        ]),
+      ).rejects.toMatchObject({ code: '23514' });
+      expect(await creditWalletView(pool, owner.id)).toMatchObject({
+        balanceCents: 5000,
+        reservedCents: 0,
+      });
+    });
     it('reserves owner cash once, awards the cheapest bid, and exposes permanent order history', async () => {
       const g = await grant(100),
         key = await agent(g.id);
@@ -762,9 +832,13 @@ describe.skipIf(!url)(
       expect(updated.status).toBe('settled');
       expect(updated.refundCents).toBeGreaterThan(0);
       expect(updated.refundCents).toBeLessThan(pack.priceCents);
-      expect(updated.refundCents).toBe(2);
-      expect(detail.grant.spentCents).toBe(pack.priceCents - updated.refundCents);
-      expect(updated.revenueShare.grossCents).toBe(pack.priceCents - updated.refundCents);
+      expect(updated.refundCents).toBe(2.38);
+      expect(detail.grant.spentCents).toBe(
+        Number((pack.priceCents - updated.refundCents).toFixed(2)),
+      );
+      expect(updated.revenueShare.grossCents).toBe(
+        Number((pack.priceCents - updated.refundCents).toFixed(2)),
+      );
       expect(
         (
           await pool.query(
@@ -773,6 +847,49 @@ describe.skipIf(!url)(
         ).rows[0].n,
       ).toBe(1);
       expect(result.usage.prompt_tokens).toBe(inputBound);
+    });
+    it('preserves whole-cent refund terms for packs purchased before four-decimal pricing', async () => {
+      await pool.query('UPDATE broker_token_offerings SET minimum_price_cents=100');
+      const g = await grant(200),
+        key = await agent(g.id),
+        pack = await buy(g.id);
+      expect(pack.priceCents).toBe(100);
+      await pool.query(
+        "UPDATE broker_token_packs SET snapshot=snapshot-'currencyDecimals' WHERE id=$1",
+        [pack.id],
+      );
+      await complete(ctx, key.actor, { ...call, operationKey: randomUUID() });
+      await transaction(pool, async (db) => {
+        await db.query('SELECT id FROM broker_inference_grants WHERE id=$1 FOR UPDATE', [g.id]);
+        await db.query('SELECT provider FROM broker_inference_routes ORDER BY provider FOR UPDATE');
+        const current = (
+          await db.query('SELECT * FROM broker_token_packs WHERE id=$1 FOR UPDATE', [pack.id])
+        ).rows[0];
+        await retirePackLocked(db, current, 'provider_failure', 'Verified fixture outage.');
+      });
+      await maintainInference(ctx);
+      await maintainInference(ctx);
+      const row = (await pool.query('SELECT * FROM broker_token_packs WHERE id=$1', [pack.id]))
+        .rows[0];
+      const s = row.snapshot;
+      const unused =
+        BigInt(row.retired_input) * BigInt(s.inputRate) +
+        BigInt(row.retired_output) * BigInt(s.outputRate);
+      const issued =
+        BigInt(row.input_tokens) * BigInt(s.inputRate) +
+        BigInt(row.output_tokens) * BigInt(s.outputRate);
+      const legacyRefund = Number((100n * unused) / issued);
+      expect(row.refund_cents).toBe(legacyRefund);
+      expect(legacyRefund).toBeGreaterThan(0);
+      expect(legacyRefund).toBeLessThan(100);
+      expect(
+        (
+          await pool.query(
+            "SELECT count(*)::int n FROM broker_credit_ledger WHERE kind='token_refund' AND grant_id=$1",
+            [g.id],
+          )
+        ).rows[0].n,
+      ).toBe(1);
     });
     it('enforces expiry in admissions and restart maintenance; preserves history and counters', async () => {
       const g = await grant(),
@@ -816,8 +933,8 @@ describe.skipIf(!url)(
           expectedRevision: 1,
           active: true,
           autoBid: true,
-          inputRateMicrosPerMillion: 1,
-          outputRateMicrosPerMillion: 1,
+          inputRateMicrosPerMillion: 100,
+          outputRateMicrosPerMillion: 100,
           instantMarkupBps: 0,
           minimumPriceCents: 1,
           maxOutstandingInputTokens: 1,

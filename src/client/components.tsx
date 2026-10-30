@@ -1,3 +1,4 @@
+import { centsToUsd, usdToCents } from '../shared/money';
 import {
   createContext,
   useContext,
@@ -460,10 +461,13 @@ export function MoneyInput({
         <input
           id={id}
           type="number"
-          min={min / 100}
-          step="0.01"
-          value={(value / 100).toString()}
-          onChange={(e) => onChange(Math.round(Number(e.target.value) * 100))}
+          min={centsToUsd(min)}
+          step="0.0001"
+          value={centsToUsd(value)}
+          onChange={(e) => {
+            const amount = usdToCents(e.target.value || '0');
+            if (amount !== undefined) onChange(amount);
+          }}
           disabled={disabled}
           required
         />

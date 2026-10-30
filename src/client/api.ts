@@ -1,3 +1,4 @@
+import { formatMoney, formatMoneyMicros } from '../shared/money';
 import type {
   Actor,
   CatalogItem,
@@ -217,19 +218,8 @@ export const post = <T>(url: string, body?: unknown) =>
   api<T>(url, { method: 'POST', body: JSON.stringify(body ?? {}) });
 export const put = <T>(url: string, body: unknown) =>
   api<T>(url, { method: 'PUT', body: JSON.stringify(body) });
-export const money = (cents: number | undefined) =>
-  new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format((cents ?? 0) / 100);
-/** Preserve the exact provider split, including fractions of a cent. */
-export const moneyMicros = (value: string | bigint) => {
-  const micros = BigInt(value);
-  const whole = micros / 1000000n;
-  const fraction = (micros % 1000000n)
-    .toString()
-    .padStart(6, '0')
-    .replace(/0+$/, '')
-    .padEnd(2, '0');
-  return `$${new Intl.NumberFormat('en-US').format(whole)}.${fraction}`;
-};
+export const money = (cents: number | undefined) => formatMoney(cents ?? 0);
+export const moneyMicros = formatMoneyMicros;
 export const dateTime = (value: string | undefined | null) =>
   value
     ? new Date(value).toLocaleString(undefined, {

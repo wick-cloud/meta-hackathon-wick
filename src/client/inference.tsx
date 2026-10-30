@@ -1,3 +1,4 @@
+import { centsToUsd, usdToMicros } from '../shared/money';
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import {
   ArrowLeft,
@@ -350,14 +351,14 @@ export function Agents() {
                   id="agent-budget"
                   label="Initial budget"
                   value={budget}
-                  min={1}
+                  min={0.01}
                   onChange={setBudget}
                 />
                 <MoneyInput
                   id="agent-purchase-limit"
                   label="Maximum per purchase"
                   value={maximum}
-                  min={1}
+                  min={0.01}
                   onChange={setMaximum}
                 />
               </div>
@@ -423,8 +424,8 @@ export function Agents() {
                 disabled={
                   busy ||
                   !providers.length ||
-                  budget < 1 ||
-                  maximum < 1 ||
+                  budget < 0.01 ||
+                  maximum < 0.01 ||
                   maximum > budget ||
                   (!!wallet.data && budget > wallet.data.availableCents)
                 }
@@ -815,7 +816,7 @@ export function AgentDetail({ id }: { id: string }) {
                   id="agent-add-funds"
                   label="Amount to add"
                   value={amount}
-                  min={1}
+                  min={0.01}
                   onChange={setAmount}
                   disabled={busy}
                 />
@@ -844,7 +845,7 @@ export function AgentDetail({ id }: { id: string }) {
               </button>
               <button
                 className="button primary"
-                disabled={busy || (dialog === 'fund' && amount < 1)}
+                disabled={busy || (dialog === 'fund' && amount < 0.01)}
               >
                 {busy ? (
                   <Spinner label="Saving" />
@@ -1179,7 +1180,7 @@ export function TokenComposer({ search }: { search: string }) {
                 id="token-auction-max"
                 label="Maximum total price"
                 value={maximum}
-                min={1}
+                min={0.01}
                 onChange={(value) => {
                   setMaximum(value);
                   setAccepted(false);
@@ -1300,7 +1301,7 @@ export function TokenComposer({ search }: { search: string }) {
                       !grant?.allowInstant ||
                       selected!.priceCents >
                         Math.min(grant?.availableCents ?? 0, grant?.maxPurchaseCents ?? 0)
-                    : maximum < 1 ||
+                    : maximum < 0.01 ||
                       maximum >
                         Math.min(grant?.availableCents ?? 0, grant?.maxPurchaseCents ?? 0))))
             }
@@ -1600,14 +1601,14 @@ export function ProviderInference() {
                   <span>Input price · USD / million</span>
                   <input
                     type="number"
-                    min={0.000001}
-                    step={0.000001}
+                    min={0.0001}
+                    step={0.0001}
                     required
-                    value={draft.inputRateMicrosPerMillion / 1000000}
+                    value={centsToUsd(draft.inputRateMicrosPerMillion / 10000)}
                     onChange={(e) =>
                       change(
                         'inputRateMicrosPerMillion',
-                        Math.round(Number(e.target.value) * 1000000),
+                        usdToMicros(e.target.value || '0') ?? draft.inputRateMicrosPerMillion,
                       )
                     }
                   />
@@ -1620,14 +1621,14 @@ export function ProviderInference() {
                   <span>Output price · USD / million</span>
                   <input
                     type="number"
-                    min={0.000001}
-                    step={0.000001}
+                    min={0.0001}
+                    step={0.0001}
                     required
-                    value={draft.outputRateMicrosPerMillion / 1000000}
+                    value={centsToUsd(draft.outputRateMicrosPerMillion / 10000)}
                     onChange={(e) =>
                       change(
                         'outputRateMicrosPerMillion',
-                        Math.round(Number(e.target.value) * 1000000),
+                        usdToMicros(e.target.value || '0') ?? draft.outputRateMicrosPerMillion,
                       )
                     }
                   />
@@ -1652,7 +1653,7 @@ export function ProviderInference() {
                 <MoneyInput
                   id="provider-token-minimum"
                   label="Minimum pack price"
-                  min={1}
+                  min={0.01}
                   value={draft.minimumPriceCents}
                   onChange={(value) => change('minimumPriceCents', value)}
                 />

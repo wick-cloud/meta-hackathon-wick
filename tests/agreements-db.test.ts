@@ -220,7 +220,7 @@ describe.skipIf(!url)('funded manual agreements (real disposable PostgreSQL)', (
           d.agreement.id,
         ])
       ).rows[0],
-    ).toMatchObject({ status: 'approved', reserved_cents: '14000' });
+    ).toMatchObject({ status: 'approved', reserved_cents: 14000 });
   });
   it('replays create/grants and rejects changed operation-key payloads', async () => {
     const spec = input(),
@@ -245,7 +245,7 @@ describe.skipIf(!url)('funded manual agreements (real disposable PostgreSQL)', (
         a.agreement.id,
       ])
     ).rows[0];
-    expect(row).toMatchObject({ reserved_cents: '14000', committed_cents: '11200' });
+    expect(row).toMatchObject({ reserved_cents: 14000, committed_cents: 11200 });
     const d = await cancelUnmatched(ctx, a.agreement.id, buyer, { operationKey: randomUUID() });
     expect(d.agreement).toMatchObject({
       status: 'approved',
@@ -361,7 +361,7 @@ describe.skipIf(!url)('funded manual agreements (real disposable PostgreSQL)', (
     expect(
       (await pool.query('SELECT adjustment_cents FROM broker_agreements WHERE id=$1', [a.id]))
         .rows[0].adjustment_cents,
-    ).toBe('100');
+    ).toBe(100);
     expect(
       (await pool.query('SELECT count(*) n FROM broker_agreement_adjustments')).rows[0].n,
     ).toBe('1');
@@ -507,13 +507,13 @@ describe.skipIf(!url)('funded manual agreements (real disposable PostgreSQL)', (
     expect(
       (await pool.query('SELECT adjustment_cents FROM broker_agreements WHERE id=$1', [a.id]))
         .rows[0].adjustment_cents,
-    ).toBe('100');
+    ).toBe(100);
     const second = await start();
     await transaction(pool, (db) => scheduledActivationReady(ctx, db, second));
     expect(
       (await pool.query('SELECT adjustment_cents FROM broker_agreements WHERE id=$1', [a.id]))
         .rows[0].adjustment_cents,
-    ).toBe('0');
+    ).toBe(0);
     await clean(second);
     const third = await start();
     await clean(third);
@@ -537,7 +537,7 @@ describe.skipIf(!url)('funded manual agreements (real disposable PostgreSQL)', (
       ).rows[0],
     ).toMatchObject({
       status: 'expired',
-      reserved_cents: '300',
+      reserved_cents: 300,
       blocked_reason: expect.stringContaining('pending confirmed VM cleanup'),
     });
     expect((await creditWalletView(pool, buyer)).reservedCents).toBe(300);
@@ -553,7 +553,7 @@ describe.skipIf(!url)('funded manual agreements (real disposable PostgreSQL)', (
     expect(
       (await pool.query('SELECT reserved_cents FROM broker_agreements WHERE id=$1', [a.id])).rows[0]
         .reserved_cents,
-    ).toBe('0');
+    ).toBe(0);
   });
   it('requires fresh managed rates within the frozen ceiling and rejects catalog resource drift before any activation', async () => {
     const a = await bookedCurrent();
@@ -976,7 +976,7 @@ describe.skipIf(!url)('funded manual agreements (real disposable PostgreSQL)', (
     expect(
       (await pool.query('SELECT adjustment_cents FROM broker_agreements WHERE id=$1', [a.id]))
         .rows[0].adjustment_cents,
-    ).toBe('200');
+    ).toBe(200);
     const replay = await activateAgreement(ctx, a.id, buyer, body).then(
       () => null,
       (error) => error as HttpError,
@@ -1022,7 +1022,7 @@ describe.skipIf(!url)('funded manual agreements (real disposable PostgreSQL)', (
     expect(
       (await pool.query('SELECT adjustment_cents FROM broker_agreements WHERE id=$1', [a.id]))
         .rows[0].adjustment_cents,
-    ).toBe('0');
+    ).toBe(0);
     expect(
       (
         await pool.query(
@@ -1053,12 +1053,12 @@ describe.skipIf(!url)('funded manual agreements (real disposable PostgreSQL)', (
     const charge = (
       await pool.query('SELECT * FROM broker_agreement_charges WHERE window_id=$1', [a.windowId])
     ).rows[0];
-    expect(charge).toMatchObject({ gross_cents: '1200', credit_cents: '200', total_cents: '1000' });
+    expect(charge).toMatchObject({ gross_cents: 1200, credit_cents: 200, total_cents: 1000 });
     expect(charge.revenue_share.brokerFeeMicros).toBe('1500000');
     expect(
       (await pool.query('SELECT settled_cents FROM broker_agreements WHERE id=$1', [a.id])).rows[0]
         .settled_cents,
-    ).toBe('1000');
+    ).toBe(1000);
     await expect(activateAgreement(ctx, a.id, buyer, body)).rejects.toThrow(
       /booked_catalog_unavailable/,
     );
@@ -1146,7 +1146,7 @@ describe.skipIf(!url)('funded manual agreements (real disposable PostgreSQL)', (
     expect(
       (await pool.query('SELECT adjustment_cents FROM broker_agreements WHERE id=$1', [a.id]))
         .rows[0].adjustment_cents,
-    ).toBe('100');
+    ).toBe(100);
     expect((await pool.query('SELECT count(*) n FROM broker_vms')).rows[0].n).toBe('0');
     expect(ctx.boss.send).not.toHaveBeenCalled();
   });
@@ -1387,7 +1387,7 @@ describe.skipIf(!url)('funded manual agreements (real disposable PostgreSQL)', (
           [a.id],
         )
       ).rows[0],
-    ).toMatchObject({ reserved_cents: '1200', committed_cents: '1200', settled_cents: '0' });
+    ).toMatchObject({ reserved_cents: 1200, committed_cents: 1200, settled_cents: 0 });
     await expect(activateAgreement(real, a.id, buyer, body)).rejects.toThrow(
       /frozen_cost_ceiling_exceeded/,
     );

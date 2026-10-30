@@ -9,6 +9,7 @@ import type { CatalogItem } from '../../shared/types.js';
 import { HttpError, type AppContext } from '../context.js';
 import { iso, type Row } from '../marketplace/data.js';
 import { transaction } from '../marketplace/db.js';
+import { addCents, multiplyCents, subtractCents } from '../../shared/money.js';
 
 export const globalLock = (db: PoolClient) =>
   db.query("SELECT pg_advisory_xact_lock(hashtext('broker-global-vm-admission'))");
@@ -60,7 +61,7 @@ export function bookingView(r: Row): AgreementBooking {
     catalogId: r.catalog_id,
     quantity: r.quantity,
     unitPriceCents: r.unit_price_cents,
-    totalCents: r.quantity * r.unit_price_cents,
+    totalCents: multiplyCents(r.unit_price_cents, r.quantity),
     startsAt: iso(r.starts_at)!,
     discountEndsAt: iso(r.discount_ends_at)!,
     endsAt: iso(r.ends_at)!,
@@ -122,7 +123,7 @@ export async function agreementDetail(
   );
   const remaining = wr.rows
     .filter((w) => !w.settled_at)
-    .reduce((sum, w) => sum + Number(w.committed_cents), 0);
+    .reduce((sum, w) => addCents(sum, w.committed_cents), 0);
   return {
     agreement: {
       id: a.id,
@@ -141,7 +142,7 @@ export async function agreementDetail(
       committedCents: Number(a.committed_cents),
       settledCents: Number(a.settled_cents),
       adjustmentCents: Number(a.adjustment_cents),
-      topUpAllowanceCents: Math.max(0, Number(a.reserved_cents) - remaining),
+      topUpAllowanceCents: Math.max(0, subtractCents(a.reserved_cents, remaining)),
       acceptingTopUps: a.accepting_topups,
       createdAt: iso(a.created_at)!,
       specification: a.specification,

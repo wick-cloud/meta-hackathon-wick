@@ -1,3 +1,4 @@
+import { usdToCents } from './money.js';
 import type { Requirements } from './types.js';
 
 // Bare "in ..." and "... region" are ambiguous prose. Recognize locations,
@@ -57,11 +58,13 @@ export function parseExplicitBuyerDescription(description: string): {
   const hours = description.match(/\b(\d+)\s*(?:hours?|hrs?)\b/i);
   // Multiple stated limits never silently broaden a smaller explicit budget.
   const money = [
-    ...description.matchAll(/\$\s*(\d{1,6})(?:\.(\d{1,2})(?!\d))?\b/g),
+    ...description.matchAll(/\$\s*(\d{1,6})(?:\.(\d{1,4})(?!\d))?(?![\d.])\b/g),
     ...description.matchAll(
-      /\b(?:budget|max(?:imum)?(?:\s+total)?|under|up to)\s*(?:of|is|:|=)?\s*(\d{1,6})(?:\.(\d{1,2})(?!\d))?\s*(?:usd|dollars?)\b/gi,
+      /\b(?:budget|max(?:imum)?(?:\s+total)?|under|up to)\s*(?:of|is|:|=)?\s*(\d{1,6})(?:\.(\d{1,4})(?!\d))?\s*(?:usd|dollars?)\b/gi,
     ),
-  ].map((value) => Number(value[1]) * 100 + Number((value[2] ?? '').padEnd(2, '0')));
+  ]
+    .map((value) => usdToCents(`${value[1]}.${value[2] ?? ''}`))
+    .filter((value): value is number => value !== undefined);
   const region = explicitRegion(description);
   return {
     requirements: {

@@ -60,6 +60,16 @@ describe('managed fixed quotes (offline)', () => {
     ).toBe(11);
   });
   it('splits every price exactly without increasing the buyer total or rounding small fees up', () => {
+    expect(revenueShare(0.01)).toMatchObject({
+      grossCents: 0.01,
+      brokerFeeMicros: '15',
+      providerNetMicros: '85',
+    });
+    expect(revenueShare(12.34)).toMatchObject({
+      grossCents: 12.34,
+      brokerFeeMicros: '18510',
+      providerNetMicros: '104890',
+    });
     expect(revenueShare(10000)).toEqual({
       commissionBps: 1500,
       grossCents: 10000,
@@ -79,7 +89,7 @@ describe('managed fixed quotes (offline)', () => {
       );
       expect(BigInt(split.brokerFeeMicros) * 100n).toBe(BigInt(price) * 10000n * 15n);
     }
-    for (const price of [-1, 0.5, NaN, Infinity, 100000001])
+    for (const price of [-1, 0.005, NaN, Infinity, 100000001])
       expect(() => revenueShare(price)).toThrow();
   });
   it('preserves legacy markup snapshots while new bids on old offerings use the provider commission', () => {
@@ -152,7 +162,7 @@ describe('managed fixed quotes (offline)', () => {
     expect(acceptedBidQuote(costlier, 15, 3).upstreamCostFloorCents).toBe(3);
     expect(() => acceptedBidQuote(costlier, 15, 2)).toThrow(/cost floor/);
     expect(() => acceptedBidQuote(pricing, 15, 0)).toThrow(/cost floor/);
-    expect(() => acceptedBidQuote(pricing, 15, 1.5)).toThrow();
+    expect(() => acceptedBidQuote(pricing, 15, 1.005)).toThrow();
   });
   it('requires recent admission sources, bounds future skew and keeps historical snapshots readable', () => {
     const now = Date.parse('2026-10-28T12:00:00Z');

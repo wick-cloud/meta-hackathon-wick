@@ -1,3 +1,4 @@
+import { addCents, subtractCents, multiplyCents } from '../../shared/money.js';
 import type { BrokerKeyAuthority } from '../../shared/developer.js';
 import { enforceKeyLimit, recordKeyAction, operationFingerprint } from '../operations.js';
 import type { AppContext } from '../context.js';
@@ -19,9 +20,13 @@ export async function previewAgreement(
   const { input, windows, maxAmountCents } = validateAgreement(raw, new Date(now).getTime());
   const minimumAmountCents = windows.reduce(
     (sum, w) =>
-      sum +
-      windowCost(w, input.maxDiscountRateCentsPerHour, input.continuation?.maxRateCentsPerHour) *
-        input.minimumQuantity,
+      addCents(
+        sum,
+        multiplyCents(
+          windowCost(w, input.maxDiscountRateCentsPerHour, input.continuation?.maxRateCentsPerHour),
+          input.minimumQuantity,
+        ),
+      ),
     0,
   );
   return { maxAmountCents, minimumAmountCents, windows, timeZone: input.timeZone };
@@ -129,7 +134,7 @@ export async function cancelUnmatched(
           )
         ).rowCount,
       );
-    const release = pending ? 0 : Math.max(0, Number(a.reserved_cents) - remaining);
+    const release = pending ? 0 : Math.max(0, subtractCents(Number(a.reserved_cents), remaining));
     if (release)
       await applyCreditEntry(db, buyerId, {
         operationKey: `agreement:${id}:cancel-release`,

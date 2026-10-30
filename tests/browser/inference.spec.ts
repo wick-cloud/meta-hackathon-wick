@@ -367,6 +367,61 @@ test('uncertain key creation never retries automatically or exposes a recoverabl
   await expect(page.getByLabel('New agent API key')).toHaveCount(0);
 });
 
+test('four-decimal funding and auction limits are displayed and submitted without cent rounding', async ({
+  page,
+}) => {
+  const f = await fixture(page, { empty: true });
+  await page.goto('/agents');
+  await page.getByRole('button', { name: 'Create agent', exact: true }).first().click();
+  await page.getByLabel('Agent name').fill('Precise budget');
+  const budget = page.getByLabel('Initial budget');
+  await expect(budget).toHaveAttribute('step', '0.0001');
+  await budget.fill('1.2345');
+  await expect(budget).toHaveValue('1.2345');
+  await page.getByLabel('Maximum per purchase').fill('0.1234');
+  await page.getByRole('button', { name: 'Reserve $1.2345 and create', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Precise budget', exact: true })).toBeVisible();
+  expect(f.writes[0].body.budgetCents).toBe(123.45);
+  await expect(page.getByText('$1.2345', { exact: true }).first()).toBeVisible();
+  await page.screenshot({
+    path: test.info().outputPath('four-decimal-budget.png'),
+    fullPage: true,
+  });
+  await page.goto(`/token-orders/new?grantId=${grantId}`);
+  const maximum = page.getByLabel('Maximum total price');
+  await maximum.fill('0.0001');
+  await expect(maximum).toHaveValue('0.0001');
+  // A fifth meaningful digit must never be silently rounded and charged.
+  await maximum.fill('0.00019');
+  await expect(maximum).toHaveValue('0.0001');
+  await maximum.fill('0.1234');
+  await page.getByRole('checkbox', { name: /I understand/ }).check();
+  await page.getByRole('button', { name: 'Start 30-second auction' }).click();
+  await expect(
+    page.getByRole('heading', { name: 'Token pack auction', exact: true }),
+  ).toBeVisible();
+  expect(f.writes.find((w) => w.path === '/api/token-orders')!.body.maxTotalCents).toBe(12.34);
+});
+
+test('providers can publish rates and minimum pack prices with four USD decimals', async ({
+  page,
+}) => {
+  const f = await fixture(page, { role: 'provider' });
+  await page.goto('/provider/inference');
+  await page.getByLabel('Input price · USD / million').fill('2.3456');
+  await page.getByLabel('Output price · USD / million').fill('6.7891');
+  await page.getByLabel('Minimum pack price').fill('0.0001');
+  await page.getByRole('button', { name: 'Save token offering', exact: true }).click();
+  await expect(
+    page.getByText('Offering saved. Existing token packs retain their purchased terms.'),
+  ).toBeVisible();
+  expect(f.writes.find((w) => w.path === '/api/provider/inference/offering')!.body).toMatchObject({
+    inputRateMicrosPerMillion: 2345600,
+    outputRateMicrosPerMillion: 6789100,
+    minimumPriceCents: 0.01,
+  });
+});
+
 test('auction purchase produces a saved token order and cancels without VM actions', async ({
   page,
 }) => {

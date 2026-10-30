@@ -5,10 +5,11 @@ const bool: JsonSchema = { type: 'boolean' };
 const number: JsonSchema = { type: 'number' };
 const integer: JsonSchema = { type: 'integer' };
 const cents: JsonSchema = {
-  type: 'integer',
+  type: 'number',
+  multipleOf: 0.01,
   minimum: 0,
   maximum: 100000000,
-  description: 'Whole USD cents.',
+  description: 'USD cents, allowing hundredths of a cent ($0.0001).',
 };
 const date: JsonSchema = { type: 'string', format: 'date-time' };
 const nullableDate: JsonSchema = { type: ['string', 'null'], format: 'date-time' };
@@ -113,10 +114,20 @@ const tokenQuoteProperties = {
 const tokenOfferingProperties = {
   active: bool,
   autoBid: bool,
-  inputRateMicrosPerMillion: { ...positiveTokens, maximum: 1_000_000_000_000 },
-  outputRateMicrosPerMillion: { ...positiveTokens, maximum: 1_000_000_000_000 },
+  inputRateMicrosPerMillion: {
+    ...positiveTokens,
+    minimum: 100,
+    multipleOf: 100,
+    maximum: 1_000_000_000_000,
+  },
+  outputRateMicrosPerMillion: {
+    ...positiveTokens,
+    minimum: 100,
+    multipleOf: 100,
+    maximum: 1_000_000_000_000,
+  },
   instantMarkupBps: { ...tokens, maximum: 100_000 },
-  minimumPriceCents: { ...cents, minimum: 1 },
+  minimumPriceCents: { ...cents, minimum: 0.01 },
   maxOutstandingInputTokens: { ...positiveTokens, maximum: 100_000_000 },
   maxOutstandingOutputTokens: { ...positiveTokens, maximum: 10_000_000 },
 };
@@ -198,7 +209,7 @@ export const BROKER_API_SCHEMAS: Record<string, JsonSchema> = {
       ...tokenQuoteProperties,
       operationKey,
       mode: { type: 'string', enum: ['auction', 'instant'] },
-      maxTotalCents: { ...cents, minimum: 1 },
+      maxTotalCents: { ...cents, minimum: 0.01 },
       quoteId: tokenQuoteId,
     },
     ['operationKey', 'inputTokens', 'outputTokens', 'mode', 'maxTotalCents'],
@@ -828,8 +839,8 @@ export const BROKER_API_SCHEMAS: Record<string, JsonSchema> = {
     {
       id,
       kind: string,
-      amountCents: integer,
-      reservedDeltaCents: integer,
+      amountCents: { ...cents, minimum: -100000000 },
+      reservedDeltaCents: { ...cents, minimum: -100000000 },
       agreementId: string,
       grantId: id,
       operationKey: string,

@@ -11,14 +11,17 @@ const rates = {
 };
 describe('prepaid pack pricing uses exact combined dimensions', () => {
   it('covers uncached provider costs after the fifteen percent fee', () => {
-    expect(packPrice(rates, 100000, 20000)).toEqual({ costFloorCents: 25, priceCents: 28 });
+    expect(packPrice(rates, 100000, 20000)).toEqual({ costFloorCents: 24.71, priceCents: 27.5 });
     expect(packPrice({ ...rates, input_rate: 1, output_rate: 1 }, 100000, 20000)).toEqual({
-      costFloorCents: 25,
-      priceCents: 25,
+      costFloorCents: 24.71,
+      priceCents: 24.71,
     });
   });
   it('applies an explicit instant markup before rounding once', () => {
-    expect(packPrice(rates, 100000, 20000, true)).toEqual({ costFloorCents: 25, priceCents: 31 });
+    expect(packPrice(rates, 100000, 20000, true)).toEqual({
+      costFloorCents: 24.71,
+      priceCents: 30.25,
+    });
   });
   it('rounds the two dimensions together, without a separate rounding charge', () => {
     expect(

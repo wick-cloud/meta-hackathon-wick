@@ -1,3 +1,4 @@
+import { moneyCents } from './data.js';
 import type { SupplierPolicy } from '../../shared/types.js';
 import { HttpError } from '../context.js';
 import { integer } from './data.js';
@@ -21,8 +22,8 @@ export function validatePolicy(input: unknown, previous?: SupplierPolicy): Suppl
     throw new HttpError(400, 'Auto bid must be true or false.');
   const policy: SupplierPolicy = {
     autoBid: body.autoBid,
-    minimumPriceCents: integer(body.minimumPriceCents, 'Minimum total price'),
-    basePriceCents: integer(body.basePriceCents, 'Base total price'),
+    minimumPriceCents: moneyCents(body.minimumPriceCents, 'Minimum total price'),
+    basePriceCents: moneyCents(body.basePriceCents, 'Base total price'),
     reserveSlots: integer(
       body.reserveSlots === undefined ? (previous?.reserveSlots ?? 0) : body.reserveSlots,
       'Reserved spare slots',
@@ -34,7 +35,7 @@ export function validatePolicy(input: unknown, previous?: SupplierPolicy): Suppl
     throw new HttpError(400, 'Base price must be at least the minimum price.');
   const maxPrice = body.maxPriceCents === undefined ? previous?.maxPriceCents : body.maxPriceCents;
   if (maxPrice !== undefined && maxPrice !== null) {
-    policy.maxPriceCents = integer(maxPrice, 'Maximum total price');
+    policy.maxPriceCents = moneyCents(maxPrice, 'Maximum total price');
     if (policy.maxPriceCents < policy.basePriceCents)
       throw new HttpError(400, 'Maximum price must be at least the base price.');
   }

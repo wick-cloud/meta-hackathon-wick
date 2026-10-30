@@ -1,3 +1,5 @@
+import { moneyAmount } from './data.js';
+import { centsFromUnits, moneyUnits } from '../../shared/money.js';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
 import type { PoolClient } from 'pg';
@@ -45,7 +47,7 @@ const createOrderSchema = quantities
   .extend({
     operationKey: operationSchema,
     mode: z.enum(['auction', 'instant']),
-    maxTotalCents: integer(100_000_000),
+    maxTotalCents: moneyAmount(100_000_000),
     quoteId: z.string().max(4000).optional(),
   })
   .strict();
@@ -55,9 +57,9 @@ export function packPrice(row: Row, input: number, output: number, instant = fal
   const native =
     BigInt(input) * BigInt(row.cost_input_rate) + BigInt(output) * BigInt(row.cost_output_rate);
   const ask = BigInt(input) * BigInt(row.input_rate) + BigInt(output) * BigInt(row.output_rate);
-  const floor = Number(ceil(native, 8_500_000_000n));
-  const price = Number(
-    ceil(ask * BigInt(instant ? 10000 + row.instant_markup_bps : 10000), 100_000_000_000_000n),
+  const floor = centsFromUnits(ceil(native, 85_000_000n));
+  const price = centsFromUnits(
+    ceil(ask * BigInt(instant ? 10000 + row.instant_markup_bps : 10000), 1_000_000_000_000n),
   );
   return { priceCents: Math.max(floor, price, row.minimum_price_cents), costFloorCents: floor };
 }
@@ -152,6 +154,7 @@ function hasCapacity(row: Row, input: number, output: number) {
 }
 function snapshot(row: Row) {
   return {
+    currencyDecimals: 4,
     provider: row.provider,
     providerId: row.provider_id,
     sourceMode: row.source_mode,
@@ -717,7 +720,10 @@ export async function retirePackLocked(
     const unusedValue =
       BigInt(pack.retired_input) * BigInt(s.inputRate) +
       BigInt(pack.retired_output) * BigInt(s.outputRate);
-    const refund = Number((BigInt(pack.price_cents) * unusedValue) / issuedValue);
+    const refund =
+      s.currencyDecimals === 4
+        ? centsFromUnits((moneyUnits(pack.price_cents) * unusedValue) / issuedValue)
+        : Number((BigInt(pack.price_cents) * unusedValue) / issuedValue);
     if (refund > 0) {
       const grant = (
         await db.query('SELECT * FROM broker_inference_grants WHERE id=$1', [pack.grant_id])
@@ -805,10 +811,10 @@ export async function updateOffering(ctx: AppContext, actor: Actor, raw: unknown
       expectedRevision: integer(2_000_000_000),
       active: z.boolean(),
       autoBid: z.boolean(),
-      inputRateMicrosPerMillion: integer(1_000_000_000_000),
-      outputRateMicrosPerMillion: integer(1_000_000_000_000),
+      inputRateMicrosPerMillion: integer(1_000_000_000_000, 100).multipleOf(100),
+      outputRateMicrosPerMillion: integer(1_000_000_000_000, 100).multipleOf(100),
       instantMarkupBps: integer(100_000, 0),
-      minimumPriceCents: integer(100_000_000),
+      minimumPriceCents: moneyAmount(100_000_000),
       maxOutstandingInputTokens: integer(100_000_000),
       maxOutstandingOutputTokens: integer(10_000_000),
     })

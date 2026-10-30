@@ -1,3 +1,4 @@
+import { centsToUsd, usdToCents, isMoneyCents } from '../shared/money';
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import {
   ArrowLeft,
@@ -169,11 +170,11 @@ export function AgreementComposer() {
     Number.isSafeInteger(form.minimumQuantity) &&
     form.minimumQuantity >= 1 &&
     form.minimumQuantity <= form.targetQuantity &&
-    Number.isSafeInteger(form.maxDiscountRateCentsPerHour) &&
+    isMoneyCents(form.maxDiscountRateCentsPerHour) &&
     form.maxDiscountRateCentsPerHour > 0 &&
     (!form.continuation?.enabled ||
       (validClock(form.continuation.until) &&
-        Number.isSafeInteger(form.continuation.maxRateCentsPerHour) &&
+        isMoneyCents(form.continuation.maxRateCentsPerHour) &&
         form.continuation.maxRateCentsPerHour > 0));
   function updateForm(updater: (old: typeof form) => typeof form) {
     inputRevision.current++;
@@ -259,9 +260,9 @@ export function AgreementComposer() {
       });
       if (controller.signal.aborted || revision !== inputRevision.current) return;
       if (
-        !Number.isSafeInteger(confirmed.maxAmountCents) ||
+        !isMoneyCents(confirmed.maxAmountCents) ||
         confirmed.maxAmountCents < 1 ||
-        !Number.isSafeInteger(confirmed.minimumAmountCents) ||
+        !isMoneyCents(confirmed.minimumAmountCents) ||
         confirmed.minimumAmountCents < 1 ||
         confirmed.minimumAmountCents > confirmed.maxAmountCents ||
         !Array.isArray(confirmed.windows) ||
@@ -530,14 +531,14 @@ export function AgreementComposer() {
                   <span>Maximum discounted rate (USD / VM-hour)</span>
                   <input
                     type="number"
-                    min="0.01"
-                    step="0.01"
+                    min="0.0001"
+                    step="0.0001"
                     required
-                    value={form.maxDiscountRateCentsPerHour / 100}
+                    value={centsToUsd(form.maxDiscountRateCentsPerHour)}
                     onChange={(e) =>
                       change(
                         'maxDiscountRateCentsPerHour',
-                        Math.round(Number(e.target.value) * 100),
+                        usdToCents(e.target.value || '0') ?? form.maxDiscountRateCentsPerHour,
                       )
                     }
                   />
@@ -579,14 +580,16 @@ export function AgreementComposer() {
                       <span>Maximum normal rate (USD / VM-hour)</span>
                       <input
                         type="number"
-                        min="0.01"
-                        step="0.01"
+                        min="0.0001"
+                        step="0.0001"
                         required
-                        value={form.continuation.maxRateCentsPerHour / 100}
+                        value={centsToUsd(form.continuation.maxRateCentsPerHour)}
                         onChange={(e) =>
                           change('continuation', {
                             ...form.continuation!,
-                            maxRateCentsPerHour: Math.round(Number(e.target.value) * 100),
+                            maxRateCentsPerHour:
+                              usdToCents(e.target.value || '0') ??
+                              form.continuation!.maxRateCentsPerHour,
                           })
                         }
                       />

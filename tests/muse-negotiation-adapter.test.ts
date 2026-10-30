@@ -11,6 +11,28 @@ const policy = {
   allowedCatalogIds: ['small'],
 };
 const capacity = { total: 5, held: 1, available: 4 };
+it('preserves explicit four-decimal USD buyer limits and provider draft floors', async () => {
+  expect(parseExplicitBuyerDescription('Budget $1.2345; under 2.3456 USD').maxPriceCents).toBe(
+    123.45,
+  );
+  expect(parseExplicitBuyerDescription('Maximum total 0.0001 USD').maxPriceCents).toBe(0.01);
+  expect(parseExplicitBuyerDescription('Budget $1.23456').maxPriceCents).toBeUndefined();
+  const muse = createMuseAdapter({ museMode: 'fixture' });
+  const precise = await muse.proposeCapacityPolicy({
+    strategy: 'Never quote below $0.0123',
+    policy,
+    capacity,
+    catalogIds: ['small'],
+  });
+  expect(precise.policy.minimumPriceCents).toBe(1.23);
+  const tooPrecise = await muse.proposeCapacityPolicy({
+    strategy: 'Never quote below $1.23456',
+    policy,
+    capacity,
+    catalogIds: ['small'],
+  });
+  expect(tooPrecise.policy.minimumPriceCents).toBe(policy.minimumPriceCents);
+});
 const capacityInput = {
   strategy: 'Fill idle machines, keep two slots spare, never quote below $0.05',
   policy,

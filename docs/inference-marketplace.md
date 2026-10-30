@@ -50,7 +50,7 @@ Input bounds/output limits, native model and semantic revision form the frozen a
 
 ## Funding and purchase invariants
 
-Only the signed-in owner can create, fund, close or replace a grant key. Each grant defaults to 24 hours (one minute to seven days configurable). Funding reserves credit once from the owner's existing wallet; no external charge is collected. The cash invariant, in integer cents, is:
+Only the signed-in owner can create, fund, close or replace a grant key. Each grant defaults to 24 hours (one minute to seven days configurable). Funding reserves credit once from the owner's existing wallet; no external charge is collected. The cash invariant, evaluated in integer hundredth-cent units ($0.0001), is:
 
 `funded = available + purchase holds + net pack spend + returned to owner`.
 
@@ -58,7 +58,7 @@ Agents have only `account:read`, `inference:read`, `inference:use`, `tokens:buy`
 
 A 30-second auction reserves its full maximum within the grant; an instant purchase uses a signed, owner/grant/quantity/route/revision-bound 60-second quote. Both award through the same transaction. Lowest eligible total wins, then earliest bid and ID. No automatic fallback, refill or grant top-up occurs. Provider policies auto-bid for new demand; inactive policies and exhausted capacity do not bid. Purchases and inference require a stable operation key. Duplicate purchases return the original order before checking quote freshness, and mismatched payloads conflict.
 
-Prices combine both dimensions using BigInt and round once to whole cents. Provider asks are separate from native cost assumptions. Initial researched uncached cost rates are $1.25/M input and $4.25/M output; cached discounts are not assumed in the floor. Gross pack prices must cover that combined cost after the 15% provider commission. Ordinary unused prepaid quota is non-refundable. Calls consume purchased quota and create **no second money charge**. Exact fee/share microUSD use the existing revenue-share helper. The token market does not produce VM invoices or change VM pricing.
+Prices combine both dimensions using BigInt and round upward once to $0.0001. Provider asks are separate from native cost assumptions. Initial researched uncached cost rates are $1.25/M input and $4.25/M output; cached discounts are not assumed in the floor. Gross pack prices must cover that combined cost after the 15% provider commission. Ordinary unused prepaid quota is non-refundable. Calls consume purchased quota and create **no second money charge**. Exact fee/share microUSD use the existing revenue-share helper. The token market does not produce VM invoices or change VM pricing. See [money precision](money.md) for API units, historical terms and migration behavior.
 
 ## Quota and uncertainty
 

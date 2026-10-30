@@ -1,3 +1,4 @@
+import { moneyCents } from './data.js';
 import { clientOperationKey, recordKeyAction, withOperation } from '../operations.js';
 import type { FastifyInstance } from 'fastify';
 import type { Pool } from 'pg';
@@ -510,7 +511,7 @@ export async function registerMarketplace(app: FastifyInstance, ctx: AppContext)
       name = shortText(b?.name, 'Offering name', 160),
       description = shortText(b?.description, 'Offering description', 2000);
     const fixturePrice =
-      ctx.wick.mode === 'fixture' ? integer(b?.priceCents, 'Total price') : undefined;
+      ctx.wick.mode === 'fixture' ? moneyCents(b?.priceCents, 'Total price') : undefined;
     if (b.durationMinutes !== undefined && b.durationMinutes !== 30)
       throw new HttpError(400, 'Published offering prices use a reviewed 30-minute baseline.');
     return transaction(ctx.pool, async (db) =>

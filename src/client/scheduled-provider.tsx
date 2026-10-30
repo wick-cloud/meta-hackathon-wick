@@ -1,3 +1,4 @@
+import { centsToUsd, usdToCents, moneyUnits } from '../shared/money';
 import { useRef, useState, type FormEvent } from 'react';
 import {
   ArrowRight,
@@ -410,12 +411,15 @@ export function ProviderScheduled() {
                       <span>Normal rate (USD / VM-hour)</span>
                       <input
                         type="number"
-                        min="0.01"
-                        step="0.01"
+                        min="0.0001"
+                        step="0.0001"
                         required
-                        value={form.normalRateCentsPerHour / 100}
+                        value={centsToUsd(form.normalRateCentsPerHour)}
                         onChange={(e) =>
-                          change('normalRateCentsPerHour', Math.round(Number(e.target.value) * 100))
+                          change(
+                            'normalRateCentsPerHour',
+                            usdToCents(e.target.value || '0') ?? form.normalRateCentsPerHour,
+                          )
                         }
                       />
                     </label>
@@ -423,14 +427,14 @@ export function ProviderScheduled() {
                       <span>Discounted rate (USD / VM-hour)</span>
                       <input
                         type="number"
-                        min="0.01"
-                        step="0.01"
+                        min="0.0001"
+                        step="0.0001"
                         required
-                        value={form.discountRateCentsPerHour / 100}
+                        value={centsToUsd(form.discountRateCentsPerHour)}
                         onChange={(e) =>
                           change(
                             'discountRateCentsPerHour',
-                            Math.round(Number(e.target.value) * 100),
+                            usdToCents(e.target.value || '0') ?? form.discountRateCentsPerHour,
                           )
                         }
                       />
@@ -497,10 +501,12 @@ export function ProviderScheduled() {
                 {hourly(form.discountRateCentsPerHour)}
               </DetailRow>
               <DetailRow label="You keep · 85%">
-                {moneyMicros(BigInt(Math.max(0, form.discountRateCentsPerHour)) * 8500n)} / VM-hour
+                {moneyMicros(moneyUnits(Math.max(0, form.discountRateCentsPerHour)) * 85n)} /
+                VM-hour
               </DetailRow>
               <DetailRow label="Broker · 15%">
-                {moneyMicros(BigInt(Math.max(0, form.discountRateCentsPerHour)) * 1500n)} / VM-hour
+                {moneyMicros(moneyUnits(Math.max(0, form.discountRateCentsPerHour)) * 15n)} /
+                VM-hour
               </DetailRow>
               <p className="field-hint">
                 Provider net is before compute costs. Buyers pay no added fee.
@@ -690,7 +696,8 @@ export function ProviderScheduled() {
                         <td>
                           <strong>{money(c.totalCents)} gross</strong>
                           <div className="market-meta">
-                            {moneyMicros(BigInt(c.totalCents) * 8500n)} estimated net before compute
+                            {moneyMicros(moneyUnits(c.totalCents) * 85n)} estimated net before
+                            compute
                             <br />
                           </div>
                         </td>

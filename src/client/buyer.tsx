@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useState, type FormEvent } from 'react';
 import { fixedQuote, managedPricing } from '../shared/pricing';
 import { parseExplicitBuyerDescription } from '../shared/muse-contracts';
+import { addCents } from '../shared/money';
 import { seedAlternativeDraft } from './negotiation';
 import { AgreementCharges } from './agreement-charges';
 import {
@@ -1406,7 +1407,7 @@ export function Invoices() {
           invoice.number || invoice.id,
           invoice.vmId,
           new Date(invoice.createdAt).toISOString(),
-          (amount(invoice) / 100).toFixed(2),
+          (amount(invoice) / 100).toFixed(4),
           'No payment due',
         ]
           .map((field) => `"${String(field).replaceAll('"', '""')}"`)
@@ -1451,7 +1452,7 @@ export function Invoices() {
       <div className="stats-grid">
         <StatCard
           label="Loaded instant charges"
-          value={money(items.reduce((total, invoice) => total + amount(invoice), 0))}
+          value={money(items.reduce((total, invoice) => addCents(total, amount(invoice)), 0))}
           note="Fixed rental totals in USD"
           icon={<CircleDollarSign size={18} />}
         />

@@ -2,6 +2,7 @@ import type { Pool, PoolClient } from 'pg';
 import type { Actor, CatalogItem } from '../../shared/types.js';
 import { HttpError, type AppContext } from '../context.js';
 import { fixedQuote } from '../../shared/pricing.js';
+import { isMoneyCents } from '../../shared/money.js';
 export type Row = Record<string, any>;
 export const iso = (value: unknown): string | null =>
   value ? new Date(value as string).toISOString() : null;
@@ -160,6 +161,14 @@ export async function getProvider(db: Pool | PoolClient, actor: Actor): Promise<
 export function integer(value: unknown, label: string, min = 0, max = 100000000) {
   if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < min || value > max)
     throw new HttpError(400, `${label} must be an integer between ${min} and ${max}.`);
+  return value;
+}
+export function moneyCents(value: unknown, label: string, min = 0, max = 100000000): number {
+  if (!isMoneyCents(value) || value < min || value > max)
+    throw new HttpError(
+      400,
+      `${label} must be within its allowed limit with at most four USD decimal places.`,
+    );
   return value;
 }
 export function positiveNumber(value: unknown, label: string, max: number) {

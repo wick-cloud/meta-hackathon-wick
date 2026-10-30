@@ -32,7 +32,7 @@ describe('one shared browser/server scheduled funding calculation', () => {
     expect(estimate.maximum).toBe(server.maxAmountCents);
     expect(agreementWindows(input)).toEqual(server.windows);
   });
-  it('applies the one-cent minimum per VM/window before multiplying quantity and seven days', () => {
+  it('applies four-decimal billing per VM/window before multiplying quantity and seven days', () => {
     const spec = {
       ...input,
       timeZone: 'UTC',
@@ -40,8 +40,8 @@ describe('one shared browser/server scheduled funding calculation', () => {
       maxDiscountRateCentsPerHour: 1,
       continuation: undefined,
     };
-    expect(agreementEstimate(spec)).toEqual({ daily: 1, maximum: 140, minimum: 84 });
-    expect(validateAgreement(spec, now).maxAmountCents).toBe(140);
+    expect(agreementEstimate(spec)).toEqual({ daily: 0.02, maximum: 2.8, minimum: 1.68 });
+    expect(validateAgreement(spec, now).maxAmountCents).toBe(2.8);
   });
   it('rounds a partial hour per VM/window, with one combined rounding for both price segments', () => {
     const spec = {
@@ -50,8 +50,8 @@ describe('one shared browser/server scheduled funding calculation', () => {
       windowEnd: '00:14',
       continuation: { enabled: true, until: '00:15', maxRateCentsPerHour: 20 },
     };
-    expect(agreementEstimate(spec)).toEqual({ daily: 3, maximum: 420, minimum: 252 });
-    expect(validateAgreement(spec, now).maxAmountCents).toBe(420);
+    expect(agreementEstimate(spec)).toEqual({ daily: 2.67, maximum: 373.8, minimum: 224.28 });
+    expect(validateAgreement(spec, now).maxAmountCents).toBe(373.8);
   });
   it('charges actual UTC elapsed hours across the November Vancouver transition rather than seven identical local-clock durations', () => {
     const spec = { ...input, startDate: '2025-10-30', timeZone: 'America/Vancouver' },

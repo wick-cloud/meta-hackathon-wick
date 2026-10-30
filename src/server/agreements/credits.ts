@@ -4,7 +4,8 @@ import type { Pool, PoolClient } from 'pg';
 import type { CreditEntry, CreditWallet } from '../../shared/agreements.js';
 import { HttpError, type AppContext } from '../context.js';
 import { transaction } from '../marketplace/db.js';
-import { pagination, encodeCursor, shortText } from '../marketplace/data.js';
+import { pagination, encodeCursor, shortText, integer } from '../marketplace/data.js';
+import { isMoneyCents, addCents, subtractCents } from '../../shared/money.js';
 
 type Db = Pool | PoolClient;
 export const fingerprint = (value: unknown) =>
@@ -15,10 +16,10 @@ export function operationKey(value: unknown): string {
   return value;
 }
 export function cents(value: unknown, name = 'Credit amount', min = 0, max = 100000000): number {
-  if (!Number.isSafeInteger(value) || Number(value) < min || Number(value) > max)
+  if (!isMoneyCents(value) || value < min || value > max)
     throw new HttpError(
       400,
-      `${name} must be a whole number of USD cents within its allowed limit.`,
+      `${name} must be within its allowed limit with at most four USD decimal places.`,
     );
   return Number(value);
 }
@@ -28,7 +29,7 @@ function wallet(row?: Record<string, any>): CreditWallet {
   return {
     balanceCents,
     reservedCents,
-    availableCents: balanceCents - reservedCents,
+    availableCents: subtractCents(balanceCents, reservedCents),
     currency: 'USD',
     kind: 'broker-pilot-credit',
     wickComputeCreditsSeparate: true,
@@ -94,10 +95,10 @@ export async function applyCreditEntry(
       );
     return { wallet: wallet(row), replayed: true };
   }
-  const balance = Number(row.balance_cents) + input.balanceDeltaCents,
-    reserved = Number(row.reserved_cents) + input.reservedDeltaCents;
+  const balance = addCents(row.balance_cents, input.balanceDeltaCents),
+    reserved = addCents(row.reserved_cents, input.reservedDeltaCents);
   if (
-    !Number.isSafeInteger(balance) ||
+    !isMoneyCents(balance) ||
     balance < 0 ||
     balance > 1000000000000 ||
     reserved < 0 ||
@@ -164,7 +165,7 @@ export async function registerCreditRoutes(app: FastifyInstance, ctx: AppContext
     await ctx.requireActor(request, ['admin']);
     const body = request.body as Record<string, unknown>;
     const buyerId = shortText(body?.buyerId, 'Buyer ID', 150),
-      amount = cents(body?.amountCents, 'Grant', 1),
+      amount = cents(body?.amountCents, 'Grant', 0.01),
       key = operationKey(body?.operationKey),
       description = shortText(
         body?.description ?? 'Administrator pilot credit grant',
@@ -190,7 +191,7 @@ export async function registerCreditRoutes(app: FastifyInstance, ctx: AppContext
   app.get('/api/admin/credit-buyers', async (request) => {
     await ctx.requireActor(request, ['admin']);
     const q = (request.query ?? {}) as Record<string, string>,
-      limit = q.limit === undefined ? 30 : cents(Number(q.limit), 'Page size', 1, 100);
+      limit = q.limit === undefined ? 30 : integer(Number(q.limit), 'Page size', 1, 100);
     if (q.cursor && !/^[A-Za-z0-9_-]{1,250}$/.test(q.cursor))
       throw new HttpError(400, 'Invalid buyer cursor.');
     let after = '';

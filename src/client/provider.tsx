@@ -1,3 +1,4 @@
+import { isMoneyCents, moneyUnits } from '../shared/money';
 import { useEffect, useState, type FormEvent } from 'react';
 import {
   Activity,
@@ -73,7 +74,7 @@ import {
 } from './components';
 
 function ProviderRevenueSplit({ grossCents }: { grossCents: number }) {
-  if (!Number.isSafeInteger(grossCents) || grossCents < 1 || grossCents > 100000000) return null;
+  if (!isMoneyCents(grossCents) || grossCents < 0.01 || grossCents > 100000000) return null;
   const split = revenueShare(grossCents);
   return (
     <div className="provider-revenue-split" aria-label="Rental revenue breakdown">
@@ -1365,7 +1366,7 @@ export function ProviderEarnings() {
   const items = data?.items ?? [];
   const assessed = items.filter((item) => !!item.revenueShare);
   const gross = assessed.reduce(
-    (sum, item) => sum + BigInt(item.revenueShare!.grossCents) * 10000n,
+    (sum, item) => sum + moneyUnits(item.revenueShare!.grossCents) * 100n,
     0n,
   );
   const fee = assessed.reduce((sum, item) => sum + BigInt(item.revenueShare!.brokerFeeMicros), 0n);

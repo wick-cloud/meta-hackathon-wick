@@ -1,3 +1,4 @@
+import { subtractCents } from '../../shared/money.js';
 import type { BrokerKeyAuthority } from '../../shared/developer.js';
 import { enforceKeyLimit, recordKeyAction } from '../operations.js';
 import { randomUUID } from 'node:crypto';
@@ -629,7 +630,7 @@ async function creditUndeliveredSlot(db: PoolClient, a: Row) {
         [
           charge.id,
           a.unit_price_cents,
-          revenueShare(Number(charge.total_cents) - a.unit_price_cents),
+          revenueShare(subtractCents(Number(charge.total_cents), a.unit_price_cents)),
         ],
       );
     await db.query('UPDATE broker_agreements SET settled_cents=settled_cents-$2 WHERE id=$1', [

@@ -1,7 +1,9 @@
+import { isMoneyCents } from '../../shared/money.js';
 import type { CatalogItem } from '../../shared/types.js';
 
 const nullableString = { type: ['string', 'null'] };
 const nullableInteger = { type: ['integer', 'null'] };
+const nullableMoney = { type: ['number', 'null'], multipleOf: 0.01 };
 const properties = {
   timeZone: nullableString,
   startDate: nullableString,
@@ -12,12 +14,12 @@ const properties = {
   capacityQuantity: nullableInteger,
   region: nullableString,
   catalogId: nullableString,
-  maxDiscountRateCentsPerHour: nullableInteger,
-  discountRateCentsPerHour: nullableInteger,
-  normalRateCentsPerHour: nullableInteger,
+  maxDiscountRateCentsPerHour: nullableMoney,
+  discountRateCentsPerHour: nullableMoney,
+  normalRateCentsPerHour: nullableMoney,
   continuationEnabled: { type: ['boolean', 'null'] },
   continuationUntil: nullableString,
-  maxNormalRateCentsPerHour: nullableInteger,
+  maxNormalRateCentsPerHour: nullableMoney,
   availableUntil: nullableString,
   weekdays: {
     anyOf: [{ type: 'array', items: { type: 'integer' }, maxItems: 7 }, { type: 'null' }],
@@ -53,7 +55,12 @@ export function scheduledDraft(
   const number = (key: string, max = 100000000) => {
     const value = row[key];
     if (value == null) return undefined;
-    if (!Number.isSafeInteger(value) || Number(value) < 1 || Number(value) > max)
+    const monetary = key.includes('Cents');
+    if (
+      !(monetary ? isMoneyCents(value) : Number.isSafeInteger(value)) ||
+      Number(value) < (monetary ? 0.01 : 1) ||
+      Number(value) > max
+    )
       throw new Error('Invalid scheduled draft number.');
     return Number(value);
   };
