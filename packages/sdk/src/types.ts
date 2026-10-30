@@ -30,6 +30,7 @@ export interface BrokerKeyLimits {
 export interface BrokerKeyAuthority {
   id: string;
   grantId?: string;
+  packId?: string;
   scopes: BrokerScope[];
   limits: BrokerKeyLimits;
 }

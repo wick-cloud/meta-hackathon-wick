@@ -41,6 +41,7 @@ import { AdminCreditGrant } from './admin-credits';
 import { DeveloperKeys } from './developer-keys';
 import { Agents, AgentDetail, TokenComposer, TokenOrderPage, ProviderInference } from './inference';
 import { PurchaseChooser } from './purchases';
+import { TokenInventory } from './token-inventory';
 import {
   ProviderCapacity,
   ProviderPolicy,
@@ -55,6 +56,7 @@ type NavigationItem = { path: string; label: string; icon: typeof Box; group?: s
 const buyerNavigation: NavigationItem[] = [
   { path: '/orders', label: 'Orders', icon: ListOrdered, group: 'WORKSPACE' },
   { path: '/vms', label: 'Virtual machines', icon: LayoutGrid, group: 'WORKSPACE' },
+  { path: '/tokens', label: 'Purchased tokens', icon: Sparkles, group: 'WORKSPACE' },
   { path: '/new/vm', label: 'Launch a VM', icon: Server, group: 'COMPUTE & AI' },
   { path: '/token-orders/new', label: 'Buy AI tokens', icon: Sparkles, group: 'COMPUTE & AI' },
   { path: '/agents', label: 'Agent budgets', icon: Bot, group: 'COMPUTE & AI' },
@@ -374,6 +376,7 @@ export default function App() {
     else if (path === '/agents') content = <Agents key={user.id} search={search} />;
     else if (path.startsWith('/agents/'))
       content = <AgentDetail key={`${user.id}:${path}`} id={path.split('/')[2]!} />;
+    else if (path === '/tokens') content = <TokenInventory key={user.id} search={search} />;
     else if (path === '/token-orders/new')
       content = <TokenComposer key={location} search={search} />;
     else if (path.startsWith('/token-orders/'))

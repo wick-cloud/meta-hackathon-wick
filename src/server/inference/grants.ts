@@ -23,6 +23,7 @@ import {
   operationSchema,
   orderView,
   packView,
+  PACK_VIEW_COLUMNS,
   receiptView,
   runtime,
 } from './data.js';
@@ -286,23 +287,35 @@ export async function scopedPacks(ctx: AppContext, actor: Actor, query: unknown,
   const p = pagination(query);
   return transaction(ctx.pool, async (db) => {
     await authority(db, actor, provider ? 'provider:read' : 'inference:read');
-    let key: string;
+    let key: string, predicate: string;
     if (provider) {
       const row = (await db.query('SELECT id FROM broker_providers WHERE user_id=$1', [actor.id]))
         .rows[0];
       if (!row) failure(403, 'provider_unavailable', 'This provider account is not configured.');
       key = row.id;
-    } else {
+      predicate = 'provider_id=$1::uuid';
+    } else if (actor.apiKey) {
       if (!actor.apiKey?.grantId)
         failure(403, 'grant_key_required', 'Use a grant-bound agent key.');
       key = actor.apiKey.grantId;
       await lockedGrant(db, actor, key);
+      predicate = actor.apiKey.packId ? 'id=$1::uuid' : 'grant_id=$1::uuid';
+      key = actor.apiKey.packId ?? key;
+    } else {
+      key = actor.id;
+      predicate = 'buyer_id=$1::text';
     }
     const rows: Row[] = (
       await db.query(
-        `SELECT *,created_at::text cursor_created_at FROM broker_token_packs WHERE ${provider ? 'provider_id=$1::uuid' : 'grant_id=$1::uuid'}
+        `SELECT ${PACK_VIEW_COLUMNS},created_at::text cursor_created_at FROM broker_token_packs WHERE ${predicate} AND($5::uuid IS NULL OR grant_id=$5)
       AND ($2::timestamptz IS NULL OR(created_at,id)<($2,$3::uuid)) ORDER BY created_at DESC,id DESC LIMIT $4`,
-        [key, p.cursor, p.cursorId, p.limit + 1],
+        [
+          key,
+          p.cursor,
+          p.cursorId,
+          p.limit + 1,
+          actor.apiKey?.packId ? actor.apiKey.grantId : null,
+        ],
       )
     ).rows;
     return {

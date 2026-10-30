@@ -38,6 +38,7 @@ import {
   updateOffering,
 } from './market.js';
 import { complete, receipt, recoverRequest, resolveRequest } from './gateway.js';
+import { issuePackKey, tokenPack } from './pack-access.js';
 
 export async function registerInference(app: FastifyInstance, ctx: AppContext) {
   await initializeInference(ctx);
@@ -88,6 +89,10 @@ export async function registerInference(app: FastifyInstance, ctx: AppContext) {
     });
   });
   app.get('/api/inference/packs', async (r) => scopedPacks(ctx, await buyer(r), r.query));
+  app.get('/api/inference/packs/:id', async (r) => tokenPack(ctx, await buyer(r), id(r)));
+  app.post('/api/inference/packs/:id/keys', async (r) =>
+    issuePackKey(ctx, await buyer(r, true), id(r), r.body),
+  );
   app.post('/api/inference/quotes', async (r) => quotes(ctx, await buyer(r, true), r.body));
   app.post('/api/token-orders', async (r) => createTokenOrder(ctx, await buyer(r, true), r.body));
   app.get('/api/token-orders/:id', async (r) => tokenOrderDetail(ctx, await buyer(r), id(r)));

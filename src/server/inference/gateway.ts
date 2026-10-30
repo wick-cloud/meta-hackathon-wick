@@ -266,6 +266,8 @@ export async function complete(
       )
     ).rows[0];
     if (prior) {
+      if (actor.apiKey?.packId && prior.pack_id !== actor.apiKey.packId)
+        failure(403, 'pack_scope', 'This request belongs to another token batch.');
       if (prior.input_fingerprint !== fingerprint)
         failure(
           409,
@@ -304,9 +306,9 @@ export async function complete(
       failure(429, 'grant_busy', 'This grant has two active or unresolved inference requests.');
     const packs = (
       await db.query(
-        `SELECT * FROM broker_token_packs WHERE grant_id=$1 AND status='active' AND expires_at>clock_timestamp()
+        `SELECT * FROM broker_token_packs WHERE grant_id=$1 AND status='active' AND expires_at>clock_timestamp() AND($2::uuid IS NULL OR id=$2)
       ORDER BY expires_at,id LIMIT 10 FOR UPDATE`,
-        [grantId],
+        [grantId, actor.apiKey?.packId ?? null],
       )
     ).rows;
     for (const pack of packs) {
@@ -477,6 +479,8 @@ export async function receipt(ctx: AppContext, actor: Actor, id: string) {
     ])
   ).rows[0];
   if (!meta) failure(404, 'not_found', 'Inference receipt not found.');
+  if (actor.apiKey?.packId && meta.pack_id !== actor.apiKey.packId)
+    failure(404, 'not_found', 'Inference receipt not found.');
   return transaction(ctx.pool, async (db) => {
     await authority(db, actor, 'inference:read');
     await lockedGrant(db, actor, meta.grant_id);
