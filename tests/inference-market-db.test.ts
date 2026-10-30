@@ -851,6 +851,57 @@ describe.skipIf(!url)(
         }),
       ).rejects.toMatchObject({ code: 'route_unavailable' });
     });
+    it('rolls back a purchase whose grant expires while waiting for its wallet lock', async () => {
+      const g = await grant(100);
+      await pool.query(
+        "UPDATE broker_inference_grants SET expires_at=clock_timestamp()+interval '1 second' WHERE id=$1",
+        [g.id],
+      );
+      const q = (
+        await quotes(ctx, owner, { grantId: g.id, inputTokens: 10000, outputTokens: 1000 })
+      ).items[0];
+      const blocker = await pool.connect();
+      try {
+        await blocker.query('BEGIN');
+        await blocker.query(
+          'SELECT buyer_id FROM broker_credit_wallets WHERE buyer_id=$1 FOR UPDATE',
+          [owner.id],
+        );
+        const pending = createTokenOrder(ctx, owner, {
+          grantId: g.id,
+          operationKey: randomUUID(),
+          mode: 'instant',
+          inputTokens: 10000,
+          outputTokens: 1000,
+          quoteId: q.quoteId,
+          maxTotalCents: 100,
+        });
+        const result = pending.then(
+          () => null,
+          (e: unknown) => e,
+        );
+        await new Promise((r) => setTimeout(r, 1200));
+        await blocker.query('COMMIT');
+        expect(await result).toMatchObject({ code: 'grant_closed' });
+      } finally {
+        await blocker.query('ROLLBACK');
+        blocker.release();
+      }
+      expect(
+        (
+          await pool.query(
+            "SELECT count(*)::int n FROM broker_credit_ledger WHERE kind='token_purchase'",
+          )
+        ).rows[0].n,
+      ).toBe(0);
+      expect((await pool.query('SELECT count(*)::int n FROM broker_token_orders')).rows[0].n).toBe(
+        0,
+      );
+      expect(await creditWalletView(pool, owner.id)).toMatchObject({
+        balanceCents: 5000,
+        reservedCents: 100,
+      });
+    });
     it('blocks route replacement with outstanding quota and freezes seller history', async () => {
       const g = await grant(),
         pack = await buy(g.id);

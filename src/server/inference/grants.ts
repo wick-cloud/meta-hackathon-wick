@@ -139,6 +139,12 @@ export async function fundGrant(ctx: AppContext, actor: Actor, id: string, raw: 
           reservedDeltaCents: input.amountCents,
           description: 'Add agent grant funding',
         });
+        if (new Date(grant.expires_at) <= (await clock(db)))
+          failure(
+            409,
+            'grant_closed',
+            'The grant expired while funding was waiting for wallet credit.',
+          );
         const row = (
           await db.query(
             `UPDATE broker_inference_grants SET funded_cents=funded_cents+$2,available_cents=available_cents+$2 WHERE id=$1 RETURNING *`,

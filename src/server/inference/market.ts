@@ -266,6 +266,12 @@ async function purchase(db: PoolClient, grant: Row, order: Row, route: Row, bid:
     reservedDeltaCents: -price,
     description: 'Prepaid input/output token pack',
   });
+  if (new Date(grant.expires_at) <= (await clock(db)))
+    failure(
+      409,
+      'grant_closed',
+      'The grant expired while its purchase was waiting for wallet credit.',
+    );
   await db.query(
     `UPDATE broker_inference_routes SET outstanding_input=outstanding_input+$2,outstanding_output=outstanding_output+$3 WHERE provider=$1`,
     [route.provider, order.input_tokens, order.output_tokens],
