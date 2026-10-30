@@ -220,6 +220,40 @@ export function useNow() {
   }, []);
   return now;
 }
+export function AuctionCountdown({ closesAt, now }: { closesAt: string; now: number }) {
+  const seconds = Math.min(30, Math.max(0, Math.ceil((Date.parse(closesAt) - now) / 1000)));
+  const elapsed = 30 - seconds;
+  return (
+    <>
+      <div
+        className="auction-countdown"
+        role="timer"
+        aria-label="Auction countdown"
+        aria-live="off"
+      >
+        <span>{seconds.toString().padStart(2, '0')}</span>
+        <div>
+          <strong>{seconds === 0 ? 'Selecting your match' : 'seconds remaining'}</strong>
+          <p>
+            {seconds === 0
+              ? 'The auction is closing. No further bids will be accepted.'
+              : 'The winning bid will be selected automatically.'}
+          </p>
+        </div>
+      </div>
+      <div
+        className="auction-progress"
+        role="progressbar"
+        aria-label="Auction time elapsed"
+        aria-valuemin={0}
+        aria-valuemax={30}
+        aria-valuenow={elapsed}
+      >
+        <span style={{ width: `${(elapsed / 30) * 100}%` }} />
+      </div>
+    </>
+  );
+}
 export function remaining(expiresAt: string | undefined | null, now: number) {
   if (!expiresAt) return 'Admission pending';
   const s = Math.max(0, Math.ceil((new Date(expiresAt).getTime() - now) / 1000));

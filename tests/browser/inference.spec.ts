@@ -3,6 +3,7 @@ import type {
   InferenceCatalog,
   InferenceGrant,
   TokenOffering,
+  TokenBid,
   TokenOrder,
   TokenPack,
 } from '../../src/shared/inference';
@@ -48,6 +49,7 @@ async function fixture(
   };
   const grants = options.empty ? [] : [grant];
   const orders: TokenOrder[] = [],
+    bids: TokenBid[] = [],
     packs: TokenPack[] = [],
     writes: { path: string; body: any }[] = [];
   const catalog: InferenceCatalog = {
@@ -250,7 +252,7 @@ async function fixture(
       return route.fulfill({ json: orders[0] });
     }
     if (path === `/api/token-orders/${orderId}`)
-      return route.fulfill({ json: { order: orders[0], bids: [], pack: packs[0] ?? null, grant } });
+      return route.fulfill({ json: { order: orders[0], bids, pack: packs[0] ?? null, grant } });
     if (path === '/api/orders')
       return route.fulfill({
         json: {
@@ -298,7 +300,7 @@ async function fixture(
       json: { error: `Unexpected fixture request ${method} ${path}` },
     });
   });
-  return { writes, grant, orders, catalog };
+  return { writes, grant, orders, packs, bids, catalog };
 }
 
 test('owner creates a funded agent, saves a key once, adds funds and closes its budget', async ({
@@ -486,6 +488,8 @@ test('instant quotes are invalidated on quantity edits and a purchase reveals se
   await page.getByRole('checkbox', { name: /I understand/ }).check();
   await page.getByRole('button', { name: 'Buy pack · $2.50' }).click();
   await expect(page.getByRole('heading', { name: 'Purchased quota' })).toBeVisible();
+  await expect(page.getByRole('timer')).toHaveCount(0);
+  await expect(page.getByText('INSTANT PURCHASE', { exact: true })).toBeVisible();
   await expect(page.getByRole('progressbar', { name: 'Input tokens available' })).toHaveAttribute(
     'value',
     '3000000',
@@ -531,6 +535,8 @@ test('an uncertain purchase recovers the original operation even after its quote
   expect(f.writes.filter((write) => write.path === '/api/token-orders')).toHaveLength(1);
   await page.getByRole('button', { name: 'Recover saved order' }).click();
   await expect(page.getByRole('heading', { name: 'Purchased quota' })).toBeVisible();
+  await expect(page.getByRole('timer')).toHaveCount(0);
+  await expect(page.getByText('INSTANT PURCHASE', { exact: true })).toBeVisible();
   const purchases = f.writes.filter((write) => write.path === '/api/token-orders');
   expect(purchases).toHaveLength(2);
   expect(purchases[1]!.body).toEqual(purchases[0]!.body);
@@ -595,4 +601,167 @@ test('agent setup and purchase form fit a narrow viewport and preserve back navi
   await expect(
     page.getByRole('heading', { name: 'Research assistant', exact: true }),
   ).toBeVisible();
+});
+
+function liveOrder(status: TokenOrder['status'] = 'open'): TokenOrder {
+  return {
+    id: orderId,
+    grantId,
+    mode: 'auction',
+    sourceMode: 'fixture',
+    status,
+    modelId,
+    inputTokens: 1048600,
+    outputTokens: 512,
+    maxTotalCents: 190.01,
+    priceCents: null,
+    provider: null,
+    closesAt: '2026-10-30T20:00:30.000Z',
+    expiresAt: '2026-10-30T22:00:00.000Z',
+    createdAt: '2026-10-30T20:00:00.000Z',
+    packId: null,
+  };
+}
+function liveBids(): TokenBid[] {
+  return [
+    {
+      id: 'baseten-bid',
+      provider: 'baseten',
+      priceCents: 178.55,
+      status: 'offered',
+      mode: 'fixture',
+      createdAt: '2026-10-30T20:00:01Z',
+    },
+    {
+      id: 'modal-bid',
+      provider: 'modal',
+      priceCents: 173.31,
+      status: 'offered',
+      mode: 'fixture',
+      createdAt: '2026-10-30T20:00:02Z',
+    },
+  ];
+}
+
+test('token auctions share the VM countdown, retain the deadline on refresh, and await a confirmed award', async ({
+  page,
+}) => {
+  await page.clock.install({ time: new Date('2026-10-30T20:00:00Z') });
+  const f = await fixture(page);
+  f.orders.push(liveOrder());
+  f.bids.push(...liveBids());
+  await page.goto(`/token-orders/${orderId}`);
+  const timer = page.getByRole('timer', { name: 'Auction countdown' });
+  await expect(timer.locator(':scope > span')).toHaveText('30');
+  await expect(page.getByRole('progressbar', { name: 'Auction time elapsed' })).toHaveAttribute(
+    'aria-valuenow',
+    '0',
+  );
+  const rows = page.getByRole('list', { name: 'Provider offers' }).getByRole('listitem');
+  await expect(rows.first()).toContainText('Modal');
+  await expect(rows.first()).toContainText('$1.7331');
+  await expect(rows.first()).toContainText('Best price');
+  await expect(rows.nth(1)).toContainText('$1.7855');
+  await page.clock.runFor(5000);
+  await expect(timer.locator(':scope > span')).toHaveText('25');
+  await page.reload();
+  await expect(timer.locator(':scope > span')).toHaveText('25');
+  await page.clock.fastForward(25000);
+  await expect(timer).toContainText('Selecting your match');
+  await expect(page.getByRole('button', { name: 'Cancel open auction' })).toBeDisabled();
+  await expect(page.getByRole('heading', { name: 'Your token pack is purchased' })).toHaveCount(0);
+  await page.screenshot({
+    path: test.info().outputPath('token-auction-closing.png'),
+    fullPage: true,
+  });
+  f.orders[0] = {
+    ...f.orders[0],
+    status: 'awarded',
+    priceCents: 173.31,
+    provider: 'modal',
+    packId,
+  };
+  f.bids.forEach((b) => {
+    b.status = b.provider === 'modal' ? 'won' : 'lost';
+  });
+  f.packs.push({
+    id: packId,
+    orderId,
+    grantId,
+    provider: 'modal',
+    mode: 'fixture',
+    modelId,
+    status: 'settled',
+    inputTokens: 1048600,
+    outputTokens: 512,
+    availableInputTokens: 0,
+    availableOutputTokens: 0,
+    heldInputTokens: 0,
+    heldOutputTokens: 0,
+    consumedInputTokens: 153,
+    consumedOutputTokens: 131,
+    retiredInputTokens: 1048447,
+    retiredOutputTokens: 381,
+    priceCents: 173.31,
+    refundCents: 0,
+    expiresAt: f.orders[0].expiresAt,
+    createdAt: f.orders[0].createdAt,
+    retirementReason: 'quota_exhausted',
+    revenueShare: {
+      commissionBps: 1500,
+      grossCents: 173.31,
+      brokerFeeMicros: '259965',
+      providerNetMicros: '1473135',
+    },
+  });
+  await page.clock.runFor(2500);
+  await expect(page.getByRole('heading', { name: 'Your token pack is purchased' })).toBeVisible();
+  await expect(timer).toHaveCount(0);
+  await expect(rows.first()).toHaveClass(/winning/);
+  await expect(rows.first()).toContainText('Winning provider');
+  await expect(page.getByText('Paid once for this pack', { exact: true })).toBeVisible();
+  await expect(
+    page.getByText(
+      'This pack cannot cover another request’s required token reservation. Unused quota has been retired.',
+    ),
+  ).toBeVisible();
+  await expect(page.getByText(/381 retired/)).toBeVisible();
+  await page.screenshot({
+    path: test.info().outputPath('token-auction-awarded.png'),
+    fullPage: true,
+  });
+  expect(f.writes).toHaveLength(0);
+});
+
+for (const status of ['no_offers', 'cancelled', 'expired'] as const)
+  test(`token auction ${status} has a clear result and a deliberate retry`, async ({ page }) => {
+    const f = await fixture(page);
+    f.orders.push(liveOrder(status));
+    await page.goto(`/token-orders/${orderId}`);
+    await expect(page.getByRole('timer')).toHaveCount(0);
+    await expect(
+      page.getByText('No token pack was purchased. The unspent purchase hold has been released.'),
+    ).toBeVisible();
+    await expect(page.getByRole('link', { name: 'Review a new purchase' })).toHaveAttribute(
+      'href',
+      `/token-orders/new?grantId=${grantId}`,
+    );
+    expect(f.writes).toHaveLength(0);
+  });
+
+test('live token offers and the full purchase summary fit a phone', async ({ page }) => {
+  await page.clock.install({ time: new Date('2026-10-30T20:00:10Z') });
+  const f = await fixture(page);
+  f.orders.push(liveOrder());
+  f.bids.push(...liveBids());
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(`/token-orders/${orderId}`);
+  await expect(page.getByRole('timer')).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Your token pack', exact: true })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({
+    path: test.info().outputPath('token-auction-mobile.png'),
+    fullPage: true,
+  });
+  expect(f.writes).toHaveLength(0);
 });

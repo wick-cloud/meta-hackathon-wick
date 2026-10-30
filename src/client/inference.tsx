@@ -5,11 +5,14 @@ import {
   ArrowRight,
   Bot,
   Check,
+  CheckCircle2,
   Clock3,
   Copy,
   KeyRound,
+  LockKeyhole,
   Plus,
   RefreshCw,
+  Radio,
   ShieldCheck,
   Sparkles,
   Wallet,
@@ -33,6 +36,8 @@ import type { BrokerKeySummary } from '../shared/developer';
 import type { CreditWallet } from '../shared/agreements';
 import { api, ApiError, dateTime, money, moneyMicros, post, put } from './api';
 import {
+  AuctionCountdown,
+  DetailRow,
   EmptyState,
   ErrorBox,
   Link,
@@ -43,7 +48,6 @@ import {
   Spinner,
   StatCard,
   SuccessBox,
-  remaining,
   useNavigate,
   useNow,
   usePagedResource,
@@ -445,6 +449,18 @@ export function Agents({ search = '' }: { search?: string }) {
 }
 
 function PackCard({ pack }: { pack: TokenPack }) {
+  const retirementMessage =
+    pack.retirementReason === 'quota_exhausted'
+      ? 'This pack cannot cover another request’s required token reservation. Unused quota has been retired.'
+      : pack.retirementReason === 'owner_closed'
+        ? 'The agent budget was closed. Unused quota has been retired.'
+        : pack.retirementReason === 'expired'
+          ? 'This pack has expired. Unused quota has been retired.'
+          : pack.retirementReason === 'provider_failure'
+            ? 'The provider could not fulfill this pack. See its refund and reconciliation status.'
+            : pack.retirementReason
+              ? 'This pack has been retired and cannot accept new requests.'
+              : '';
   return (
     <article className="inference-pack">
       <div className="inference-section-heading">
@@ -476,6 +492,9 @@ function PackCard({ pack }: { pack: TokenPack }) {
             <small>
               {count(held)} held for requests ·{' '}
               {count(input ? pack.consumedInputTokens : pack.consumedOutputTokens)} consumed
+              {(input ? pack.retiredInputTokens : pack.retiredOutputTokens) > 0 && (
+                <> · {count(input ? pack.retiredInputTokens : pack.retiredOutputTokens)} retired</>
+              )}
             </small>
           </div>
         );
@@ -490,7 +509,7 @@ function PackCard({ pack }: { pack: TokenPack }) {
         </Link>
       </div>
       <p className="inference-muted">Expires {dateTime(pack.expiresAt)}</p>
-      {pack.retirementReason && <p className="inference-warning">{pack.retirementReason}</p>}
+      {retirementMessage && <p className="inference-warning">{retirementMessage}</p>}
     </article>
   );
 }
@@ -1357,15 +1376,25 @@ export function TokenComposer({ search }: { search: string }) {
 }
 
 export function TokenOrderPage({ id }: { id: string }) {
+  const [poll, setPoll] = useState(2000);
   const resource = useResource<TokenOrderDetail>(
       `/api/token-orders/${encodeURIComponent(id)}`,
-      2000,
+      poll,
     ),
     now = useNow(),
     operation = useOperationKey();
   const [busy, setBusy] = useState(false),
     [error, setError] = useState('');
   const order = resource.data?.order;
+  useEffect(() => {
+    setPoll(
+      !order || order.status === 'open'
+        ? 2000
+        : order.status === 'awarded' && resource.data?.pack?.status !== 'settled'
+          ? 5000
+          : 0,
+    );
+  }, [order?.status, resource.data?.pack?.status]);
   async function cancel() {
     setBusy(true);
     setError('');
@@ -1380,6 +1409,16 @@ export function TokenOrderPage({ id }: { id: string }) {
       setBusy(false);
     }
   }
+  const open = order?.status === 'open',
+    awarded = order?.status === 'awarded',
+    instant = order?.mode === 'instant';
+  const bids = [...(resource.data?.bids ?? [])].sort(
+    (a, b) =>
+      a.priceCents - b.priceCents ||
+      a.createdAt.localeCompare(b.createdAt) ||
+      a.id.localeCompare(b.id),
+  );
+  const leading = bids.find((b) => b.status === 'offered');
   return (
     <div className="inference-workspace">
       <Link href="/orders?kind=token" className="back-link">
@@ -1388,9 +1427,16 @@ export function TokenOrderPage({ id }: { id: string }) {
       </Link>
       <PageHeader
         eyebrow="AI TOKEN ORDER"
-        title={order?.mode === 'instant' ? 'Instant token purchase' : 'Token pack auction'}
-        description="A saved order for input and output tokens."
+        title={instant ? 'Instant token purchase' : 'Token pack auction'}
+        description={
+          open
+            ? 'Providers are competing for your pack. The lowest eligible fixed price wins automatically.'
+            : awarded
+              ? 'Your token pack and purchase price are locked in.'
+              : 'Your saved order, provider offers and purchase outcome.'
+        }
       >
+        {order && <State value={order.status} />}
         {resource.data && (
           <Link href={`/agents/${resource.data.grant.id}`} className="button secondary">
             View agent <ArrowRight size={15} />
@@ -1402,116 +1448,184 @@ export function TokenOrderPage({ id }: { id: string }) {
       {resource.loading && <Spinner label="Loading token order" />}
       {order && resource.data && (
         <>
-          <section className="card inference-order-hero">
-            <div>
-              <div className="inference-inline">
-                <State value={order.status} />
-                <Mode mode={order.sourceMode} />
-              </div>
-              <h2>
-                {count(order.inputTokens)} input + {count(order.outputTokens)} output
-              </h2>
-              <p>{order.modelId}</p>
-              <code className="inference-muted">{order.id}</code>
-            </div>
-            <div className="inference-order-price">
-              <span>
-                {order.priceCents !== null ? 'Paid once for this pack' : 'Maximum total price'}
-              </span>
-              <strong>{money(order.priceCents ?? order.maxTotalCents)}</strong>
-              {order.status === 'open' && (
-                <span className="inference-inline">
-                  <Clock3 size={15} />
-                  {remaining(order.closesAt, now)} remaining
-                </span>
-              )}
-            </div>
-          </section>
           {order.sourceMode === 'fixture' && (
             <p className="inference-readiness">
               Fixture order · simulated bids and token usage. No real model is called.
             </p>
           )}
-          <div className="inference-detail-grid">
-            <section className="card">
-              <h2>Provider bids</h2>
-              {resource.data.bids.length ? (
-                <div className="inference-bids">
-                  {resource.data.bids.map((bid) => (
-                    <div key={bid.id}>
-                      <span>
-                        <strong>{providerName(bid.provider)}</strong>
-                        <small>
-                          {bid.status === 'won'
-                            ? 'Winning provider'
-                            : bid.status === 'lost'
-                              ? 'Not selected'
-                              : 'Binding offer'}
-                        </small>
-                      </span>
-                      <strong>{money(bid.priceCents)}</strong>
-                      {bid.status === 'won' && <Check size={18} />}
+          <div className="auction-grid token-auction-grid">
+            <div>
+              <section className={`card auction-card ${open && !instant ? 'is-live' : ''}`}>
+                <div className="auction-top">
+                  <div className="auction-live-label">
+                    <Radio size={17} />
+                    {instant ? 'INSTANT PURCHASE' : open ? 'LIVE AUCTION' : 'AUCTION RESULT'}
+                  </div>
+                  <span className="small-muted">Order {order.id.slice(0, 8)}</span>
+                </div>
+                {open && !instant ? (
+                  <AuctionCountdown closesAt={order.closesAt} now={now} />
+                ) : (
+                  <div className="auction-outcome">
+                    <span className={`icon-tile ${awarded ? 'emerald' : 'neutral'}`}>
+                      {awarded ? <Check size={24} /> : <X size={24} />}
+                    </span>
+                    <div>
+                      <h2>
+                        {awarded
+                          ? 'Your token pack is purchased'
+                          : order.status === 'no_offers'
+                            ? 'No eligible bids were received'
+                            : order.status === 'cancelled'
+                              ? 'Auction cancelled'
+                              : 'The order has expired'}
+                      </h2>
+                      <p>
+                        {awarded
+                          ? 'Charged once. Redeeming your prepaid quota does not charge your budget again.'
+                          : 'No token pack was purchased. The unspent purchase hold has been released.'}
+                      </p>
                     </div>
-                  ))}
+                  </div>
+                )}
+                <div className="bid-section-title">
+                  <h3>
+                    Provider offers <span>{bids.length}</span>
+                  </h3>
+                  <span>Total price · USD</span>
                 </div>
-              ) : (
-                <p className="inference-muted">
-                  {order.status === 'open'
-                    ? 'Waiting for eligible provider bids.'
-                    : 'No provider bids were accepted.'}
-                </p>
-              )}
-              <p className="inference-muted">
-                The lowest eligible fixed price wins. Equal prices use acceptance time, then bid ID.
-              </p>
-            </section>
-            <section className="card">
-              <h2>Order details</h2>
-              <dl className="inference-definitions">
-                <div>
-                  <dt>Agent</dt>
-                  <dd>
-                    <Link href={`/agents/${order.grantId}`}>{resource.data.grant.name}</Link>
-                  </dd>
+                {bids.length ? (
+                  <div className="bid-list" role="list" aria-label="Provider offers">
+                    {bids.map((bid, index) => (
+                      <div
+                        className={`bid-row ${bid.status === 'won' ? 'winning' : ''}`}
+                        role="listitem"
+                        key={bid.id}
+                      >
+                        <div className={`provider-avatar provider-${index % 3}`}>
+                          {providerName(bid.provider).slice(0, 1)}
+                        </div>
+                        <div className="bid-provider">
+                          <strong>{providerName(bid.provider)}</strong>
+                          <span>
+                            {bid.status === 'won'
+                              ? 'Winning provider'
+                              : bid.status === 'lost'
+                                ? 'Not selected'
+                                : open && bid.id === leading?.id
+                                  ? 'Current lowest offer'
+                                  : 'Binding offer'}
+                          </span>
+                          <span>
+                            {bid.mode === 'fixture' ? 'Simulated provider' : 'Live provider route'}
+                          </span>
+                        </div>
+                        <div className="bid-price">
+                          <strong>{money(bid.priceCents)}</strong>
+                          <span>
+                            {bid.status === 'won' ? (
+                              <CheckCircle2 size={15} />
+                            ) : open && bid.id === leading?.id ? (
+                              <span className="best-badge">Best price</span>
+                            ) : null}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="waiting-bids">
+                    <div className="waiting-pulse">
+                      <Radio size={22} />
+                    </div>
+                    <strong>{open ? 'Waiting for the first offer' : 'No offers recorded'}</strong>
+                    <p>
+                      {open
+                        ? 'Available providers can bid during this 30-second window.'
+                        : 'Review your pack and budget before starting a new purchase.'}
+                    </p>
+                  </div>
+                )}
+                <div className="auction-footnote">
+                  <ShieldCheck size={15} />
+                  Prices cover the full token pack. Ties use accepted time, then bid ID.
                 </div>
-                <div>
-                  <dt>Created</dt>
-                  <dd>{dateTime(order.createdAt)}</dd>
-                </div>
-                <div>
-                  <dt>Auction close</dt>
-                  <dd>{dateTime(order.closesAt)}</dd>
-                </div>
-                <div>
-                  <dt>Pack expiry</dt>
-                  <dd>{dateTime(order.expiresAt)}</dd>
-                </div>
-              </dl>
-              {order.status === 'open' && (
-                <button className="button secondary" disabled={busy} onClick={() => void cancel()}>
-                  {busy ? <Spinner label="Cancelling" /> : 'Cancel open auction'}
-                </button>
+              </section>
+              {resource.data.pack && (
+                <section className="card token-auction-quota">
+                  <div className="inference-section-heading">
+                    <h2>Purchased quota</h2>
+                    <Link href={`/agents/${order.grantId}`} className="button secondary small">
+                      View agent budget <ArrowRight size={14} />
+                    </Link>
+                  </div>
+                  <PackCard pack={resource.data.pack} />
+                  <p className="inference-muted">
+                    Use this agent’s API key at <code>/api/v1</code>. Token redemption is included
+                    in the prepaid price.
+                  </p>
+                </section>
               )}
               {['no_offers', 'cancelled', 'expired'].includes(order.status) && (
-                <Link
-                  href={`/token-orders/new?grantId=${order.grantId}`}
-                  className="button secondary"
-                >
-                  Review a new purchase <ArrowRight size={14} />
-                </Link>
+                <div className="auction-retry">
+                  <Link
+                    href={`/token-orders/new?grantId=${order.grantId}`}
+                    className="button primary"
+                  >
+                    <RefreshCw size={15} />
+                    Review a new purchase
+                  </Link>
+                </div>
               )}
-            </section>
+            </div>
+            <aside>
+              <section className="card request-summary">
+                <h2>Your token pack</h2>
+                <p className="request-description">Meta Muse Spark Open</p>
+                <div className="token-auction-price">
+                  <span>{awarded ? 'Paid once for this pack' : 'Maximum total price'}</span>
+                  <strong>{money(order.priceCents ?? order.maxTotalCents)}</strong>
+                </div>
+                <DetailRow label="Input tokens">{count(order.inputTokens)}</DetailRow>
+                <DetailRow label="Output tokens">{count(order.outputTokens)}</DetailRow>
+                <DetailRow label="Agent">
+                  <Link href={`/agents/${order.grantId}`}>{resource.data.grant.name}</Link>
+                </DetailRow>
+                <DetailRow label="Maximum total">{money(order.maxTotalCents)}</DetailRow>
+                <DetailRow label="Buyer fee">{money(0)}</DetailRow>
+                {open && (
+                  <DetailRow label="Reserved for this order">
+                    {money(order.maxTotalCents)}
+                  </DetailRow>
+                )}
+                {!instant && (
+                  <DetailRow label="Auction closes">{dateTime(order.closesAt)}</DetailRow>
+                )}
+                <DetailRow label="Pack expiry">{dateTime(order.expiresAt)}</DetailRow>
+                <DetailRow label="Created">{dateTime(order.createdAt)}</DetailRow>
+                <div className="immutable-note">
+                  <LockKeyhole size={14} />
+                  These pack requirements are fixed.
+                </div>
+                {open && !instant && (
+                  <button
+                    className="button secondary full-width"
+                    disabled={busy || Date.parse(order.closesAt) <= now}
+                    onClick={() => void cancel()}
+                  >
+                    {busy ? <Spinner label="Cancelling" /> : 'Cancel open auction'}
+                  </button>
+                )}
+              </section>
+              <div className="info-note">
+                <Clock3 size={17} />
+                <p>
+                  The pack expires with its agent budget. Unused or expired prepaid tokens are not
+                  automatically refundable.
+                </p>
+              </div>
+            </aside>
           </div>
-          {resource.data.pack && (
-            <section className="card">
-              <h2>Purchased quota</h2>
-              <PackCard pack={resource.data.pack} />
-              <p className="inference-muted">
-                Use this agent’s API key at <code>/api/v1</code>. Token redemption is included in
-                the prepaid price.
-              </p>
-            </section>
-          )}
         </>
       )}
     </div>

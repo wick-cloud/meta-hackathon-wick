@@ -50,6 +50,7 @@ import {
   type VM,
 } from './api';
 import {
+  AuctionCountdown,
   ArrowLink,
   DetailRow,
   EmptyState,
@@ -739,7 +740,6 @@ export function AuctionPage({ id }: { id: string }) {
   if (loading) return <Spinner label="Loading your auction" />;
   if (!data) return <ErrorBox error={error || 'Request unavailable.'} retry={reload} />;
   const { request, bids, vm } = data;
-  const seconds = Math.max(0, Math.ceil((new Date(request.closesAt).getTime() - now) / 1000));
   const open = request.status === 'open';
   const sorted = [...bids].sort(
     (a, b) =>
@@ -805,22 +805,7 @@ export function AuctionPage({ id }: { id: string }) {
               <span className="small-muted">Request {request.id.slice(0, 8)}</span>
             </div>
             {open ? (
-              <>
-                <div className="auction-countdown">
-                  <span>{seconds.toString().padStart(2, '0')}</span>
-                  <div>
-                    <strong>{seconds === 0 ? 'Selecting your match' : 'seconds remaining'}</strong>
-                    <p>
-                      {seconds === 0
-                        ? 'The auction is closing. No further bids will be accepted.'
-                        : 'The winning bid will be selected automatically.'}
-                    </p>
-                  </div>
-                </div>
-                <div className="auction-progress">
-                  <span style={{ width: `${Math.min(100, ((30 - seconds) / 30) * 100)}%` }} />
-                </div>
-              </>
+              <AuctionCountdown closesAt={request.closesAt} now={now} />
             ) : (
               <div className="auction-outcome">
                 <span className={`icon-tile ${ended ? 'neutral' : 'emerald'}`}>
