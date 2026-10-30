@@ -1,4 +1,4 @@
-import { isMoneyCents } from '../../shared/money.js';
+import { isMoneyCents, MIN_ORDER_PRICE_CENTS } from '../../shared/money.js';
 import { moneyCents } from './data.js';
 import { enforceKeyLimit, recordKeyAction } from '../operations.js';
 import { createHash } from 'node:crypto';
@@ -354,7 +354,12 @@ function quoteCandidate(
       Math.max(price, p.policy.minimumPriceCents),
     );
   }
-  price = Math.max(price, p.policy.minimumPriceCents, pricing?.upstreamCostFloorCents ?? 0);
+  price = Math.max(
+    MIN_ORDER_PRICE_CENTS,
+    price,
+    p.policy.minimumPriceCents,
+    pricing?.upstreamCostFloorCents ?? 0,
+  );
   if (
     !isMoneyCents(price) ||
     price < 0 ||

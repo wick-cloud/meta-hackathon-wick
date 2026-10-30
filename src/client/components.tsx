@@ -487,6 +487,28 @@ export function MoneyInput({
   min?: number;
   disabled?: boolean;
 }) {
+  const [text, setText] = useState(() => centsToUsd(value));
+  const acceptedValue = useRef(value),
+    input = useRef<HTMLInputElement>(null);
+  const amount = usdToCents(text);
+  const validationMessage = !text
+    ? ''
+    : amount === undefined
+      ? 'Enter a USD amount with at most four decimal places.'
+      : amount < min
+        ? `Enter at least $${centsToUsd(min)}.`
+        : '';
+  useEffect(() => {
+    // External changes (for example a Muse draft) replace the value. Our own
+    // keystrokes keep their decimal spelling until the field loses focus.
+    if (acceptedValue.current !== value) {
+      acceptedValue.current = value;
+      setText(centsToUsd(value));
+    }
+  }, [value]);
+  useEffect(() => {
+    input.current?.setCustomValidity(validationMessage);
+  }, [validationMessage]);
   return (
     <label className="field" htmlFor={id}>
       <span>{label}</span>
@@ -494,13 +516,25 @@ export function MoneyInput({
         <span>$</span>
         <input
           id={id}
-          type="number"
+          ref={input}
+          type="text"
+          inputMode="decimal"
+          aria-invalid={!!validationMessage || undefined}
+          maxLength={100}
           min={centsToUsd(min)}
           step="0.0001"
-          value={centsToUsd(value)}
+          value={text}
           onChange={(e) => {
-            const amount = usdToCents(e.target.value || '0');
-            if (amount !== undefined) onChange(amount);
+            const spelling = e.target.value;
+            setText(spelling);
+            // Invalid/empty edits must not submit a stale, previously valid price.
+            const amount = usdToCents(spelling) ?? 0;
+            acceptedValue.current = amount;
+            onChange(amount);
+          }}
+          onBlur={() => {
+            const amount = usdToCents(text);
+            if (amount !== undefined) setText(centsToUsd(amount));
           }}
           disabled={disabled}
           required

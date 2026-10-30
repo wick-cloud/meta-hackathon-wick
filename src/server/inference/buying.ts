@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { MIN_ORDER_PRICE_CENTS } from '../../shared/money.js';
 import type { Actor } from '../../shared/types.js';
 import type { BuyingCandidate, BuyingDecision, BuyingWorkspace } from '../../shared/buying.js';
 import { purchaseInput } from '../../shared/buying.js';
@@ -250,7 +251,8 @@ export async function evaluateBuying(
         'Existing allowance covers more calls than your refill trigger. No purchase is needed.';
     else if (policy.model_calls >= 20)
       blocked = 'This grant reached its 20-decision Muse limit. Manual purchases remain available.';
-    else if (budget < 0.01) blocked = 'Owner funding is required before another purchase.';
+    else if (budget < MIN_ORDER_PRICE_CENTS)
+      blocked = 'At least $0.01 of owner funding is required before another purchase.';
     else if (new Date(grant.expires_at).getTime() - now.getTime() < 45000)
       blocked = 'The grant expires too soon for a new purchase. No expiry is extended.';
     const rows = (

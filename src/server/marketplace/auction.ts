@@ -1,4 +1,5 @@
 import { moneyCents } from './data.js';
+import { MIN_ORDER_PRICE_CENTS } from '../../shared/money.js';
 import { randomUUID } from 'node:crypto';
 import { clientOperationKey, enforceKeyLimit, withOperation } from '../operations.js';
 import type { Pool, PoolClient } from 'pg';
@@ -55,7 +56,11 @@ export async function createRequest(
   const durationMinutes = integer(body.durationMinutes ?? 30, 'Rental duration', 15, 60);
   if (![15, 30, 60].includes(durationMinutes))
     throw new HttpError(400, 'Choose exactly 15, 30 or 60 minutes.');
-  const maxPriceCents = moneyCents(body.maxPriceCents, 'Maximum total price');
+  const maxPriceCents = moneyCents(
+    body.maxPriceCents,
+    'Maximum total price',
+    MIN_ORDER_PRICE_CENTS,
+  );
   const cpu = integer(body.requirements?.cpu, 'CPU requirement', 1, 1024);
   const memoryGb = positiveNumber(body.requirements?.memoryGb, 'Memory requirement (GiB)', 16384);
   const gpu = body.requirements?.gpu
@@ -325,7 +330,7 @@ async function publishedMatches(
       assertProviderCatalog(provider, catalog);
       if (!sameCatalogAllocation(selected, catalog) || !catalogSatisfiesRequest(catalog, request))
         throw new HttpError(409, 'The reviewed configuration changed. Start a new request.');
-      let minimumPriceCents = provider.policy.minimumPriceCents;
+      let minimumPriceCents = Math.max(MIN_ORDER_PRICE_CENTS, provider.policy.minimumPriceCents);
       if (ctx.wick.mode === 'real') {
         assertManagedCustomerRoute(catalog);
         if ((request.catalog_snapshot.sourceMode ?? 'fixture') !== 'real' || !row.pricing)
@@ -370,7 +375,7 @@ export async function submitBid(
   input: { totalPriceCents: number; offeringId?: string; operationKey?: string },
   source: 'manual' | 'auto' = 'manual',
 ) {
-  const price = moneyCents(input.totalPriceCents, 'Total price');
+  const price = moneyCents(input.totalPriceCents, 'Total price', MIN_ORDER_PRICE_CENTS);
   const key = clientOperationKey(input.operationKey, Boolean(actor.apiKey));
   return transaction(ctx.pool, async (db) =>
     withOperation(

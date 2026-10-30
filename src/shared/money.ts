@@ -1,5 +1,7 @@
 /** Public *Cents fields keep their unit; one hundredth of a cent is $0.0001. */
 export const MONEY_STEP_CENTS = 0.01;
+/** New standalone VM/token orders have a one-cent minimum; balances may be smaller. */
+export const MIN_ORDER_PRICE_CENTS = 1;
 export const MAX_MONEY_CENTS = 1_000_000_000_000;
 
 export function isMoneyCents(value: unknown): value is number {
