@@ -1,4 +1,5 @@
 import type { AgreementInput } from './agreements.js';
+import { isMoneyCents, moneyUnits, centsFromUnits, addCents, multiplyCents } from './money.js';
 
 /** Browser-safe validation; the API owner converts this to its HTTP error contract. */
 export class ScheduleError extends Error {
@@ -98,12 +99,12 @@ export function windowOn(
   return times;
 }
 export function windowCost(window: WindowTimes, discountRate: number, normalRate = 0) {
-  const discountSeconds = (Date.parse(window.discountEndsAt) - Date.parse(window.startsAt)) / 1000;
-  const normalSeconds = (Date.parse(window.endsAt) - Date.parse(window.discountEndsAt)) / 1000;
-  return Math.max(
-    1,
-    Math.ceil((discountSeconds * discountRate + normalSeconds * normalRate) / 3600),
-  );
+  const discountMs = Date.parse(window.discountEndsAt) - Date.parse(window.startsAt);
+  const normalMs = Date.parse(window.endsAt) - Date.parse(window.discountEndsAt);
+  const weighted =
+    BigInt(discountMs) * moneyUnits(discountRate) + BigInt(normalMs) * moneyUnits(normalRate);
+  const units = (weighted + 3_599_999n) / 3_600_000n;
+  return centsFromUnits(units < 1n ? 1n : units);
 }
 type ScheduleInput = Pick<
   AgreementInput,
@@ -135,7 +136,6 @@ export function agreementEstimate(input: AgreementFundingInput) {
   for (const [value, label, max] of [
     [input.minimumQuantity, 'Minimum approved slots', 20],
     [input.targetQuantity, 'Target slots', 20],
-    [input.maxDiscountRateCentsPerHour, 'Discount rate', 100000000],
   ] as const) {
     if (!Number.isSafeInteger(value) || value < 1 || value > max)
       throw new ScheduleError(`${label} must be a whole number between 1 and ${max}.`);
@@ -144,17 +144,25 @@ export function agreementEstimate(input: AgreementFundingInput) {
     throw new ScheduleError('Minimum quantity cannot exceed the target.');
   const normalRate = input.continuation?.enabled ? input.continuation.maxRateCentsPerHour : 0;
   if (
-    input.continuation?.enabled &&
-    (!Number.isSafeInteger(normalRate) || normalRate < 1 || normalRate > 100000000)
+    !isMoneyCents(input.maxDiscountRateCentsPerHour) ||
+    input.maxDiscountRateCentsPerHour < 0.01 ||
+    input.maxDiscountRateCentsPerHour > 100000000
   )
-    throw new ScheduleError('Continuation rate must be a whole number between 1 and 100000000.');
+    throw new ScheduleError('Discount rate must be positive with at most four USD decimal places.');
+  if (
+    input.continuation?.enabled &&
+    (!isMoneyCents(normalRate) || normalRate < 0.01 || normalRate > 100000000)
+  )
+    throw new ScheduleError(
+      'Continuation rate must be positive with at most four USD decimal places.',
+    );
   const windows = agreementWindows(input),
     perWindow = windows.map((w) => windowCost(w, input.maxDiscountRateCentsPerHour, normalRate));
-  // Round once per VM/window before multiplying quantity, including the one-cent minimum.
-  const perSlotTerm = perWindow.reduce((sum, cost) => sum + cost, 0),
-    maximum = perSlotTerm * input.targetQuantity,
-    minimum = perSlotTerm * input.minimumQuantity;
-  if (!Number.isSafeInteger(maximum) || maximum > 100000000)
+  // Round once per VM/window to $0.0001, then multiply whole slot quantities.
+  const perSlotTerm = perWindow.reduce((sum, cost) => addCents(sum, cost), 0),
+    maximum = multiplyCents(perSlotTerm, input.targetQuantity),
+    minimum = multiplyCents(perSlotTerm, input.minimumQuantity);
+  if (!isMoneyCents(maximum) || maximum > 100000000)
     throw new ScheduleError('The maximum seven-day agreement exceeds the credit limit.');
   return { daily: perWindow[0], maximum, minimum };
 }

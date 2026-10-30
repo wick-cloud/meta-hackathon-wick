@@ -102,7 +102,7 @@ export function brokerOpenApi() {
       title: 'Wick Broker API',
       version: '1.0.0',
       description:
-        'Buyer and provider access to the same Broker marketplace. Broker API keys (wbk_) are separate from Wick service credentials. All money is whole USD cents unless a field explicitly says micros. VM key limits are per operation; inference agent keys are bound to an aggregate funded grant. Inference supports buffered text only. Unknown usage retains token reservations and is never automatically resent.',
+        'Buyer and provider access to the same Broker marketplace. Broker API keys (wbk_) are separate from Wick service credentials. Money fields use USD cents with up to two fractional cent digits ($0.0001); integer micros fields retain their explicit unit. VM key limits are per operation; inference agent keys are bound to an aggregate funded grant. Inference supports buffered text only. Unknown usage retains token reservations and is never automatically resent.',
     },
     paths,
     components: {

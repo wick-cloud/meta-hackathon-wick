@@ -19,10 +19,13 @@ import { HttpError, type AppContext } from '../context.js';
 import { routeView } from './runtime.js';
 import type { InferenceRuntime } from './runtime.js';
 import { iso, type Row } from '../marketplace/data.js';
+import { isMoneyCents, subtractCents } from '../../shared/money.js';
 
 export type Db = Pool | PoolClient;
 export const operationSchema = z.string().regex(/^[-A-Za-z0-9_:./]{8,160}$/);
 export const integer = (max: number, min = 1) => z.number().int().min(min).max(max);
+export const moneyAmount = (max: number, min = 0.01) =>
+  z.number().min(min).max(max).refine(isMoneyCents, 'Use at most four decimal places in USD.');
 export function failure(status: number, code: string, message: string): never {
   throw Object.assign(new HttpError(status, message), { code });
 }
@@ -154,7 +157,7 @@ export const packView = (r: Row): TokenPack => ({
   expiresAt: iso(r.expires_at)!,
   createdAt: iso(r.created_at)!,
   retirementReason: r.retirement_reason,
-  revenueShare: revenueShare(r.price_cents - r.refund_cents),
+  revenueShare: revenueShare(subtractCents(r.price_cents, r.refund_cents)),
 });
 export const receiptView = (r: Row): InferenceReceipt => ({
   id: r.id,

@@ -1,3 +1,4 @@
+import { usdToCents, isMoneyCents } from '../shared/money';
 import { useState, type FormEvent } from 'react';
 import { ArrowRight, Wallet } from 'lucide-react';
 import type { CreditWallet } from '../shared/agreements';
@@ -25,8 +26,8 @@ export function AdminCreditGrant() {
     event.preventDefault();
     setError('');
     setSuccess('');
-    const cents = Math.round(Number(amount) * 100);
-    if (!Number.isSafeInteger(cents) || cents <= 0) {
+    const cents = usdToCents(amount);
+    if (!isMoneyCents(cents) || cents <= 0) {
       setError('Enter a positive USD credit amount.');
       return;
     }
@@ -107,9 +108,9 @@ export function AdminCreditGrant() {
               <span>Credit amount (USD)</span>
               <input
                 type="number"
-                min="0.01"
+                min="0.0001"
                 max="100000"
-                step="0.01"
+                step="0.0001"
                 required
                 value={amount}
                 onChange={(e) => setAmount(e.target.value)}

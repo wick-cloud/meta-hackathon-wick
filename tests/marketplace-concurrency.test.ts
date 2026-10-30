@@ -1181,8 +1181,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL marketplace concurrency and invariants
     await expect(createRequest(ctx, buyer, { ...body, durationMinutes: 15 })).rejects.toThrow(
       /exact/i,
     );
-    await expect(createRequest(ctx, buyer, { ...body, maxPriceCents: 2.5 })).rejects.toThrow(
-      /integer/i,
+    await expect(createRequest(ctx, buyer, { ...body, maxPriceCents: 2.005 })).rejects.toThrow(
+      /decimal/i,
     );
     await expect(
       createRequest(ctx, buyer, { ...body, command: 'run arbitrary customer workload' }),

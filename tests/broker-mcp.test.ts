@@ -6,6 +6,15 @@ import { resolve } from 'node:path';
 import type { BrokerClient, BrokerTerminal, TerminalEvent } from '@wick-cloud/broker-sdk';
 import { buildTools, createBrokerMcp } from '../packages/mcp/src/index.js';
 import { TerminalSessions } from '../packages/mcp/src/terminals.js';
+import { bodySchemas } from '../packages/mcp/src/schemas.js';
+
+it('accepts four-decimal USD purchase amounts through MCP without allowing fractional tokens', () => {
+  const input = { mode: 'auction', inputTokens: 100, outputTokens: 1, maxTotalCents: 0.01 };
+  expect(bodySchemas.tokenOrder.parse(input)).toEqual(input);
+  expect(bodySchemas.bid.parse({ totalPriceCents: 123.45 })).toEqual({ totalPriceCents: 123.45 });
+  expect(bodySchemas.tokenOrder.safeParse({ ...input, maxTotalCents: 0.001 }).success).toBe(false);
+  expect(bodySchemas.tokenOrder.safeParse({ ...input, outputTokens: 1.5 }).success).toBe(false);
+});
 const principal = {
   id: 'buyer-one',
   role: 'buyer',

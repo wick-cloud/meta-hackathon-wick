@@ -1,4 +1,5 @@
 import type { CatalogItem, FixedQuote, ManagedPricing, RevenueShare } from './types.js';
+import { isMoneyCents, moneyUnits } from './money.js';
 
 export const PROVIDER_COMMISSION_BPS = 1500;
 export const MAX_RATE_AGE_MS = 15 * 60 * 1000;
@@ -63,13 +64,13 @@ export function commissionPricing(pricing: ManagedPricing): ManagedPricing {
 
 /** A cent is 10,000 micro-USD. Both shares are exact even on one-cent rentals. */
 export function revenueShare(grossCents: number): RevenueShare {
-  if (!Number.isSafeInteger(grossCents) || grossCents < 0 || grossCents > 100000000)
+  if (!isMoneyCents(grossCents) || grossCents < 0 || grossCents > 100000000)
     throw new Error('Invalid gross rental total.');
   return {
     commissionBps: PROVIDER_COMMISSION_BPS,
     grossCents,
-    brokerFeeMicros: (BigInt(grossCents) * BigInt(PROVIDER_COMMISSION_BPS)).toString(),
-    providerNetMicros: (BigInt(grossCents) * BigInt(10000 - PROVIDER_COMMISSION_BPS)).toString(),
+    brokerFeeMicros: (moneyUnits(grossCents) * 15n).toString(),
+    providerNetMicros: (moneyUnits(grossCents) * 85n).toString(),
   };
 }
 
@@ -118,7 +119,7 @@ export function acceptedBidQuote(
   price: number,
 ): FixedQuote {
   const target = fixedQuote(commissionPricing(pricing), durationMinutes);
-  if (!Number.isSafeInteger(price) || price < target.upstreamCostFloorCents! || price > 100000000)
+  if (!isMoneyCents(price) || price < target.upstreamCostFloorCents! || price > 100000000)
     throw new Error(
       `The fixed bid must be at least the Wick compute cost floor after the provider commission of ${target.upstreamCostFloorCents} USD cents.`,
     );

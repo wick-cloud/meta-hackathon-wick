@@ -1175,14 +1175,14 @@ test('Funding estimate rounds each partial-hour VM window before target and mini
   await page.getByLabel('Discount ends', { exact: true }).fill('00:17');
   await page.getByLabel('Maximum discounted rate (USD / VM-hour)', { exact: true }).fill('0.10');
   const funding = page.locator('.market-two-column > aside');
-  // 17 minutes at ten cents/hour rounds to three cents for each VM/window.
-  await expect(funding.getByText('Estimated $4.20 maximum', { exact: true })).toBeVisible();
-  await expect(funding).toContainText('Up to $2.52');
+  // 17 minutes at ten cents/hour rounds to 2.84 cents for each VM/window.
+  await expect(funding.getByText('Estimated $3.976 maximum', { exact: true })).toBeVisible();
+  await expect(funding).toContainText('Up to $2.3856');
   await expect(page.getByRole('button', { name: 'Review agreement', exact: true })).toBeEnabled();
-  // A shorter window still has a one-cent minimum for each VM/window.
+  // One minute rounds to 0.17 cents, rather than a whole-cent minimum.
   await page.getByLabel('Discount ends', { exact: true }).fill('00:01');
-  await expect(funding.getByText('Estimated $1.40 maximum', { exact: true })).toBeVisible();
-  await expect(funding).toContainText('Up to $0.84');
+  await expect(funding.getByText('Estimated $0.238 maximum', { exact: true })).toBeVisible();
+  await expect(funding).toContainText('Up to $0.1428');
   expect(writes).toHaveLength(0);
 });
 

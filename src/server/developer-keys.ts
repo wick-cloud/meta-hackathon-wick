@@ -1,4 +1,5 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { isMoneyCents } from '../shared/money.js';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { HttpError, type AppContext } from './context.js';
 import { transaction } from './marketplace/db.js';
@@ -66,8 +67,13 @@ function validateKeyInput(input: unknown, role: string) {
   ] as const) {
     const n = (raw as Record<string, unknown>)[field];
     if (n !== undefined) {
-      if (!Number.isSafeInteger(n) || Number(n) < 1 || Number(n) > max)
-        throw new HttpError(400, `${field} must be an integer between 1 and ${max}.`);
+      const monetary = field !== 'maxActivationQuantity';
+      if (
+        !(monetary ? isMoneyCents(n) : Number.isSafeInteger(n)) ||
+        Number(n) < (monetary ? 0.01 : 1) ||
+        Number(n) > max
+      )
+        throw new HttpError(400, `${field} is outside its allowed precision or range.`);
       limits[field] = Number(n);
     }
   }

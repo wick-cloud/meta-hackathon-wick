@@ -1,3 +1,5 @@
+import { moneyAmount } from './data.js';
+import { addCents } from '../../shared/money.js';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type { Actor } from '../../shared/types.js';
@@ -17,7 +19,6 @@ import {
   event,
   failure,
   grantView,
-  integer,
   lockedGrant,
   operationSchema,
   orderView,
@@ -36,8 +37,8 @@ const createSchema = z
   .object({
     operationKey: operationSchema,
     name: z.string().trim().min(1).max(100),
-    budgetCents: integer(100_000_000),
-    maxPurchaseCents: integer(100_000_000).optional(),
+    budgetCents: moneyAmount(100_000_000),
+    maxPurchaseCents: moneyAmount(100_000_000).optional(),
     allowedProviders: z.array(z.enum(INFERENCE_PROVIDERS)).min(1).max(2).optional(),
     expiresAt: z.string().datetime().optional(),
     allowInstant: z.boolean().optional(),
@@ -113,7 +114,7 @@ export async function createGrant(ctx: AppContext, actor: Actor, raw: unknown) {
 export async function fundGrant(ctx: AppContext, actor: Actor, id: string, raw: unknown) {
   ownerOnly(actor);
   const input = z
-    .object({ amountCents: integer(100_000_000), operationKey: operationSchema })
+    .object({ amountCents: moneyAmount(100_000_000), operationKey: operationSchema })
     .strict()
     .parse(raw);
   return transaction(ctx.pool, async (db) => {
@@ -129,7 +130,7 @@ export async function fundGrant(ctx: AppContext, actor: Actor, id: string, raw: 
         if (grant.status !== 'active' || new Date(grant.expires_at) <= (await clock(db)))
           failure(409, 'grant_closed', 'This grant has closed or expired.');
         activeMode(ctx, grant);
-        if (Number(grant.funded_cents) + input.amountCents > 100_000_000)
+        if (addCents(grant.funded_cents, input.amountCents) > 100_000_000)
           failure(409, 'grant_limit', 'The grant funding ceiling is $1,000,000.');
         await applyCreditEntry(db, actor.id, {
           operationKey: `agent-fund:${id}:${operationFingerprint(input.operationKey)}`,

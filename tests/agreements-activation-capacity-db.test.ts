@@ -246,7 +246,7 @@ describe.skipIf(!url)(
             [buyer],
           )
         ).rows[0],
-      ).toMatchObject({ balance_cents: '20000', reserved_cents: '1200' });
+      ).toMatchObject({ balance_cents: 20000, reserved_cents: 1200 });
       expect(ctx.wick.create).not.toHaveBeenCalled();
     });
 

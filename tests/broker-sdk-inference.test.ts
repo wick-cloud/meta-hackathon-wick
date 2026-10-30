@@ -30,7 +30,7 @@ describe('Broker prepaid inference clients', () => {
         mode: 'auction',
         inputTokens: 1000000,
         outputTokens: 100000,
-        maxTotalCents: 500,
+        maxTotalCents: 123.45,
       },
       { operationKey: 'token-purchase-001' },
     );
@@ -58,6 +58,7 @@ describe('Broker prepaid inference clients', () => {
       code: 'operation_key_required',
     });
     expect(fetcher).toHaveBeenCalledTimes(3);
+    expect(JSON.parse(String(fetcher.mock.calls[1]![1]!.body)).maxTotalCents).toBe(123.45);
   });
 
   it('never retries an uncertain generation, purchases a refill, or replaces a completed request', async () => {

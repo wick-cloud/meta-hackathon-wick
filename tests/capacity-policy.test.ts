@@ -61,14 +61,14 @@ describe('capacity policy arithmetic and explicit validation', () => {
     expect(availableForBids(3, 1, { ...basePolicy, reserveSlots: 2 })).toBe(0);
     expect(availableForBids(1, 2, { ...basePolicy, reserveSlots: 2 })).toBe(0);
   });
-  it('preserves omitted capabilities and requires explicit valid integer money/reserves', () => {
+  it('preserves omitted capabilities and requires explicit four-decimal money and integer reserves', () => {
     expect(
       validatePolicy(
         { autoBid: true, minimumPriceCents: 6, basePriceCents: 10 },
         { ...basePolicy, reserveSlots: 2 },
       ),
     ).toEqual({ ...basePolicy, autoBid: true, minimumPriceCents: 6, reserveSlots: 2 });
-    expect(() => validatePolicy({ ...basePolicy, minimumPriceCents: 0.5 })).toThrow('integer');
+    expect(() => validatePolicy({ ...basePolicy, minimumPriceCents: 0.005 })).toThrow('decimal');
     expect(() => validatePolicy({ ...basePolicy, reserveSlots: -1 })).toThrow('integer');
     expect(() => validatePolicy({ ...basePolicy, reserveSlots: null })).toThrow('integer');
     expect(() => validatePolicy({ ...basePolicy, basePriceCents: 4 })).toThrow('at least');

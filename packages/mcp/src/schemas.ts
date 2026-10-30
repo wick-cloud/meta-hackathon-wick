@@ -2,7 +2,12 @@ import { z } from 'zod';
 import type { Operation } from '@wick-cloud/broker-cli/operations';
 const text = z.string().min(1).max(4000);
 const id = z.string().min(1).max(200);
-const cents = z.number().int().min(0).max(100000000);
+const cents = z
+  .number()
+  .multipleOf(0.01)
+  .min(0)
+  .max(100000000)
+  .describe('USD cents, allowing hundredths of a cent ($0.0001).');
 const opKey = z
   .string()
   .regex(/^[-A-Za-z0-9_:./]{8,160}$/)
@@ -64,7 +69,7 @@ export const bodySchemas: Record<string, z.ZodType> = {
       inputTokens: z.number().int().positive().max(10_000_000),
       outputTokens: z.number().int().positive().max(1_000_000),
       mode: z.enum(['auction', 'instant']),
-      maxTotalCents: cents.min(1),
+      maxTotalCents: cents.min(0.01),
       quoteId: z.string().min(1).max(4000).optional(),
     })
     .strict(),
@@ -93,10 +98,10 @@ export const bodySchemas: Record<string, z.ZodType> = {
       expectedRevision: z.number().int().positive().max(2_000_000_000),
       active: z.boolean(),
       autoBid: z.boolean(),
-      inputRateMicrosPerMillion: z.number().int().positive().max(1_000_000_000_000),
-      outputRateMicrosPerMillion: z.number().int().positive().max(1_000_000_000_000),
+      inputRateMicrosPerMillion: z.number().int().min(100).multipleOf(100).max(1_000_000_000_000),
+      outputRateMicrosPerMillion: z.number().int().min(100).multipleOf(100).max(1_000_000_000_000),
       instantMarkupBps: z.number().int().nonnegative().max(100_000),
-      minimumPriceCents: cents.min(1),
+      minimumPriceCents: cents.min(0.01),
       maxOutstandingInputTokens: z.number().int().positive().max(100_000_000),
       maxOutstandingOutputTokens: z.number().int().positive().max(10_000_000),
     })

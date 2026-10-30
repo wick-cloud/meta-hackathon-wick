@@ -1,3 +1,4 @@
+import { moneyUnits } from '../../shared/money.js';
 import { clientOperationKey, recordKeyAction, withOperation } from '../operations.js';
 import type { FastifyInstance } from 'fastify';
 import { HttpError, type AppContext } from '../context.js';
@@ -77,7 +78,7 @@ export async function registerProviderAgreementRoutes(app: FastifyInstance, ctx:
           requireFreshManagedRate(catalog.item);
           const rate = managedPricing(catalog.item).rateMicrosPerSecond;
           for (const price of [input.discountRateCentsPerHour, input.normalRateCentsPerHour])
-            if (BigInt(price) * 8500n < BigInt(rate) * 3600n)
+            if (moneyUnits(price) * 85n < BigInt(rate) * 3600n)
               throw new Error('The provider’s 85% must cover the published Wick compute rate.');
         } catch (error) {
           throw new HttpError(

@@ -17,7 +17,7 @@ Configure a local MCP host to launch:
   "mcpServers": {
     "wick-broker": {
       "command": "npx",
-      "args": ["-y", "@wick-cloud/broker-mcp@0.2.0"]
+      "args": ["-y", "@wick-cloud/broker-mcp@0.3.0"]
     }
   }
 }
@@ -44,3 +44,5 @@ Purchases, cancellation and completion each require a stable `operationKey`. An 
 Use a completion error’s `inferenceRequestId` as the receipt tool’s `id`. Its separate `requestId` is only HTTP correlation. If a transport timeout supplies no receipt ID, explicitly repeat the identical completion with the original operation key to recover the identifier; do not submit a new key for the same uncertain call.
 
 Provider accounts can expose `provider_inference_offering_get`, `provider_inference_offering_update` and `provider_inference_packs_list` under the existing provider read/offering-write scopes. Offer changes require `expectedRevision` and preserve accepted pack terms.
+
+Monetary `*Cents` inputs accept hundredths of a cent in version `0.3.0`: `123.45` means `$1.2345`, and `0.01` means `$0.0001`. Finer amounts are rejected. Token counts and capacity remain integers.

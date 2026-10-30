@@ -1,6 +1,13 @@
-import { Pool, type PoolClient } from 'pg';
+import { Pool, types, type PoolClient } from 'pg';
 import { readdir, readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
+/** NUMERIC money remains a JSON number, as the existing cents API requires. */
+export function parseDatabaseNumeric(value: string): number {
+  const result = Number(value);
+  if (!Number.isFinite(result) || Math.abs(result) > Number.MAX_SAFE_INTEGER / 100)
+    throw new Error('Database numeric value exceeds the safe application range.');
+  return result;
+}
 export function createPool(databaseUrl: string) {
   return new Pool({
     connectionString: databaseUrl,
@@ -9,6 +16,12 @@ export function createPool(databaseUrl: string) {
     idleTimeoutMillis: 30000,
     statement_timeout: 15000,
     idle_in_transaction_session_timeout: 15000,
+    types: {
+      getTypeParser: (oid, format) =>
+        oid === 1700 && format !== 'binary'
+          ? parseDatabaseNumeric
+          : types.getTypeParser(oid, format),
+    },
   });
 }
 export async function migrate(pool: Pool) {

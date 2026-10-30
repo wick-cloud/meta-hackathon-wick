@@ -1,3 +1,4 @@
+import { addCents, subtractCents, multiplyCents, moneyUnits } from '../../shared/money.js';
 import type { PoolClient } from 'pg';
 import type { AgreementInput, ScheduledOfferingInput } from '../../shared/agreements.js';
 import type { CatalogItem } from '../../shared/types.js';
@@ -49,8 +50,8 @@ function eligible(ctx: AppContext, c: Row, spec: AgreementInput, w: WindowTimes)
       requireFreshManagedRate(item);
       const pricing = managedPricing(item);
       if (
-        BigInt(windowCost(w, offer.discountRateCentsPerHour, offer.normalRateCentsPerHour)) *
-          8500n <
+        moneyUnits(windowCost(w, offer.discountRateCentsPerHour, offer.normalRateCentsPerHour)) *
+          85n <
         BigInt(pricing.rateMicrosPerSecond) * BigInt(seconds)
       )
         return false;
@@ -120,7 +121,7 @@ export async function matchAgreement(ctx: AppContext, id: string) {
     const wallet = await lockedWallet(db, a.buyer_id);
     if (
       a.status === 'open' &&
-      Number(wallet.balance_cents) - Number(wallet.reserved_cents) < Number(a.max_amount_cents)
+      subtractCents(wallet.balance_cents, wallet.reserved_cents) < Number(a.max_amount_cents)
     ) {
       await block(
         db,
@@ -159,7 +160,7 @@ export async function matchAgreement(ctx: AppContext, id: string) {
          FROM(SELECT s.*,to_char(s.created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') offer_created_at,c.item||jsonb_build_object('id',c.id) item,c.approved,c.source_mode,p.name provider_name,p.total_capacity,p.policy,p.cloud_provider,
          p.total_capacity-COALESCE((p.policy->>'reserveSlots')::int,0)-COALESCE(pp.quantity,0)-COALESCE(ph.quantity,0) provider_free,
          s.capacity_quantity-COALESCE(op.quantity,0) offering_free,prior.id prior_booking_id,
-         ceil((extract(epoch FROM w.d-w.s)*s.discount_rate_cents_per_hour+extract(epoch FROM w.e-w.d)*s.normal_rate_cents_per_hour)/3600) block_cost
+         (ceil((extract(epoch FROM w.d-w.s)*s.discount_rate_cents_per_hour+extract(epoch FROM w.e-w.d)*s.normal_rate_cents_per_hour)/36)/100) block_cost
          FROM broker_scheduled_offerings s JOIN broker_catalog c ON c.id=s.catalog_id JOIN broker_providers p ON p.id=s.provider_id
          LEFT JOIN peaks pp ON pp.window_at=w.s AND pp.kind='provider' AND pp.id=p.id
          LEFT JOIN peaks op ON op.window_at=w.s AND op.kind='offering' AND op.id=s.id
@@ -168,7 +169,7 @@ export async function matchAgreement(ctx: AppContext, id: string) {
          WHERE s.active AND c.approved AND c.source_mode=$1 AND($2='any' OR c.item->>'region'=$2)
          AND(c.item->>'cpu')::numeric>=$3 AND(c.item->>'memoryGb')::numeric>=$4
          AND($5::text IS NULL OR($5='any' AND COALESCE(c.item->>'gpu','')<>'') OR c.item->>'gpu'=$5)
-         AND s.discount_rate_cents_per_hour<=$6 AND($7::int IS NULL OR s.normal_rate_cents_per_hour<=$7)
+         AND s.discount_rate_cents_per_hour<=$6 AND($7::numeric IS NULL OR s.normal_rate_cents_per_hour<=$7)
          AND(p.policy->'allowedCatalogIds' IS NULL OR p.policy->'allowedCatalogIds' ? s.catalog_id)
          AND(p.cloud_provider IS NULL OR p.cloud_provider=c.item->>'provider')
          AND p.total_capacity-COALESCE((p.policy->>'reserveSlots')::int,0)-COALESCE(pp.quantity,0)-COALESCE(ph.quantity,0)>0
@@ -177,7 +178,7 @@ export async function matchAgreement(ctx: AppContext, id: string) {
            AND c.item->>'pricingMode'='managed' AND COALESCE(c.item->>'providerKeyId','')=''
            AND c.item->>'provider'=ANY(ARRAY['e2b','daytona','provider-blaxel','modal'])
            AND(c.item->>'rateRetrievedAt')::timestamptz BETWEEN clock_timestamp()-interval '15 minutes' AND clock_timestamp()+interval '60 seconds'
-           AND ceil((extract(epoch FROM w.d-w.s)*s.discount_rate_cents_per_hour+extract(epoch FROM w.e-w.d)*s.normal_rate_cents_per_hour)/3600)*8500>=(c.item->>'rateMicrosPerSecond')::numeric*extract(epoch FROM w.e-w.s)))
+           AND (ceil((extract(epoch FROM w.d-w.s)*s.discount_rate_cents_per_hour+extract(epoch FROM w.e-w.d)*s.normal_rate_cents_per_hour)/36)/100)*8500>=(c.item->>'rateMicrosPerSecond')::numeric*extract(epoch FROM w.e-w.s)))
          AND EXISTS(SELECT 1 FROM generate_series(-1,1) n CROSS JOIN LATERAL(SELECT(w.s AT TIME ZONE s.time_zone)::date+n AS day) local
            WHERE extract(dow FROM local.day)::int=ANY(s.weekdays)
            AND(local.day+s.window_start::time) AT TIME ZONE s.time_zone<=w.s
@@ -226,10 +227,12 @@ export async function matchAgreement(ctx: AppContext, id: string) {
         ? Number(a.max_amount_cents)
         : Math.max(
             0,
-            Number(a.reserved_cents) -
+            subtractCents(
+              Number(a.reserved_cents),
               windows
                 .filter((w) => !w.settled_at)
-                .reduce((sum, w) => sum + Number(w.committed_cents), 0),
+                .reduce((sum, w) => addCents(sum, Number(w.committed_cents)), 0),
+            ),
           );
     for (const w of windows) {
       if (w.settled_at || new Date(w.starts_at) <= new Date(a.db_now)) continue;
@@ -278,12 +281,18 @@ export async function matchAgreement(ctx: AppContext, id: string) {
           0,
           c.capacity_quantity - (cap.peaks.get(`offering:${c.id}`) ?? 0),
         );
-        const quantity = Math.min(needed, free, offerFree, global, Math.floor(allowance / unit));
+        const quantity = Math.min(
+          needed,
+          free,
+          offerFree,
+          global,
+          Number(moneyUnits(allowance) / moneyUnits(unit)),
+        );
         if (quantity <= 0) continue;
         plans.push({ window: w, candidate: c, quantity, unit });
         needed -= quantity;
         global -= quantity;
-        allowance -= quantity * unit;
+        allowance = subtractCents(allowance, multiplyCents(unit, quantity));
         providerUsed.set(c.provider_id, (providerUsed.get(c.provider_id) ?? 0) + quantity);
         if (!needed) break;
       }
@@ -351,11 +360,11 @@ export async function matchAgreement(ctx: AppContext, id: string) {
       );
       await db.query(
         'UPDATE broker_agreement_windows SET approved_quantity=approved_quantity+$2,committed_cents=committed_cents+$3 WHERE id=$1',
-        [p.window.id, p.quantity, p.quantity * p.unit],
+        [p.window.id, p.quantity, multiplyCents(p.unit, p.quantity)],
       );
       await db.query(
         'UPDATE broker_agreements SET committed_cents=committed_cents+$2 WHERE id=$1',
-        [id, p.quantity * p.unit],
+        [id, multiplyCents(p.unit, p.quantity)],
       );
     }
     await db.query(

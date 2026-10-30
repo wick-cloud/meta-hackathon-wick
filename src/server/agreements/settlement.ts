@@ -1,3 +1,4 @@
+import { addCents, subtractCents, multiplyCents } from '../../shared/money.js';
 import type { AppContext } from '../context.js';
 import { transaction } from '../marketplace/db.js';
 import { revenueShare } from '../../shared/pricing.js';
@@ -30,20 +31,30 @@ export async function settleWindow(ctx: AppContext, windowId: string) {
     let gross = 0,
       credit = 0;
     for (const b of bookings) {
-      const g = b.quantity * b.unit_price_cents,
+      const g = multiplyCents(b.unit_price_cents, b.quantity),
         c = Math.min(g, Number(b.adjustment_cents));
-      gross += g;
-      credit += c;
+      gross = addCents(gross, g);
+      credit = addCents(credit, c);
       await db.query(
         'INSERT INTO broker_agreement_charges(booking_id,agreement_id,window_id,buyer_id,provider_id,gross_cents,credit_cents,total_cents,revenue_share) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)',
-        [b.id, a.id, w.id, a.buyer_id, b.provider_id, g, c, g - c, revenueShare(g - c)],
+        [
+          b.id,
+          a.id,
+          w.id,
+          a.buyer_id,
+          b.provider_id,
+          g,
+          c,
+          subtractCents(g, c),
+          revenueShare(subtractCents(g, c)),
+        ],
       );
     }
     if (gross)
       await applyCreditEntry(db, a.buyer_id, {
         operationKey: `agreement:${a.id}:window:${w.id}:settle`,
         kind: 'settle',
-        balanceDeltaCents: -(gross - credit),
+        balanceDeltaCents: -subtractCents(gross, credit),
         reservedDeltaCents: -gross,
         agreementId: a.id,
         description:
@@ -51,11 +62,11 @@ export async function settleWindow(ctx: AppContext, windowId: string) {
       });
     await db.query(
       'UPDATE broker_agreement_windows SET settled_at=clock_timestamp(),settled_cents=$2 WHERE id=$1',
-      [w.id, gross - credit],
+      [w.id, subtractCents(gross, credit)],
     );
     await db.query(
       'UPDATE broker_agreements SET reserved_cents=reserved_cents-$2,settled_cents=settled_cents+$3 WHERE id=$1',
-      [a.id, gross, gross - credit],
+      [a.id, gross, subtractCents(gross, credit)],
     );
   });
 }

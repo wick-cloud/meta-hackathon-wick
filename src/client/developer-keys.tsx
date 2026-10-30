@@ -1,6 +1,7 @@
+import { usdToCents } from '../shared/money';
 import { useState, type FormEvent } from 'react';
 import { Copy, KeyRound, Plus, RefreshCw, ShieldCheck, X } from 'lucide-react';
-import { api, ApiError, dateTime, post } from './api';
+import { api, ApiError, dateTime, money, post } from './api';
 import {
   EmptyState,
   ErrorBox,
@@ -44,7 +45,7 @@ const labels: Record<BrokerScope, string> = {
   'inference:use': 'Use this agent’s prepaid token packs',
   'tokens:buy': 'Buy token packs within this agent’s funded budget',
 };
-const shortMoney = (cents?: number) => (cents === undefined ? '—' : `$${(cents / 100).toFixed(2)}`);
+const shortMoney = (cents?: number) => (cents === undefined ? '—' : money(cents));
 function Limits({ value }: { value: BrokerKeyLimits }) {
   return (
     <span className="key-limits">
@@ -93,9 +94,9 @@ export function DeveloperKeys() {
     setBusy(true);
     setError('');
     const limits: BrokerKeyLimits = {};
-    if (scopes.includes('orders:write')) limits.maxAuctionCents = Math.round(Number(auction) * 100);
+    if (scopes.includes('orders:write')) limits.maxAuctionCents = usdToCents(auction) ?? NaN;
     if (scopes.includes('agreements:write'))
-      limits.maxAgreementReservationCents = Math.round(Number(agreement) * 100);
+      limits.maxAgreementReservationCents = usdToCents(agreement) ?? NaN;
     if (scopes.includes('agreements:activate')) limits.maxActivationQuantity = quantity;
     try {
       const result = await post<{ key: BrokerKeySummary; token: string }>('/api/keys', {
@@ -287,9 +288,9 @@ export function DeveloperKeys() {
         <pre>
           {[
             'npm install \\',
-            `  ${window.location.origin}/downloads/0.2.0/wick-cloud-broker-sdk-0.2.0.tgz \\`,
-            `  ${window.location.origin}/downloads/0.2.0/wick-cloud-broker-cli-0.2.0.tgz \\`,
-            `  ${window.location.origin}/downloads/0.2.0/wick-cloud-broker-mcp-0.2.0.tgz`,
+            `  ${window.location.origin}/downloads/0.3.0/wick-cloud-broker-sdk-0.3.0.tgz \\`,
+            `  ${window.location.origin}/downloads/0.3.0/wick-cloud-broker-cli-0.3.0.tgz \\`,
+            `  ${window.location.origin}/downloads/0.3.0/wick-cloud-broker-mcp-0.3.0.tgz`,
           ].join('\n')}
         </pre>
         <div className="key-setup-grid">
@@ -392,9 +393,9 @@ export function DeveloperKeys() {
                         <span>Maximum order budget · USD</span>
                         <input
                           type="number"
-                          min="0.01"
+                          min="0.0001"
                           max="1000000"
-                          step="0.01"
+                          step="0.0001"
                           required
                           value={auction}
                           onChange={(e) => setAuction(e.target.value)}
@@ -406,9 +407,9 @@ export function DeveloperKeys() {
                         <span>Maximum agreement reservation · USD</span>
                         <input
                           type="number"
-                          min="0.01"
+                          min="0.0001"
                           max="1000000"
-                          step="0.01"
+                          step="0.0001"
                           required
                           value={agreement}
                           onChange={(e) => setAgreement(e.target.value)}

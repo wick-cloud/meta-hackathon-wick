@@ -1,3 +1,4 @@
+import { moneyCents } from './data.js';
 import { randomUUID } from 'node:crypto';
 import { clientOperationKey, enforceKeyLimit, withOperation } from '../operations.js';
 import type { Pool, PoolClient } from 'pg';
@@ -54,7 +55,7 @@ export async function createRequest(
   const durationMinutes = integer(body.durationMinutes ?? 30, 'Rental duration', 15, 60);
   if (![15, 30, 60].includes(durationMinutes))
     throw new HttpError(400, 'Choose exactly 15, 30 or 60 minutes.');
-  const maxPriceCents = integer(body.maxPriceCents, 'Maximum total price');
+  const maxPriceCents = moneyCents(body.maxPriceCents, 'Maximum total price');
   const cpu = integer(body.requirements?.cpu, 'CPU requirement', 1, 1024);
   const memoryGb = positiveNumber(body.requirements?.memoryGb, 'Memory requirement (GiB)', 16384);
   const gpu = body.requirements?.gpu
@@ -369,7 +370,7 @@ export async function submitBid(
   input: { totalPriceCents: number; offeringId?: string; operationKey?: string },
   source: 'manual' | 'auto' = 'manual',
 ) {
-  const price = integer(input.totalPriceCents, 'Total price');
+  const price = moneyCents(input.totalPriceCents, 'Total price');
   const key = clientOperationKey(input.operationKey, Boolean(actor.apiKey));
   return transaction(ctx.pool, async (db) =>
     withOperation(
@@ -766,7 +767,7 @@ export async function proposeBid(ctx: AppContext, actor: Actor, requestId: strin
     catalog: [match.catalog],
   });
   if (proposal.decision === 'bid') {
-    integer(proposal.totalPriceCents, 'Proposed price');
+    moneyCents(proposal.totalPriceCents, 'Proposed price');
     if (proposal.catalogId && proposal.catalogId !== match.catalog.id)
       throw new HttpError(422, 'Muse proposed a different configuration.');
     if (

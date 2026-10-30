@@ -47,7 +47,7 @@ wick-broker inference complete --file completion.json --operation-key completion
 wick-broker inference receipt <request-id> --json
 ```
 
-`token-amounts.json` contains positive `inputTokens` and `outputTokens`. `token-order.json` also contains `mode` (`auction` or `instant`), `maxTotalCents`, and an exact `quoteId` for instant purchase. `modelId` defaults to the server’s approved Meta contract. Read the catalog’s route qualification and fixture/real mode before placing an order.
+`token-amounts.json` contains positive integer `inputTokens` and `outputTokens`. `token-order.json` also contains `mode` (`auction` or `instant`), `maxTotalCents`, and an exact `quoteId` for instant purchase. Monetary `*Cents` values allow hundredths of a cent (`123.45` means `$1.2345`); the CLI preserves these values without cent rounding. `modelId` defaults to the server’s approved Meta contract. Read the catalog’s route qualification and fixture/real mode before placing an order.
 
 `completion.json` contains `model`, text-only `messages`, a positive `max_tokens` cap including reasoning, and optionally `stream: false`. Streaming, tools and images are not supported. Every completion consumes prepaid quota, is sent once, and requires its own stable operation key. A completed-key replay returns a receipt-only error; an uncertain outcome should be inspected through `inference receipt`, never retried with a new key. Refills require an explicit purchase and remain within the original grant budget. Ordinary unused pack quota is non-refundable.
 

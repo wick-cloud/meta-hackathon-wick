@@ -95,6 +95,8 @@ No secrets, terminal transcripts, prompts or raw upstream responses are logged b
 
 ## Prepaid Meta inference
 
+Monetary `*Cents` fields support hundredths of a cent: `$1.2345` is `123.45`, and `$0.0001` is `0.01`. The field unit has not changed. Pass decimal values directly; do not round them to whole cents. Token counts and capacity remain integers. Version `0.3.0` includes the expanded money contracts.
+
 An owner creates a funded AI grant in the browser and issues a key bound to it with `account:read`, `inference:read`, `tokens:buy` and `inference:use`. Key rotation retains the same grant; these agent keys cannot create a grant or raise its budget. Read `inference.catalog()` before buying: fixture mode is simulated, and an unqualified real provider route cannot serve inference.
 
 ```ts

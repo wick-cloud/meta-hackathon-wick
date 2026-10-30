@@ -4,7 +4,7 @@ import { open, realpath, type FileHandle } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
-const VERSIONS = ['0.1.0', '0.1.1', '0.2.0'] as const;
+const VERSIONS = ['0.1.0', '0.1.1', '0.2.0', '0.3.0'] as const;
 type ReleaseVersion = (typeof VERSIONS)[number];
 const MAX_MANIFEST_BYTES = 32768;
 const MAX_FILE_BYTES = 16 * 1024 * 1024;

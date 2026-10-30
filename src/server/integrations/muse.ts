@@ -1,3 +1,4 @@
+import { isMoneyCents, formatMoney, usdToCents } from '../../shared/money.js';
 import type {
   CatalogItem,
   Requirements,
@@ -60,6 +61,10 @@ function integer(value: unknown, label: string, min = 0, max = 100_000_000): num
     fail(`${label} is invalid.`);
   return value as number;
 }
+function money(value: unknown, label: string, min = 0, max = 100_000_000): number {
+  if (!isMoneyCents(value) || value < min || value > max) fail(`${label} is invalid.`);
+  return value;
+}
 function requirements(value: unknown): Requirements {
   const row = object(value, 'Resource requirements');
   onlyKeys(row, ['cpu', 'memoryGb', 'gpu'], 'Resource requirements');
@@ -81,11 +86,11 @@ function requirements(value: unknown): Requirements {
 function policy(value: SupplierPolicy): SupplierPolicy {
   const result: SupplierPolicy = {
     autoBid: value.autoBid === true,
-    minimumPriceCents: integer(value.minimumPriceCents, 'Supplier minimum price'),
-    basePriceCents: integer(value.basePriceCents, 'Supplier base price'),
+    minimumPriceCents: money(value.minimumPriceCents, 'Supplier minimum price'),
+    basePriceCents: money(value.basePriceCents, 'Supplier base price'),
   };
   if (value.maxPriceCents !== undefined)
-    result.maxPriceCents = integer(value.maxPriceCents, 'Supplier maximum price');
+    result.maxPriceCents = money(value.maxPriceCents, 'Supplier maximum price');
   if (value.reserveSlots !== undefined)
     result.reserveSlots = integer(value.reserveSlots, 'Reserved spare slots', 0, 100_000);
   if (result.maxPriceCents !== undefined && result.minimumPriceCents > result.maxPriceCents)
@@ -303,9 +308,9 @@ const capacitySchema = {
   additionalProperties: false,
   properties: {
     autoBid: { type: 'boolean' },
-    minimumPriceCents: { type: 'integer', minimum: 0, maximum: 100_000_000 },
-    basePriceCents: { type: 'integer', minimum: 0, maximum: 100_000_000 },
-    maxPriceCents: { type: ['integer', 'null'], minimum: 0, maximum: 100_000_000 },
+    minimumPriceCents: { type: 'number', multipleOf: 0.01, minimum: 0, maximum: 100_000_000 },
+    basePriceCents: { type: 'number', multipleOf: 0.01, minimum: 0, maximum: 100_000_000 },
+    maxPriceCents: { type: ['number', 'null'], multipleOf: 0.01, minimum: 0, maximum: 100_000_000 },
     allowedCatalogIds: {
       type: ['array', 'null'],
       maxItems: MAX_CATALOG_ITEMS,
@@ -556,7 +561,7 @@ export function createMuseAdapter(config: MuseConfig, options: MuseOptions = {})
       const value = await complete(
         'wick_scheduled_draft',
         scheduledDraftSchema,
-        'Extract only explicitly stated facts into an editable scheduled capacity draft. Unknown values MUST be null. Prices are integer USD cents per VM-hour. Do not invent approved configurations, regions, dates, quantities or prices. Never enable normal-rate continuation unless explicitly requested. No authority, credit, booking or VM is created. Only return fields in the schema; the customer must review before submission.',
+        'Extract only explicitly stated facts into an editable scheduled capacity draft. Unknown values MUST be null. Prices use USD cents with hundredths-of-a-cent precision ($0.0001) per VM-hour. Do not invent approved configurations, regions, dates, quantities or prices. Never enable normal-rate continuation unless explicitly requested. No authority, credit, booking or VM is created. Only return fields in the schema; the customer must review before submission.',
         { kind: input.kind, description, catalog: modelCatalog(catalog) },
       );
       try {
@@ -603,10 +608,10 @@ export function createMuseAdapter(config: MuseConfig, options: MuseOptions = {})
           /\b(?:keep|reserve|leave)\s+(\d+|zero|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:slots?|machines?|instances?)?\s*(?:spare|free|reserved)?\b/i,
         );
         const floor = strategy.match(
-          /\b(?:never\s+(?:quote|sell)\s+below|(?:minimum|floor)(?:\s+price)?(?:\s+of)?)\s*[:=]?\s*\$\s*(\d{1,6})(?:\.(\d{1,2})(?!\d))?\b/i,
+          /\b(?:never\s+(?:quote|sell)\s+below|(?:minimum|floor)(?:\s+price)?(?:\s+of)?)\s*[:=]?\s*\$\s*(\d{1,6})(?:\.(\d{1,4})(?!\d))?(?![\d.])\b/i,
         );
         const minimumPriceCents = floor
-          ? Number(floor[1]) * 100 + Number((floor[2] ?? '').padEnd(2, '0'))
+          ? (usdToCents(`${floor[1]}.${floor[2] ?? ''}`) ?? current.minimumPriceCents)
           : current.minimumPriceCents;
         const disableAutomation =
           /\b(?:do\s+not|don['’]t|never|no|disable|pause|stop|turn\s+off)\s+(?:(?:all|any)\s+)?(?:auto(?:matic(?:ally)?)?\s*bid(?:ding|s)?|bid(?:ding|s)?\s+automatically|fill\s+idle|sell\s+idle|automatic\s+counteroffers?)\b/i.test(
@@ -642,10 +647,10 @@ export function createMuseAdapter(config: MuseConfig, options: MuseOptions = {})
       if (typeof row.autoBid !== 'boolean') fail('Automatic bidding must be boolean.');
       const result = policy({
         autoBid: row.autoBid,
-        minimumPriceCents: integer(row.minimumPriceCents, 'Supplier minimum price'),
-        basePriceCents: integer(row.basePriceCents, 'Supplier base price'),
+        minimumPriceCents: money(row.minimumPriceCents, 'Supplier minimum price'),
+        basePriceCents: money(row.basePriceCents, 'Supplier base price'),
         ...(row.maxPriceCents !== null
-          ? { maxPriceCents: integer(row.maxPriceCents, 'Supplier maximum price') }
+          ? { maxPriceCents: money(row.maxPriceCents, 'Supplier maximum price') }
           : {}),
         ...(row.allowedCatalogIds !== null
           ? { allowedCatalogIds: row.allowedCatalogIds as string[] }
@@ -669,7 +674,7 @@ export function createMuseAdapter(config: MuseConfig, options: MuseOptions = {})
             `${ownCapacity.total} total supplier slots; ${ownCapacity.held} currently held.`,
             `Strategy: ${strategy.slice(0, 240)}`,
           ],
-          `Review ${result.reserveSlots ?? 0} spare slots and a $${(result.minimumPriceCents / 100).toFixed(2)} minimum total before applying.`,
+          `Review ${result.reserveSlots ?? 0} spare slots and a ${formatMoney(result.minimumPriceCents)} minimum total before applying.`,
           [
             'This proposal changes no policy and reserves no capacity.',
             'Apply must compare the policy revision; newer limits cannot be overwritten silently.',
@@ -689,7 +694,7 @@ export function createMuseAdapter(config: MuseConfig, options: MuseOptions = {})
           1,
           100_000,
         ),
-        maxPriceCents: integer(input.requirements.maxPriceCents, 'Customer total budget'),
+        maxPriceCents: money(input.requirements.maxPriceCents, 'Customer total budget'),
       };
       if (!Array.isArray(input.candidates) || input.candidates.length > 12)
         fail('Too many counteroffer candidates.');
@@ -701,7 +706,7 @@ export function createMuseAdapter(config: MuseConfig, options: MuseOptions = {})
           region: string(candidate.region, 'Candidate region', 120),
           durationMinutes: integer(candidate.durationMinutes, 'Candidate duration', 1, 60),
           requirements: requirements(candidate.requirements),
-          totalPriceCents: integer(candidate.totalPriceCents, 'Candidate total price', 1),
+          totalPriceCents: money(candidate.totalPriceCents, 'Candidate total price', 0.01),
         };
         if (
           seenInputs.has(projected.id) ||
@@ -760,7 +765,7 @@ export function createMuseAdapter(config: MuseConfig, options: MuseOptions = {})
         // Never expose model text generated with private supplier policy to a buyer.
         return {
           candidateId: id,
-          rationale: `Review ${candidate.requirements.cpu} CPU / ${candidate.requirements.memoryGb} GiB${candidate.requirements.gpu ? ` / ${candidate.requirements.gpu}` : ''} in ${candidate.region} for ${candidate.durationMinutes} minutes at a fixed total of $${(candidate.totalPriceCents / 100).toFixed(2)}. Explicit acceptance is required.`,
+          rationale: `Review ${candidate.requirements.cpu} CPU / ${candidate.requirements.memoryGb} GiB${candidate.requirements.gpu ? ` / ${candidate.requirements.gpu}` : ''} in ${candidate.region} for ${candidate.durationMinutes} minutes at a fixed total of ${formatMoney(candidate.totalPriceCents)}. Explicit acceptance is required.`,
         };
       });
       return {
@@ -848,7 +853,7 @@ export function createMuseAdapter(config: MuseConfig, options: MuseOptions = {})
     async proposeBid(input: BidInput): Promise<BidProposal> {
       const ownPolicy = policy(input.policy);
       const available = integer(input.availableCapacity, 'Available supplier capacity', 0, 100_000);
-      const maxPrice = integer(input.request.maxPriceCents, 'Customer total budget');
+      const maxPrice = money(input.request.maxPriceCents, 'Customer total budget');
       const duration = integer(input.request.durationMinutes, 'Rental duration', 1, 60);
       const needed = requirements(input.request.requirements);
       const catalog = catalogItems(input.catalog);
@@ -862,7 +867,7 @@ export function createMuseAdapter(config: MuseConfig, options: MuseOptions = {})
           mode,
           [
             `${available} available supplier capacity slots.`,
-            `Requested ${duration} minutes; maximum total $${(maxPrice / 100).toFixed(2)}.`,
+            `Requested ${duration} minutes; maximum total ${formatMoney(maxPrice)}.`,
           ],
           decision,
           [
@@ -889,7 +894,7 @@ export function createMuseAdapter(config: MuseConfig, options: MuseOptions = {})
         return decline(
           'Declined: the customer’s fixed total budget is below this supplier’s minimum.',
         );
-      const totalPriceCents = integer(
+      const totalPriceCents = money(
         input.suggestedTotalPriceCents ??
           Math.max(ownPolicy.minimumPriceCents, ownPolicy.basePriceCents),
         'Server fixed total price',
@@ -953,9 +958,9 @@ export function createMuseAdapter(config: MuseConfig, options: MuseOptions = {})
           mode,
           [
             `${available} available supplier capacity slots.`,
-            `${duration} minutes on ${item.name}; customer budget $${(maxPrice / 100).toFixed(2)}.`,
+            `${duration} minutes on ${item.name}; customer budget ${formatMoney(maxPrice)}.`,
           ],
-          `Propose a fixed total quote of $${(totalPriceCents / 100).toFixed(2)}.`,
+          `Propose a fixed total quote of ${formatMoney(totalPriceCents)}.`,
           [
             'Only this supplier’s capacity and pricing policy were considered.',
             modelCalled
@@ -1017,7 +1022,7 @@ export function createMuseAdapter(config: MuseConfig, options: MuseOptions = {})
           id: string(raw.id, 'Offering candidate identifier', 200),
           catalogId: string(raw.catalogId, 'Offering catalog identifier', 200),
           durationMinutes: integer(raw.durationMinutes, 'Offering duration', 1, 60),
-          totalPriceCents: integer(raw.totalPriceCents, 'Server offering price'),
+          totalPriceCents: money(raw.totalPriceCents, 'Server offering price'),
         };
         const item = catalog.find((item) => item.id === candidate.catalogId);
         if (

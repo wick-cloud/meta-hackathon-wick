@@ -1,3 +1,5 @@
+import { isMoneyCents } from '../../shared/money.js';
+import { moneyCents } from './data.js';
 import { enforceKeyLimit, recordKeyAction } from '../operations.js';
 import { createHash } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
@@ -72,7 +74,7 @@ function parseDesired(value: Row): Desired {
     ...(value.gpu ? { gpu: shortText(value.gpu, 'Desired GPU', 120) } : {}),
     region: shortText(value.region, 'Desired region', 120),
     durationMinutes: integer(value.durationMinutes, 'Desired duration', 1, 1440),
-    maxPriceCents: integer(value.maxPriceCents, 'Hard budget'),
+    maxPriceCents: moneyCents(value.maxPriceCents, 'Hard budget'),
   };
 }
 function parseFlexibility(value: Row | undefined, d: Desired): Flexibility {
@@ -120,7 +122,7 @@ function parseFlexibility(value: Row | undefined, d: Desired): Flexibility {
     minMemoryGb,
     allowedRegions,
     allowedDurations,
-    hardMaxPriceCents: integer(value.hardMaxPriceCents, 'Hard total limit', 0, d.maxPriceCents),
+    hardMaxPriceCents: moneyCents(value.hardMaxPriceCents, 'Hard total limit', 0, d.maxPriceCents),
     gpu: value.gpu,
   };
 }
@@ -354,7 +356,7 @@ function quoteCandidate(
   }
   price = Math.max(price, p.policy.minimumPriceCents, pricing?.upstreamCostFloorCents ?? 0);
   if (
-    !Number.isSafeInteger(price) ||
+    !isMoneyCents(price) ||
     price < 0 ||
     price > 100000000 ||
     (p.policy.maxPriceCents !== undefined && price > p.policy.maxPriceCents)

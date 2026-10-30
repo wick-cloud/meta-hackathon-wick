@@ -1,3 +1,5 @@
+import { addCents, multiplyCents, isMoneyCents } from '../../shared/money.js';
+import { moneyCents } from '../marketplace/data.js';
 import type { AgreementInput, ScheduledOfferingInput } from '../../shared/agreements.js';
 import { HttpError } from '../context.js';
 import { integer, positiveNumber, shortText } from '../marketplace/data.js';
@@ -53,7 +55,11 @@ export function validateAgreement(
     ? {
         enabled: true,
         until: clock(v.continuation.until),
-        maxRateCentsPerHour: integer(v.continuation.maxRateCentsPerHour, 'Continuation rate', 1),
+        maxRateCentsPerHour: moneyCents(
+          v.continuation.maxRateCentsPerHour,
+          'Continuation rate',
+          0.01,
+        ),
       }
     : undefined;
   const input: AgreementInput = {
@@ -71,10 +77,16 @@ export function validateAgreement(
       ...(v.requirements?.gpu ? { gpu: shortText(v.requirements.gpu, 'GPU', 100) } : {}),
     },
     region: shortText(v.region, 'Region', 100),
-    maxDiscountRateCentsPerHour: integer(v.maxDiscountRateCentsPerHour, 'Discount rate', 1),
+    maxDiscountRateCentsPerHour: moneyCents(v.maxDiscountRateCentsPerHour, 'Discount rate', 0.01),
     ...(v.maxReservationCents === undefined
       ? {}
-      : { maxReservationCents: integer(v.maxReservationCents, 'Reviewed maximum reservation', 1) }),
+      : {
+          maxReservationCents: moneyCents(
+            v.maxReservationCents,
+            'Reviewed maximum reservation',
+            0.01,
+          ),
+        }),
     ...(continuation ? { continuation } : {}),
   };
   if (input.minimumQuantity > input.targetQuantity)
@@ -84,12 +96,16 @@ export function validateAgreement(
     throw new HttpError(400, 'The first capacity window has already ended.');
   const maxAmountCents = windows.reduce(
     (sum, w) =>
-      sum +
-      windowCost(w, input.maxDiscountRateCentsPerHour, continuation?.maxRateCentsPerHour) *
-        input.targetQuantity,
+      addCents(
+        sum,
+        multiplyCents(
+          windowCost(w, input.maxDiscountRateCentsPerHour, continuation?.maxRateCentsPerHour),
+          input.targetQuantity,
+        ),
+      ),
     0,
   );
-  if (!Number.isSafeInteger(maxAmountCents) || maxAmountCents > 100000000)
+  if (!isMoneyCents(maxAmountCents) || maxAmountCents > 100000000)
     throw new HttpError(400, 'The maximum seven-day agreement exceeds the credit limit.');
   if (input.maxReservationCents !== undefined && maxAmountCents > input.maxReservationCents)
     throw new HttpError(
@@ -117,8 +133,8 @@ export function validateOffering(raw: unknown): ScheduledOfferingInput {
     windowEnd: clock(v.windowEnd),
     availableUntil: clock(v.availableUntil),
     capacityQuantity: integer(v.capacityQuantity, 'Capacity', 1, 20),
-    discountRateCentsPerHour: integer(v.discountRateCentsPerHour, 'Discount rate', 1),
-    normalRateCentsPerHour: integer(v.normalRateCentsPerHour, 'Normal rate', 1),
+    discountRateCentsPerHour: moneyCents(v.discountRateCentsPerHour, 'Discount rate', 0.01),
+    normalRateCentsPerHour: moneyCents(v.normalRateCentsPerHour, 'Normal rate', 0.01),
   };
   windowOn('2026-01-15', value.windowStart, value.windowEnd, value.availableUntil, value.timeZone);
   return value;
