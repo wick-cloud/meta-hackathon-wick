@@ -31,3 +31,5 @@ Only a digest is stored. The secret is returned once, is not recoverable by refr
 A replacement revokes only that batch's old key. Expiry cannot exceed the batch, task grant or issuing purchasing key. Delegated keys inherit parent revocation; replacing the grant's purchasing key retains the existing behavior of revoking all that grant's keys. Account/role changes and the existing 20-active-key account limit still apply. A batch key cannot purchase, fund, manage keys, access VM controls, inspect other batches or silently consume a different pack when exhausted. Rotation preserves usage and unresolved reservations.
 
 The connection link `/tokens?connect=<pack-id>` opens an authenticated owner dialog without embedding a secret. Session ownership and all key scopes are revalidated by the server. Payment collection and supplier payouts remain separate; unused purchased quota is not automatically refundable.
+
+See the [October 30 Railway MCP verification](verification/railway-mcp-e2e-2026-10-30.md) for the live Baseten task/VM result, Modal accounting failure, MCP release gaps and cleanup evidence.

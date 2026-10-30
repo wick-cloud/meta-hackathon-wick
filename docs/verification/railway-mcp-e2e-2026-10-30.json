@@ -1,0 +1,340 @@
+{
+  "app": "https://meta-hackathon-wick-production.up.railway.app",
+  "deployedCommit": "42a28da0b1173181d8ee5c672a968fcbfc61dc76",
+  "deploymentId": "f46c8854-4ed0-484d-a18b-962749797c32",
+  "date": "2026-10-30",
+  "timezone": "America/Vancouver",
+  "protocol": "2025-11-25",
+  "execution": "Codex spawned released MCP 0.3.0 using stdio; no permanent Codex MCP configuration changes",
+  "clientIntegrity": [
+    {
+      "name": "wick-cloud-broker-cli-0.3.0.tgz",
+      "sha256": "fc6f3ff229fcd69b55b70258a9b945f4271c6c6d701a70ec7110cd783483e861",
+      "size": 12719,
+      "verified": true
+    },
+    {
+      "name": "wick-cloud-broker-mcp-0.3.0.tgz",
+      "sha256": "a6385bd61ab2c2659f6ba254b70aa2d2ff735727507000191083976387d2e62d",
+      "size": 10008,
+      "verified": true
+    },
+    {
+      "name": "wick-cloud-broker-sdk-0.3.0.tgz",
+      "sha256": "f18f12ce437c433f28a0ea0e753b6ad37a95babe9978129bfc6e16f89489885d",
+      "size": 27087,
+      "verified": true
+    }
+  ],
+  "openMarketRun": {
+    "runId": "f4e2a79c-64c7-4a1b-af36-c6913e933c02",
+    "startedAt": "2026-10-30T21:04:35.272Z",
+    "finishedAt": "2026-10-30T21:05:51.148Z",
+    "result": "Modal inference accounting failed; auctions and VM creation passed",
+    "orders": [
+      {
+        "id": "16f2a3f9-0569-4072-84ca-fff16316dcc8",
+        "grantId": "3d5a2992-0b8f-4d11-9c61-483f5c9b8699",
+        "provider": "modal",
+        "inputTokens": 1050000,
+        "outputTokens": 512,
+        "priceCents": 173.54,
+        "priceUsd": "1.7354",
+        "createdAt": "2026-10-30T21:04:37.074Z",
+        "closesAt": "2026-10-30T21:05:07.073Z",
+        "expiresAt": "2026-10-30T23:04:36.047Z",
+        "packId": "416a6d5a-2595-41ef-b654-ddd8110eb10d",
+        "bids": [
+          {
+            "provider": "modal",
+            "priceCents": 173.54,
+            "status": "won",
+            "mode": "real"
+          },
+          {
+            "provider": "baseten",
+            "priceCents": 178.79,
+            "status": "lost",
+            "mode": "real"
+          }
+        ],
+        "revenueShare": {
+          "commissionBps": 1500,
+          "grossCents": 173.54,
+          "brokerFeeMicros": "260310",
+          "providerNetMicros": "1475090"
+        }
+      },
+      {
+        "id": "bcb39bd4-10e4-473b-b7f1-33f8766d2be0",
+        "grantId": "2a7641d1-789e-4a07-a623-725dcd6d1a03",
+        "provider": "baseten",
+        "inputTokens": 1050000,
+        "outputTokens": 512,
+        "priceCents": 178.79,
+        "priceUsd": "1.7879",
+        "createdAt": "2026-10-30T21:05:11.099Z",
+        "closesAt": "2026-10-30T21:05:41.098Z",
+        "expiresAt": "2026-10-30T23:05:10.286Z",
+        "packId": "ed1f5c80-6d08-4524-a5a1-c611d1578d2e",
+        "bids": [
+          {
+            "provider": "baseten",
+            "priceCents": 178.79,
+            "status": "won",
+            "mode": "real"
+          }
+        ],
+        "revenueShare": {
+          "commissionBps": 1500,
+          "grossCents": 178.79,
+          "brokerFeeMicros": "268185",
+          "providerNetMicros": "1519715"
+        }
+      }
+    ],
+    "vm": {
+      "id": "ec5ddb5f-2888-4ee0-b260-daedf1de2e3f",
+      "requestId": "ba064e24-2284-4de0-91df-8e9c57ddbe7e",
+      "sourceMode": "real",
+      "catalogName": "Micro · E2B",
+      "region": "us",
+      "durationMinutes": 15,
+      "priceCents": 5,
+      "readyAt": "2026-10-30T21:05:12.547Z",
+      "expiresAt": "2026-10-30T21:20:08.666Z",
+      "cleanup": {
+        "status": "terminated",
+        "cleanupPending": false,
+        "cleanupConfirmedAt": "2026-10-30T21:05:50.110Z",
+        "remainingFailureReason": "Waiting for Wick to confirm environment cleanup."
+      }
+    }
+  },
+  "basetenRun": {
+    "runId": "f11b4c94-4941-4775-aed9-bcfe42af1771",
+    "startedAt": "2026-10-30T21:07:29.054Z",
+    "finishedAt": "2026-10-30T21:08:27.192Z",
+    "result": "passed",
+    "orders": [
+      {
+        "id": "0da9694b-61f8-49c1-813b-28d7a93cc4c4",
+        "grantId": "9d59a0aa-58b9-49db-bd32-a98e8f5a2906",
+        "provider": "baseten",
+        "inputTokens": 1050000,
+        "outputTokens": 512,
+        "priceCents": 178.79,
+        "priceUsd": "1.7879",
+        "createdAt": "2026-10-30T21:07:30.759Z",
+        "closesAt": "2026-10-30T21:08:00.758Z",
+        "expiresAt": "2026-10-30T23:07:29.757Z",
+        "packId": "06c2fef4-9933-4c3b-b270-8fdb4c51e704",
+        "bids": [
+          {
+            "provider": "baseten",
+            "priceCents": 178.79,
+            "status": "won",
+            "mode": "real"
+          }
+        ],
+        "revenueShare": {
+          "commissionBps": 1500,
+          "grossCents": 178.79,
+          "brokerFeeMicros": "268185",
+          "providerNetMicros": "1519715"
+        },
+        "beforeCleanupQuota": {
+          "availableInputTokens": 1049695,
+          "availableOutputTokens": 314,
+          "consumedInputTokens": 305,
+          "consumedOutputTokens": 198,
+          "heldInputTokens": 0,
+          "heldOutputTokens": 0
+        }
+      }
+    ],
+    "vm": {
+      "id": "fe037d65-cc69-4828-8a45-021c95f22600",
+      "requestId": "34fed988-5079-4e39-8e7a-aa2d92161a80",
+      "sourceMode": "real",
+      "catalogName": "Micro · E2B",
+      "region": "us",
+      "durationMinutes": 15,
+      "priceCents": 5,
+      "readyAt": "2026-10-30T21:08:10.716Z",
+      "expiresAt": "2026-10-30T21:23:02.929Z",
+      "cleanup": {
+        "status": "terminated",
+        "cleanupPending": false,
+        "cleanupConfirmedAt": "2026-10-30T21:08:25.133Z",
+        "remainingFailureReason": "Waiting for Wick to confirm environment cleanup."
+      }
+    },
+    "completions": [
+      {
+        "origin": "Codex MCP",
+        "elapsedMs": 969,
+        "id": "33d2c0e7-3f25-49e9-90d2-9db658aa1f99",
+        "broker": {
+          "requestId": "33d2c0e7-3f25-49e9-90d2-9db658aa1f99",
+          "packId": "06c2fef4-9933-4c3b-b270-8fdb4c51e704",
+          "provider": "baseten",
+          "mode": "real"
+        },
+        "usage": {
+          "prompt_tokens": 150,
+          "completion_tokens": 64,
+          "total_tokens": 214
+        },
+        "finishReason": "length",
+        "receipt": {
+          "id": "33d2c0e7-3f25-49e9-90d2-9db658aa1f99",
+          "grantId": "9d59a0aa-58b9-49db-bd32-a98e8f5a2906",
+          "packId": "06c2fef4-9933-4c3b-b270-8fdb4c51e704",
+          "provider": "baseten",
+          "mode": "real",
+          "status": "settled",
+          "heldInputTokens": 0,
+          "heldOutputTokens": 0,
+          "inputTokens": 150,
+          "outputTokens": 64,
+          "failureCode": null,
+          "createdAt": "2026-10-30T21:08:12.801Z",
+          "completedAt": "2026-10-30T21:08:13.400Z"
+        }
+      },
+      {
+        "origin": "task VM via MCP terminal",
+        "elapsedMs": 1752,
+        "id": "bceac0eb-6c84-4bb2-b420-ac6cc9a49b91",
+        "broker": {
+          "requestId": "bceac0eb-6c84-4bb2-b420-ac6cc9a49b91",
+          "packId": "06c2fef4-9933-4c3b-b270-8fdb4c51e704",
+          "provider": "baseten",
+          "mode": "real"
+        },
+        "usage": {
+          "prompt_tokens": 155,
+          "completion_tokens": 134,
+          "total_tokens": 289
+        },
+        "receipt": {
+          "id": "bceac0eb-6c84-4bb2-b420-ac6cc9a49b91",
+          "grantId": "9d59a0aa-58b9-49db-bd32-a98e8f5a2906",
+          "packId": "06c2fef4-9933-4c3b-b270-8fdb4c51e704",
+          "provider": "baseten",
+          "mode": "real",
+          "status": "settled",
+          "heldInputTokens": 0,
+          "heldOutputTokens": 0,
+          "inputTokens": 155,
+          "outputTokens": 134,
+          "failureCode": null,
+          "createdAt": "2026-10-30T21:08:17.439Z",
+          "completedAt": "2026-10-30T21:08:18.334Z"
+        }
+      }
+    ],
+    "rotation": {
+      "oldKeyRejected": true,
+      "consumedAllowanceUnchanged": true,
+      "otherBatchReadsRejected": true
+    },
+    "task": {
+      "hostname": "e2b.local",
+      "reply": "BROKER_MCP_TASK_OK",
+      "finishReason": "stop"
+    },
+    "inventoryVerified": true,
+    "checks": {
+      "overRemainingQuotaRejected": true,
+      "crossBatchRead404": true,
+      "vmPurchaseWithBatchKey403": true,
+      "oldKeyAfterRotation401": true,
+      "noSecondInferenceCharge": true
+    }
+  },
+  "postCleanup": {
+    "checkedAt": "2026-10-30T21:09:22.508Z",
+    "modalGrantStatus": "closing",
+    "modalReceipts": [
+      {
+        "id": "220e02b0-36df-4a6d-ad93-1f53a9a51e09",
+        "grantId": "3d5a2992-0b8f-4d11-9c61-483f5c9b8699",
+        "packId": "416a6d5a-2595-41ef-b654-ddd8110eb10d",
+        "provider": "modal",
+        "mode": "real",
+        "status": "needs_reconciliation",
+        "heldInputTokens": 1048576,
+        "heldOutputTokens": 64,
+        "inputTokens": null,
+        "outputTokens": null,
+        "failureCode": "inconsistent_usage",
+        "createdAt": "2026-10-30T21:05:45.073Z",
+        "completedAt": null
+      }
+    ],
+    "routes": [
+      {
+        "provider": "modal",
+        "mode": "real",
+        "modelId": "meta/muse-spark-open",
+        "modelName": "Meta Muse Spark Open",
+        "qualified": false,
+        "reason": "Authoritative provider usage could not be verified.",
+        "minimumInputReservation": 1048576,
+        "maximumOutputTokens": 512
+      },
+      {
+        "provider": "baseten",
+        "mode": "real",
+        "modelId": "meta/muse-spark-open",
+        "modelName": "Meta Muse Spark Open",
+        "qualified": true,
+        "reason": "Operator-qualified buffered text accounting.",
+        "minimumInputReservation": 1048576,
+        "maximumOutputTokens": 512
+      }
+    ],
+    "packs": [
+      {
+        "id": "06c2fef4-9933-4c3b-b270-8fdb4c51e704",
+        "provider": "baseten",
+        "status": "settled",
+        "heldInputTokens": 0,
+        "heldOutputTokens": 0,
+        "retirementReason": "owner_closed"
+      },
+      {
+        "id": "ed1f5c80-6d08-4524-a5a1-c611d1578d2e",
+        "provider": "baseten",
+        "status": "settled",
+        "heldInputTokens": 0,
+        "heldOutputTokens": 0,
+        "retirementReason": "owner_closed"
+      },
+      {
+        "id": "416a6d5a-2595-41ef-b654-ddd8110eb10d",
+        "provider": "modal",
+        "status": "retiring",
+        "heldInputTokens": 1048576,
+        "heldOutputTokens": 64,
+        "retirementReason": "owner_closed"
+      }
+    ],
+    "keysRevoked": 9,
+    "cleanupFailures": []
+  },
+  "costs": {
+    "tokenCreditChargeCents": 531.12,
+    "tokenCreditChargeUsd": "5.3112",
+    "acceptedVmQuotesCents": [5, 5],
+    "actualUpstreamComputeBillMeasured": false
+  },
+  "limitations": [
+    "Released MCP 0.3.0 advertises some grant-scoped read tools to a batch key; the deployed server correctly rejects them with HTTP 403.",
+    "Released MCP 0.3.0 has no batch-key issuance tool. Owner/API setup issued the keys; purchasing, quota reads, inference and terminal execution used MCP.",
+    "The first cleanup retired an unused Baseten pack; the second run bought one new Baseten pack.",
+    "Natural two-hour expiry, streaming, tools, concurrency/load and native physical purge were not tested."
+  ]
+}
