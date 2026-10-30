@@ -8,6 +8,8 @@ Buyers land on `/orders`. The server reads historical auctions directly from the
 
 Type, status, date and cursor filters live in the URL. The default page is 25 rows, maximum 100, newest first. Cursor timestamps retain PostgreSQL microseconds, with source kind and UUID as tie breakers. The client keys rows by `kind:id` and preserves server order. Source filters apply before pagination; bid counts, selected windows and running counts are enriched in bounded batches. Agreement activation child requests do not appear as extra instant auctions. Hidden tabs pause polling.
 
+The buyer's `/vms` page is a compact inventory table with name/ID search, provider and lifecycle filters, newest/oldest sorting, and previous/next navigation. Filters and page cursors remain in the URL. It reads 25 rows at a time from the buyer-session-only `GET /api/vm-inventory` read model; tenant and page filters apply before snapshot enrichment. The public `/api/vms` response and existing client downloads remain unchanged. Resources and prices come from the accepted VM snapshots, and cleanup-held failures remain visible in Active until cleanup is confirmed. Terminal links and confirmed termination use the existing VM lifecycle routes; uncertain termination retries retain their operation key.
+
 ## Funded agreements
 
 An order selects seven consecutive local dates within a 30-day forecast, an IANA timezone, required region/resources, target and minimum quantities, discounted hours and optional normal-rate continuation. Provider region and schedule timezone are separate fields. Ambiguous or missing daylight-saving boundary times require a new reviewed choice.

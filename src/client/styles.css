@@ -1723,9 +1723,6 @@ td:last-child {
   display: block;
   max-width: 230px;
 }
-.environments-card {
-  padding: 24px;
-}
 .segmented-control {
   display: flex;
   gap: 3px;
@@ -1745,97 +1742,6 @@ td:last-child {
   background: var(--card);
   color: var(--soft);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
-}
-.vm-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 17px;
-}
-.vm-card {
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: 19px;
-  transition:
-    border-color 0.15s,
-    box-shadow 0.15s;
-}
-.vm-card:hover {
-  border-color: var(--line-strong);
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
-}
-.vm-card-top {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 21px;
-}
-.vm-card-top .icon-tile {
-  height: 37px;
-  width: 37px;
-  border-radius: 10px;
-  background: var(--surface-hover);
-  color: var(--soft);
-}
-.vm-card-top .status-pill {
-  font-size: 12px;
-  padding: 5px 6px;
-}
-.vm-card h3 {
-  font-size: 12px;
-  font-weight: 550;
-  color: var(--ink);
-  letter-spacing: -0.2px;
-}
-.vm-card-id {
-  font-size: 12px;
-  color: var(--muted);
-  display: block;
-  margin-top: 5px;
-}
-.vm-card-spec {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
-  margin: 16px 0 18px;
-}
-.vm-card-spec > span {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 12px;
-  color: var(--soft);
-}
-.vm-card-bottom {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  border-top: 1px solid var(--line);
-  padding-top: 14px;
-}
-.vm-card-bottom > div > span {
-  display: block;
-  font-size: 12px;
-  color: var(--soft);
-  margin-bottom: 4px;
-}
-.vm-card-bottom > div > strong {
-  display: block;
-  font-size: 17px;
-  color: var(--ink);
-  font-weight: 500;
-  letter-spacing: -0.5px;
-}
-.vm-open {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 27px;
-  height: 27px;
-  border-radius: 6px;
-  background: var(--surface-hover);
-  color: var(--soft);
 }
 .pending-requests {
   margin-bottom: 24px;
@@ -3313,7 +3219,6 @@ td .quiet-badge {
   .auction-vm .button {
     margin-left: auto;
   }
-  .vm-grid,
   .offerings-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -3870,51 +3775,6 @@ td .quiet-badge {
     line-height: 1.8;
     margin-top: 8px;
   }
-  .vm-grid {
-    gap: 13px;
-  }
-  .vm-card {
-    padding: 16px;
-  }
-  .vm-card-top {
-    margin-bottom: 17px;
-  }
-  .vm-card-top .icon-tile {
-    width: 32px;
-    height: 32px;
-  }
-  .vm-card-top .status-pill {
-    font-size: 12px;
-  }
-  .vm-card h3 {
-    font-size: 12px;
-  }
-  .vm-card-spec {
-    gap: 8px;
-    margin: 15px 0;
-  }
-  .vm-card-spec > span {
-    font-size: 12px;
-  }
-  .vm-card-spec > span svg {
-    height: 12px;
-    width: 12px;
-  }
-  .vm-card-bottom > div > span {
-    font-size: 12px;
-  }
-  .vm-card-bottom > div > strong {
-    font-size: 16px;
-  }
-  .environments-card {
-    padding: 21px;
-  }
-  .environments-card > .section-heading {
-    gap: 10px;
-  }
-  .environments-card > .section-heading h2 {
-    font-size: 15px;
-  }
   .pending-requests {
     padding: 21px;
   }
@@ -4441,12 +4301,6 @@ td .quiet-badge {
   .stat-card > small {
     font-size: 12px;
   }
-  .environments-card {
-    padding: 20px 17px;
-  }
-  .environments-card > .section-heading h2 {
-    font-size: 14px;
-  }
   .segmented-control {
     gap: 1px;
     padding: 2px;
@@ -4454,34 +4308,6 @@ td .quiet-badge {
   .segmented-control button {
     font-size: 12px;
     padding: 5px 8px;
-  }
-  .vm-grid {
-    grid-template-columns: 1fr;
-  }
-  .vm-card {
-    padding: 19px;
-  }
-  .vm-card-top .icon-tile {
-    width: 36px;
-    height: 36px;
-  }
-  .vm-card-top .status-pill {
-    font-size: 12px;
-  }
-  .vm-card h3 {
-    font-size: 13px;
-  }
-  .vm-card-id {
-    font-size: 12px;
-  }
-  .vm-card-spec > span {
-    font-size: 12px;
-  }
-  .vm-card-bottom > div > span {
-    font-size: 12px;
-  }
-  .vm-card-bottom > div > strong {
-    font-size: 18px;
   }
   .pending-requests {
     padding: 20px 17px;
