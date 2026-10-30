@@ -10,6 +10,11 @@ const rates = {
   minimum_price_cents: 1,
 };
 describe('prepaid pack pricing uses exact combined dimensions', () => {
+  it('enforces a one-cent minimum without rounding away higher four-decimal USD prices', () => {
+    expect(packPrice({ ...rates, minimum_price_cents: 0.01 }, 1, 1).priceCents).toBe(1);
+    expect(packPrice({ ...rates, minimum_price_cents: 1.01 }, 1, 1).priceCents).toBe(1.01);
+    expect(packPrice({ ...rates, minimum_price_cents: 0.01 }, 1, 1, true).priceCents).toBe(1);
+  });
   it('covers uncached provider costs after the fifteen percent fee', () => {
     expect(packPrice(rates, 100000, 20000)).toEqual({ costFloorCents: 24.71, priceCents: 27.5 });
     expect(packPrice({ ...rates, input_rate: 1, output_rate: 1 }, 100000, 20000)).toEqual({

@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useState, type FormEvent } from 'react';
 import { fixedQuote, managedPricing } from '../shared/pricing';
 import { parseExplicitBuyerDescription } from '../shared/muse-contracts';
-import { addCents } from '../shared/money';
+import { addCents, isMoneyCents, MIN_ORDER_PRICE_CENTS } from '../shared/money';
 import { seedAlternativeDraft } from './negotiation';
 import { AgreementCharges } from './agreement-charges';
 import { PurchaseContext } from './purchases';
@@ -140,6 +140,10 @@ export function NewEnvironment() {
     navigate('/alternatives/new');
   }
   function manual() {
+    if (!isMoneyCents(budget) || budget < MIN_ORDER_PRICE_CENTS) {
+      setError('Enter a maximum total of at least $0.01.');
+      return;
+    }
     if (!first) {
       setError(
         'No approved configurations are available. Your administrator can approve a catalog configuration.',
@@ -182,6 +186,10 @@ export function NewEnvironment() {
     navigate('/requests/review');
   }
   async function translate() {
+    if (!isMoneyCents(budget) || budget < MIN_ORDER_PRICE_CENTS) {
+      setError('Enter a maximum total of at least $0.01.');
+      return;
+    }
     if (!description.trim()) {
       setError('Describe the environment you need, or use manual review.');
       return;

@@ -494,11 +494,12 @@ test('four-decimal funding and auction limits are displayed and submitted withou
   });
   await page.goto(`/token-orders/new?grantId=${grantId}`);
   const maximum = page.getByLabel('Maximum total price');
-  await maximum.fill('0.0001');
-  await expect(maximum).toHaveValue('0.0001');
+  await maximum.fill('0.01');
+  await expect(maximum).toHaveValue('0.01');
   // A fifth meaningful digit must never be silently rounded and charged.
   await maximum.fill('0.00019');
-  await expect(maximum).toHaveValue('0.0001');
+  await expect(maximum).toHaveValue('0.00019');
+  expect(await maximum.evaluate((e: HTMLInputElement) => e.validity.valid)).toBe(false);
   await maximum.fill('0.1234');
   await page.getByRole('checkbox', { name: /I understand/ }).check();
   await page.getByRole('button', { name: 'Start 30-second auction' }).click();
@@ -508,6 +509,44 @@ test('four-decimal funding and auction limits are displayed and submitted withou
   expect(f.writes.find((w) => w.path === '/api/token-orders')!.body.maxTotalCents).toBe(12.34);
 });
 
+test('an order accepts one cent typed normally without losing the decimal', async ({ page }) => {
+  const f = await fixture(page);
+  await page.goto(`/token-orders/new?grantId=${grantId}`);
+  const maximum = page.getByLabel('Maximum total price');
+  await maximum.fill('');
+  await maximum.pressSequentially('0.01');
+  await expect(maximum).toHaveValue('0.01');
+  await page.getByRole('checkbox', { name: /I understand/ }).check();
+  await page.getByRole('button', { name: 'Start 30-second auction' }).click();
+  await expect(
+    page.getByRole('heading', { name: 'Token pack auction', exact: true }),
+  ).toBeVisible();
+  expect(f.writes.find((w) => w.path === '/api/token-orders')!.body.maxTotalCents).toBe(1);
+});
+
+test('prices below one cent and excess precision cannot submit an old price', async ({ page }) => {
+  const f = await fixture(page);
+  await page.goto(`/token-orders/new?grantId=${grantId}`);
+  const maximum = page.getByLabel('Maximum total price');
+  for (const spelling of ['0.0099', '1.23456', '']) {
+    await maximum.fill(spelling);
+    await page.getByRole('checkbox', { name: /I understand/ }).check();
+    const submit = page.getByRole('button', { name: 'Start 30-second auction' });
+    if (await submit.isEnabled()) await submit.click();
+    else await expect(submit).toBeDisabled();
+    expect(await maximum.evaluate((e: HTMLInputElement) => e.validity.valid)).toBe(false);
+    expect(f.writes.filter((w) => w.path === '/api/token-orders')).toHaveLength(0);
+  }
+  await maximum.pressSequentially('0.0101');
+  await expect(maximum).toHaveValue('0.0101');
+  await page.getByRole('checkbox', { name: /I understand/ }).check();
+  await page.getByRole('button', { name: 'Start 30-second auction' }).click();
+  await expect(
+    page.getByRole('heading', { name: 'Token pack auction', exact: true }),
+  ).toBeVisible();
+  expect(f.writes.find((w) => w.path === '/api/token-orders')!.body.maxTotalCents).toBe(1.01);
+});
+
 test('providers can publish rates and minimum pack prices with four USD decimals', async ({
   page,
 }) => {
@@ -515,7 +554,7 @@ test('providers can publish rates and minimum pack prices with four USD decimals
   await page.goto('/provider/inference');
   await page.getByLabel('Input price · USD / million').fill('2.3456');
   await page.getByLabel('Output price · USD / million').fill('6.7891');
-  await page.getByLabel('Minimum pack price').fill('0.0001');
+  await page.getByLabel('Minimum pack price').fill('0.0101');
   await page.getByRole('button', { name: 'Save token offering', exact: true }).click();
   await expect(
     page.getByText('Offering saved. Existing token packs retain their purchased terms.'),
@@ -523,7 +562,7 @@ test('providers can publish rates and minimum pack prices with four USD decimals
   expect(f.writes.find((w) => w.path === '/api/provider/inference/offering')!.body).toMatchObject({
     inputRateMicrosPerMillion: 2345600,
     outputRateMicrosPerMillion: 6789100,
-    minimumPriceCents: 0.01,
+    minimumPriceCents: 1.01,
   });
 });
 

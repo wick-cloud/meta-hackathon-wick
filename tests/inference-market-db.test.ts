@@ -956,17 +956,68 @@ describe.skipIf(!url)(
       ).toBe(true);
       expect((await scopedPacks(ctx, owner, {})).items.map((p) => p.id)).toEqual([sample.id]);
     });
-    it('settles concurrent sub-cent purchases without overspending or losing the 15% split', async () => {
-      const g = await grant(0.03),
+    it('rejects below-cent order ceilings before reserving money and clamps legacy offering minima', async () => {
+      const g = await grant(),
+        key = await agent(g.id);
+      await pool.query('UPDATE broker_token_offerings SET minimum_price_cents=0.01');
+      const wallet = await creditWalletView(pool, owner.id);
+      for (const ceiling of [0, 0.01, 0.99]) {
+        const operationKey = randomUUID();
+        const r = await app.inject({
+          method: 'POST',
+          url: '/api/token-orders',
+          headers: { authorization: `Bearer ${key.token}`, 'idempotency-key': operationKey },
+          payload: {
+            operationKey,
+            mode: 'auction',
+            inputTokens: 100,
+            outputTokens: 1,
+            maxTotalCents: ceiling,
+          },
+        });
+        expect(r.statusCode).toBe(400);
+      }
+      expect(
+        (
+          await pool.query('SELECT count(*)::int n FROM broker_token_orders WHERE grant_id=$1', [
+            g.id,
+          ])
+        ).rows[0].n,
+      ).toBe(0);
+      expect(await creditWalletView(pool, owner.id)).toEqual(wallet);
+      const quote = (await quotes(ctx, key.actor, { inputTokens: 100, outputTokens: 1 })).items[0]!;
+      expect(quote.priceCents).toBe(1);
+      const order = await createTokenOrder(ctx, key.actor, {
+        operationKey: randomUUID(),
+        mode: 'auction',
+        inputTokens: 100,
+        outputTokens: 1,
+        maxTotalCents: 1,
+      });
+      expect(
+        (await tokenOrderDetail(ctx, key.actor, order.id)).bids.every((b) => b.priceCents >= 1),
+      ).toBe(true);
+      await pool.query(
+        "UPDATE broker_token_orders SET closes_at=clock_timestamp()-interval '1 second' WHERE id=$1",
+        [order.id],
+      );
+      await closeTokenAuction(ctx, order.id);
+      const detail = await tokenOrderDetail(ctx, key.actor, order.id);
+      expect(detail.order.status).toBe('awarded');
+      expect(detail.pack!.priceCents).toBe(1);
+    });
+
+    it('settles concurrent one-cent purchases while preserving fractional balances and the 15% split', async () => {
+      const g = await grant(1.5),
         key = await agent(g.id);
       const quantities = { inputTokens: 100, outputTokens: 1 };
       const quote = (await quotes(ctx, key.actor, quantities)).items[0]!;
-      expect(quote.priceCents).toBe(0.02);
+      expect(quote.priceCents).toBe(1);
       const bodies = [0, 1].map(() => ({
         ...quantities,
         mode: 'instant',
         quoteId: quote.quoteId,
-        maxTotalCents: 0.02,
+        maxTotalCents: 1,
         operationKey: randomUUID(),
       }));
       const attempts = await Promise.allSettled(
@@ -977,20 +1028,20 @@ describe.skipIf(!url)(
       const awarded = await createTokenOrder(ctx, key.actor, bodies[winnerIndex]);
       const detail = await tokenOrderDetail(ctx, key.actor, awarded.id);
       expect(detail.grant).toMatchObject({
-        fundedCents: 0.03,
-        availableCents: 0.01,
+        fundedCents: 1.5,
+        availableCents: 0.5,
         heldCents: 0,
-        spentCents: 0.02,
+        spentCents: 1,
       });
       expect(detail.pack!.revenueShare).toMatchObject({
-        grossCents: 0.02,
-        brokerFeeMicros: '30',
-        providerNetMicros: '170',
+        grossCents: 1,
+        brokerFeeMicros: '1500',
+        providerNetMicros: '8500',
       });
       expect(await creditWalletView(pool, owner.id)).toMatchObject({
-        balanceCents: 4999.98,
-        reservedCents: 0.01,
-        availableCents: 4999.97,
+        balanceCents: 4999,
+        reservedCents: 0.5,
+        availableCents: 4998.5,
       });
       expect(
         (
@@ -1002,9 +1053,9 @@ describe.skipIf(!url)(
       ).toBe(1);
       await closeGrant(ctx, owner, g.id, { operationKey: randomUUID() });
       expect(await creditWalletView(pool, owner.id)).toMatchObject({
-        balanceCents: 4999.98,
+        balanceCents: 4999,
         reservedCents: 0,
-        availableCents: 4999.98,
+        availableCents: 4999,
       });
     });
     it('rejects excess currency precision at both the HTTP owner and database boundary', async () => {

@@ -50,6 +50,8 @@ Input bounds/output limits, native model and semantic revision form the frozen a
 
 ## Funding and purchase invariants
 
+New token orders have a **$0.01 minimum total** (`maxTotalCents: 1`); instant quotes and auction bids honor the same floor even if an older provider offering stores a lower minimum. Amounts above that floor can still use four USD decimal places. The browser accepts decimal typing without reformatting each keystroke and rejects invalid precision instead of submitting an older price. Provider rates per million tokens, credit balances and refunds retain their finer precision. Existing purchased packs and historical ledger entries are unchanged.
+
 Only the signed-in owner can create, fund, close or replace a grant key. Each grant defaults to two hours (one minute to seven days configurable). Funding reserves credit once from the owner's existing wallet; no external charge is collected. The cash invariant, evaluated in integer hundredth-cent units ($0.0001), is:
 
 `funded = available + purchase holds + net pack spend + returned to owner`.

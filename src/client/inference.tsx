@@ -1,4 +1,4 @@
-import { centsToUsd, usdToMicros } from '../shared/money';
+import { moneyUnits, MIN_ORDER_PRICE_CENTS } from '../shared/money';
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import {
   ArrowLeft,
@@ -1170,6 +1170,7 @@ export function TokenComposer({ search }: { search: string }) {
       inputTokens < minimumInputTokens ||
       outputTokens < 1 ||
       !price ||
+      price < MIN_ORDER_PRICE_CENTS ||
       price > Math.min(grant?.availableCents ?? 0, grant?.maxPurchaseCents ?? 0) ||
       (mode === 'instant' && (!quoteFresh || !grant?.allowInstant))
     )
@@ -1385,7 +1386,7 @@ export function TokenComposer({ search }: { search: string }) {
                   id="token-auction-max"
                   label="Maximum total price"
                   value={maximum}
-                  min={0.01}
+                  min={MIN_ORDER_PRICE_CENTS}
                   onChange={(value) => {
                     setMaximum(value);
                     setAccepted(false);
@@ -1809,7 +1810,7 @@ export function ProviderInference({ search = '' }: { search?: string }) {
         inputRateMicrosPerMillion: offering.inputRateMicrosPerMillion,
         outputRateMicrosPerMillion: offering.outputRateMicrosPerMillion,
         instantMarkupBps: offering.instantMarkupBps,
-        minimumPriceCents: offering.minimumPriceCents,
+        minimumPriceCents: Math.max(MIN_ORDER_PRICE_CENTS, offering.minimumPriceCents),
         maxOutstandingInputTokens: offering.maxOutstandingInputTokens,
         maxOutstandingOutputTokens: offering.maxOutstandingOutputTokens,
       });
@@ -1909,46 +1910,36 @@ export function ProviderInference({ search = '' }: { search?: string }) {
             </p>
             <fieldset className="inference-fieldset" disabled={busy}>
               <div className="inference-form-grid">
-                <label className="field">
-                  <span>Input price · USD / million</span>
-                  <input
-                    type="number"
-                    min={0.0001}
-                    step={0.0001}
-                    required
-                    value={centsToUsd(draft.inputRateMicrosPerMillion / 10000)}
-                    onChange={(e) =>
-                      change(
-                        'inputRateMicrosPerMillion',
-                        usdToMicros(e.target.value || '0') ?? draft.inputRateMicrosPerMillion,
-                      )
+                <div>
+                  <MoneyInput
+                    id="provider-input-rate"
+                    label="Input price · USD / million"
+                    min={0.01}
+                    value={draft.inputRateMicrosPerMillion / 10000}
+                    onChange={(value) =>
+                      change('inputRateMicrosPerMillion', Number(moneyUnits(value) * 100n))
                     }
                   />
-                  <small>
+                  <small className="inference-muted">
                     Provider cost: {moneyMicros(BigInt(offering.costInputRateMicrosPerMillion))} /
                     million
                   </small>
-                </label>
-                <label className="field">
-                  <span>Output price · USD / million</span>
-                  <input
-                    type="number"
-                    min={0.0001}
-                    step={0.0001}
-                    required
-                    value={centsToUsd(draft.outputRateMicrosPerMillion / 10000)}
-                    onChange={(e) =>
-                      change(
-                        'outputRateMicrosPerMillion',
-                        usdToMicros(e.target.value || '0') ?? draft.outputRateMicrosPerMillion,
-                      )
+                </div>
+                <div>
+                  <MoneyInput
+                    id="provider-output-rate"
+                    label="Output price · USD / million"
+                    min={0.01}
+                    value={draft.outputRateMicrosPerMillion / 10000}
+                    onChange={(value) =>
+                      change('outputRateMicrosPerMillion', Number(moneyUnits(value) * 100n))
                     }
                   />
-                  <small>
+                  <small className="inference-muted">
                     Provider cost: {moneyMicros(BigInt(offering.costOutputRateMicrosPerMillion))} /
                     million
                   </small>
-                </label>
+                </div>
                 <label className="field">
                   <span>Instant price premium · %</span>
                   <input
@@ -1965,7 +1956,7 @@ export function ProviderInference({ search = '' }: { search?: string }) {
                 <MoneyInput
                   id="provider-token-minimum"
                   label="Minimum pack price"
-                  min={0.01}
+                  min={MIN_ORDER_PRICE_CENTS}
                   value={draft.minimumPriceCents}
                   onChange={(value) => change('minimumPriceCents', value)}
                 />

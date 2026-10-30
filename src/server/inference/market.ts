@@ -1,6 +1,6 @@
 import { moneyAmount } from './data.js';
 import { admitBuyingDecision } from './buying-guard.js';
-import { centsFromUnits, moneyUnits } from '../../shared/money.js';
+import { centsFromUnits, moneyUnits, MIN_ORDER_PRICE_CENTS } from '../../shared/money.js';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
 import type { PoolClient } from 'pg';
@@ -48,7 +48,7 @@ const createOrderSchema = quantities
   .extend({
     operationKey: operationSchema,
     mode: z.enum(['auction', 'instant']),
-    maxTotalCents: moneyAmount(100_000_000),
+    maxTotalCents: moneyAmount(100_000_000, MIN_ORDER_PRICE_CENTS),
     quoteId: z.string().max(4000).optional(),
   })
   .strict();
@@ -62,7 +62,10 @@ export function packPrice(row: Row, input: number, output: number, instant = fal
   const price = centsFromUnits(
     ceil(ask * BigInt(instant ? 10000 + row.instant_markup_bps : 10000), 1_000_000_000_000n),
   );
-  return { priceCents: Math.max(floor, price, row.minimum_price_cents), costFloorCents: floor };
+  return {
+    priceCents: Math.max(MIN_ORDER_PRICE_CENTS, floor, price, row.minimum_price_cents),
+    costFloorCents: floor,
+  };
 }
 export async function initializeInference(ctx: AppContext) {
   if (!ctx.inference) return;
@@ -127,12 +130,13 @@ export async function initializeInference(ctx: AppContext) {
         ],
       );
       await db.query(
-        `INSERT INTO broker_token_offerings(provider,input_rate,output_rate,active,auto_bid) VALUES($1,$2,$3,$4,$4) ON CONFLICT DO NOTHING`,
+        `INSERT INTO broker_token_offerings(provider,input_rate,output_rate,active,auto_bid,minimum_price_cents) VALUES($1,$2,$3,$4,$4,$5) ON CONFLICT DO NOTHING`,
         [
           provider,
           provider === 'modal' ? 1_650_000 : 1_700_000,
           provider === 'modal' ? 5_500_000 : 5_600_000,
           route.mode === 'fixture',
+          MIN_ORDER_PRICE_CENTS,
         ],
       );
     }
@@ -265,6 +269,8 @@ export async function quotes(
 /** Shared by auction awards and instant purchases. Grant/order/routes are already locked. */
 async function purchase(db: PoolClient, grant: Row, order: Row, route: Row, bid: Row) {
   const price = bid.price_cents;
+  if (price < MIN_ORDER_PRICE_CENTS)
+    failure(409, 'quote_stale', 'The minimum order price is $0.01. Request a new quote.');
   await db.query(
     `UPDATE broker_inference_grants SET held_cents=held_cents-$2,available_cents=available_cents+$2-$3,spent_cents=spent_cents+$3 WHERE id=$1`,
     [grant.id, order.max_total_cents, price],
@@ -605,6 +611,7 @@ export async function closeTokenAuction(ctx: AppContext, id: string) {
     for (const bid of bids) {
       const row = rows.find((r) => r.provider === bid.provider);
       if (
+        bid.price_cents < MIN_ORDER_PRICE_CENTS ||
         !row ||
         !offeringOpen(row, now) ||
         !row.auto_bid ||
@@ -841,7 +848,7 @@ export async function updateOffering(ctx: AppContext, actor: Actor, raw: unknown
       inputRateMicrosPerMillion: integer(1_000_000_000_000, 100).multipleOf(100),
       outputRateMicrosPerMillion: integer(1_000_000_000_000, 100).multipleOf(100),
       instantMarkupBps: integer(100_000, 0),
-      minimumPriceCents: moneyAmount(100_000_000),
+      minimumPriceCents: moneyAmount(100_000_000, MIN_ORDER_PRICE_CENTS),
       maxOutstandingInputTokens: integer(100_000_000),
       maxOutstandingOutputTokens: integer(10_000_000),
       salesStartAt: z.string().datetime().nullable().optional(),

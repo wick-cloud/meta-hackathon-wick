@@ -127,7 +127,7 @@ const tokenOfferingProperties = {
     maximum: 1_000_000_000_000,
   },
   instantMarkupBps: { ...tokens, maximum: 100_000 },
-  minimumPriceCents: { ...cents, minimum: 0.01 },
+  minimumPriceCents: { ...cents, minimum: 1 },
   maxOutstandingInputTokens: { ...positiveTokens, maximum: 100_000_000 },
   maxOutstandingOutputTokens: { ...positiveTokens, maximum: 10_000_000 },
 };
@@ -229,7 +229,7 @@ export const BROKER_API_SCHEMAS: Record<string, JsonSchema> = {
       ...tokenQuoteProperties,
       operationKey,
       mode: { type: 'string', enum: ['auction', 'instant'] },
-      maxTotalCents: { ...cents, minimum: 0.01 },
+      maxTotalCents: { ...cents, minimum: 1 },
       quoteId: tokenQuoteId,
     },
     ['operationKey', 'inputTokens', 'outputTokens', 'mode', 'maxTotalCents'],
@@ -517,7 +517,7 @@ export const BROKER_API_SCHEMAS: Record<string, JsonSchema> = {
       region: string,
       matchAcrossProviders: bool,
       durationMinutes: { type: 'integer', enum: [15, 30, 60] },
-      maxPriceCents: cents,
+      maxPriceCents: { ...cents, minimum: 1 },
       requirements: ref('Requirements'),
     },
     [
@@ -1005,10 +1005,10 @@ export const BROKER_API_SCHEMAS: Record<string, JsonSchema> = {
     receipt: ref('Receipt'),
     mode: string,
   }),
-  BidInput: object({ operationKey, totalPriceCents: cents, offeringId: string }, [
-    'operationKey',
-    'totalPriceCents',
-  ]),
+  BidInput: object(
+    { operationKey, totalPriceCents: { ...cents, minimum: 1 }, offeringId: string },
+    ['operationKey', 'totalPriceCents'],
+  ),
   BidProposal: object(
     {
       decision: { type: 'string', enum: ['bid', 'decline'] },
