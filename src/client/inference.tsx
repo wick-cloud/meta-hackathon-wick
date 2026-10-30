@@ -897,7 +897,7 @@ export function TokenComposer({ search }: { search: string }) {
   const grants = usePagedResource<InferenceGrant>('/api/inference/grants'),
     catalog = useResource<InferenceCatalog>('/api/inference/models');
   const [grantId, setGrantId] = useState(initial),
-    [inputTokens, setInputTokens] = useState(1000000),
+    [inputTokens, setInputTokens] = useState(2000000),
     [outputTokens, setOutputTokens] = useState(100000),
     [mode, setMode] = useState<'auction' | 'instant'>('auction'),
     [maximum, setMaximum] = useState(500),
@@ -931,6 +931,9 @@ export function TokenComposer({ search }: { search: string }) {
     routes.length > 0 &&
     grant?.status === 'active' &&
     Date.parse(grant.expiresAt) > now;
+  const minimumInputTokens = routes.length
+    ? Math.min(...routes.map((route) => route.minimumInputReservation))
+    : 1;
   const selected = quotes.find((quote) => quote.quoteId === quoteId),
     quoteFresh = !!selected && Date.parse(selected.expiresAt) > now;
   useEffect(() => {
@@ -947,10 +950,12 @@ export function TokenComposer({ search }: { search: string }) {
     if (
       !Number.isSafeInteger(inputTokens) ||
       !Number.isSafeInteger(outputTokens) ||
-      inputTokens < 1 ||
+      inputTokens < minimumInputTokens ||
       outputTokens < 1
     ) {
-      setError('Enter a positive whole number of input and output tokens.');
+      setError(
+        `Enter at least ${count(minimumInputTokens)} input tokens and a positive whole number of output tokens.`,
+      );
       return;
     }
     const revision = ++quoteRevision.current;
@@ -985,7 +990,7 @@ export function TokenComposer({ search }: { search: string }) {
       !accepted ||
       !Number.isSafeInteger(inputTokens) ||
       !Number.isSafeInteger(outputTokens) ||
-      inputTokens < 1 ||
+      inputTokens < minimumInputTokens ||
       outputTokens < 1 ||
       !price ||
       price > Math.min(grant?.availableCents ?? 0, grant?.maxPurchaseCents ?? 0) ||
@@ -1094,7 +1099,7 @@ export function TokenComposer({ search }: { search: string }) {
                 <input
                   type="number"
                   required
-                  min={1}
+                  min={minimumInputTokens}
                   max={1000000000}
                   step={1}
                   value={inputTokens}
@@ -1185,7 +1190,9 @@ export function TokenComposer({ search }: { search: string }) {
                 <button
                   type="button"
                   className="button secondary"
-                  disabled={quoting || !eligible || inputTokens < 1 || outputTokens < 1}
+                  disabled={
+                    quoting || !eligible || inputTokens < minimumInputTokens || outputTokens < 1
+                  }
                   onClick={() => void getQuotes()}
                 >
                   {quoting ? <Spinner label="Getting prices" /> : 'Get instant prices'}
@@ -1286,7 +1293,7 @@ export function TokenComposer({ search }: { search: string }) {
               (!uncertainOrder &&
                 (!eligible ||
                   !accepted ||
-                  inputTokens < 1 ||
+                  inputTokens < minimumInputTokens ||
                   outputTokens < 1 ||
                   (mode === 'instant'
                     ? !quoteFresh ||

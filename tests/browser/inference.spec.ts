@@ -25,6 +25,7 @@ async function fixture(
     keyFailure?: boolean;
     purchaseFailureOnce?: boolean;
     configured?: boolean;
+    minimumInputReservation?: number;
   } = {},
 ) {
   const role = options.role ?? 'buyer';
@@ -70,7 +71,7 @@ async function fixture(
         options.qualified === false
           ? 'Exact tokenizer contract is not qualified.'
           : 'Fixture route; no real model calls.',
-      minimumInputReservation: 1000,
+      minimumInputReservation: options.minimumInputReservation ?? 1000,
       maximumOutputTokens: 4096,
     })),
   };
@@ -397,6 +398,24 @@ test('auction purchase produces a saved token order and cancels without VM actio
   await expect(page.getByText('Cancelled', { exact: true })).toBeVisible();
 });
 
+test('packs default above the real input reserve and smaller quantities cannot start an auction or quote', async ({
+  page,
+}) => {
+  const f = await fixture(page, { minimumInputReservation: 1048576 });
+  await page.goto(`/token-orders/new?grantId=${grantId}`);
+  const input = page.getByLabel('Input tokens', { exact: true });
+  await expect(input).toHaveValue('2000000');
+  await input.fill('1000000');
+  await page.getByRole('checkbox', { name: /I understand/ }).check();
+  await expect(page.getByRole('button', { name: 'Start 30-second auction' })).toBeDisabled();
+  await page.getByRole('radio', { name: /Buy at an instant price/ }).check();
+  await expect(page.getByRole('button', { name: 'Get instant prices' })).toBeDisabled();
+  expect(f.writes).toHaveLength(0);
+  await input.fill('2000000');
+  await page.getByRole('button', { name: 'Get instant prices' }).click();
+  await expect(page.getByRole('radio', { name: /Modal/ })).toBeVisible();
+});
+
 test('instant quotes are invalidated on quantity edits and a purchase reveals separate prepaid quotas', async ({
   page,
 }) => {
@@ -405,7 +424,7 @@ test('instant quotes are invalidated on quantity edits and a purchase reveals se
   await page.getByRole('radio', { name: /Buy at an instant price/ }).check();
   await page.getByRole('button', { name: 'Get instant prices' }).click();
   await expect(page.getByRole('radio', { name: /Modal/ })).toBeVisible();
-  await page.getByLabel('Input tokens', { exact: true }).fill('2000000');
+  await page.getByLabel('Input tokens', { exact: true }).fill('3000000');
   await expect(page.getByRole('radio', { name: /Modal/ })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Buy pack', exact: true })).toBeDisabled();
   await page.getByRole('button', { name: 'Get instant prices' }).click();
@@ -414,7 +433,7 @@ test('instant quotes are invalidated on quantity edits and a purchase reveals se
   await expect(page.getByRole('heading', { name: 'Purchased quota' })).toBeVisible();
   await expect(page.getByRole('progressbar', { name: 'Input tokens available' })).toHaveAttribute(
     'value',
-    '2000000',
+    '3000000',
   );
   await expect(page.getByRole('progressbar', { name: 'Output tokens available' })).toHaveAttribute(
     'value',
