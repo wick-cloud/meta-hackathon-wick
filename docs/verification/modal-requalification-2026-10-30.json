@@ -1,0 +1,206 @@
+{
+  "recordedAt": "2026-10-30T22:02:46.117Z",
+  "app": "https://meta-hackathon-wick-production.up.railway.app",
+  "provider": "modal",
+  "change": {
+    "operationKey": "modal-requalification-b8bf09e0-5931-467b-9721-53e64025fbec",
+    "alreadyApplied": false,
+    "modal": {
+      "provider": "modal",
+      "qualified": true,
+      "quarantined_at": null,
+      "held_calls": 1,
+      "outstanding_input": "1048576",
+      "outstanding_output": "64"
+    },
+    "originalRequest": {
+      "id": "220e02b0-36df-4a6d-ad93-1f53a9a51e09",
+      "status": "needs_reconciliation",
+      "reservedInput": 1048576,
+      "reservedOutput": 64,
+      "unchanged": true
+    },
+    "basetenUnchanged": true,
+    "auditRecorded": true,
+    "probes": [
+      {
+        "maxTokens": 64,
+        "at": "2026-10-30T21:52:58.773Z",
+        "httpStatus": 200,
+        "elapsedMs": 409,
+        "providerResponseId": "452b5ef8eb744d758ab848a543a95819",
+        "usage": {
+          "prompt_tokens": 149,
+          "total_tokens": 213,
+          "completion_tokens": 64,
+          "prompt_tokens_details": null,
+          "reasoning_tokens": 64
+        },
+        "finishReason": "length"
+      },
+      {
+        "maxTokens": 384,
+        "at": "2026-10-30T21:53:31.432Z",
+        "httpStatus": 200,
+        "elapsedMs": 497,
+        "providerResponseId": "a6d6de9be79d454f802788819b7ee686",
+        "usage": {
+          "prompt_tokens": 151,
+          "total_tokens": 222,
+          "completion_tokens": 71,
+          "prompt_tokens_details": null,
+          "reasoning_tokens": 62
+        },
+        "finishReason": "stop"
+      },
+      {
+        "maxTokens": 512,
+        "at": "2026-10-30T21:53:58.614Z",
+        "httpStatus": 200,
+        "elapsedMs": 815,
+        "providerResponseId": "61600b54e4364fbfacd4896538378f68",
+        "usage": {
+          "prompt_tokens": 163,
+          "total_tokens": 393,
+          "completion_tokens": 230,
+          "prompt_tokens_details": null,
+          "reasoning_tokens": 222
+        },
+        "finishReason": "stop"
+      }
+    ]
+  },
+  "sourceCodeChanged": false,
+  "accountingContractChanged": false,
+  "adapterValidation": [
+    {
+      "maxTokens": 64,
+      "inputTokens": 149,
+      "outputTokens": 64,
+      "platformOutputTokens": 0,
+      "passed": true
+    },
+    {
+      "maxTokens": 384,
+      "inputTokens": 151,
+      "outputTokens": 71,
+      "platformOutputTokens": 0,
+      "passed": true
+    },
+    {
+      "maxTokens": 512,
+      "inputTokens": 163,
+      "outputTokens": 230,
+      "platformOutputTokens": 0,
+      "passed": true
+    }
+  ],
+  "marketplace": {
+    "runId": "b160ef02-d118-4841-840b-a2b763d78220",
+    "startedAt": "2026-10-30T22:01:40.586Z",
+    "finishedAt": "2026-10-30T22:02:16.836Z",
+    "result": "passed",
+    "orderId": "395d4417-a2a5-4bb8-b60c-60b70f7ead2a",
+    "packId": "3732cb13-7e12-46e6-82a8-f760b7e5ed33",
+    "priceCents": 173.54,
+    "inputTokens": 1050000,
+    "outputTokens": 512,
+    "bids": [
+      {
+        "id": "a8227ab8-2f38-44ad-8227-9744dbf92d5b",
+        "provider": "modal",
+        "priceCents": 173.54,
+        "status": "won",
+        "mode": "real",
+        "createdAt": "2026-10-30T22:01:41.902Z"
+      }
+    ],
+    "completion": {
+      "id": "c6c4e70e-aaa2-404c-a1f5-b92c4250ce84",
+      "elapsedMs": 1216,
+      "broker": {
+        "requestId": "c6c4e70e-aaa2-404c-a1f5-b92c4250ce84",
+        "packId": "3732cb13-7e12-46e6-82a8-f760b7e5ed33",
+        "provider": "modal",
+        "mode": "real"
+      },
+      "usage": {
+        "prompt_tokens": 151,
+        "completion_tokens": 208,
+        "total_tokens": 359
+      },
+      "reply": "MODAL_AVAILABLE",
+      "receipt": {
+        "id": "c6c4e70e-aaa2-404c-a1f5-b92c4250ce84",
+        "grantId": "18907a77-0e0e-47e2-a327-3079b1ff3852",
+        "packId": "3732cb13-7e12-46e6-82a8-f760b7e5ed33",
+        "provider": "modal",
+        "mode": "real",
+        "status": "settled",
+        "heldInputTokens": 0,
+        "heldOutputTokens": 0,
+        "inputTokens": 151,
+        "outputTokens": 208,
+        "failureCode": null,
+        "createdAt": "2026-10-30T22:02:14.966Z",
+        "completedAt": "2026-10-30T22:02:15.793Z"
+      }
+    },
+    "quotaBeforeCleanup": {
+      "availableInputTokens": 1049849,
+      "availableOutputTokens": 304,
+      "consumedInputTokens": 151,
+      "consumedOutputTokens": 208,
+      "heldInputTokens": 0,
+      "heldOutputTokens": 0
+    },
+    "noSecondInferenceCharge": true,
+    "routesAfterInference": [
+      {
+        "provider": "modal",
+        "mode": "real",
+        "modelId": "meta/muse-spark-open",
+        "modelName": "Meta Muse Spark Open",
+        "qualified": true,
+        "reason": "Operator-qualified buffered text accounting.",
+        "minimumInputReservation": 1048576,
+        "maximumOutputTokens": 512
+      },
+      {
+        "provider": "baseten",
+        "mode": "real",
+        "modelId": "meta/muse-spark-open",
+        "modelName": "Meta Muse Spark Open",
+        "qualified": true,
+        "reason": "Operator-qualified buffered text accounting.",
+        "minimumInputReservation": 1048576,
+        "maximumOutputTokens": 512
+      }
+    ],
+    "originalReceiptPreserved": {
+      "id": "220e02b0-36df-4a6d-ad93-1f53a9a51e09",
+      "grantId": "3d5a2992-0b8f-4d11-9c61-483f5c9b8699",
+      "packId": "416a6d5a-2595-41ef-b654-ddd8110eb10d",
+      "provider": "modal",
+      "mode": "real",
+      "status": "needs_reconciliation",
+      "heldInputTokens": 1048576,
+      "heldOutputTokens": 64,
+      "inputTokens": null,
+      "outputTokens": null,
+      "failureCode": "inconsistent_usage",
+      "createdAt": "2026-10-30T21:05:45.073Z",
+      "completedAt": null
+    },
+    "cleanup": {
+      "failures": [],
+      "grantStatus": "closed",
+      "keysRevoked": 2
+    }
+  },
+  "sshCleanup": {
+    "remoteTemporaryKeyRevoked": true,
+    "localTemporaryKeysDeleted": true,
+    "at": "2026-10-30T22:02:17.466Z"
+  }
+}

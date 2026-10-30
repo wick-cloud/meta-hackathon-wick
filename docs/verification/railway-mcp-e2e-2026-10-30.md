@@ -2,6 +2,8 @@
 
 **Result: Baseten's task-to-VM inference flow passed. Modal's inference accounting failed and remains unresolved.** Both providers placed real bids before Modal was automatically quarantined.
 
+**Later operational update:** Modal was re-enabled after three fresh native responses passed the unchanged production adapter. A new 30-second auction and MCP completion then passed on Railway; [restoration evidence](modal-requalification-2026-10-30.json) records the checks and audit operation. The original failed receipt remains held for reconciliation. The failure and quarantine descriptions below record the earlier test state.
+
 This was an explicitly authorized live test from Codex against [Broker production](https://meta-hackathon-wick-production.up.railway.app), not a fixture run. The successful run lasted 14:07:29–14:08:27 America/Vancouver (21:07:29–21:08:27 UTC). [Sanitized evidence](railway-mcp-e2e-2026-10-30.json) contains timestamps, order and receipt IDs, quota snapshots, release hashes and cleanup acknowledgments.
 
 ## Environment and scope
