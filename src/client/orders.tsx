@@ -33,6 +33,7 @@ import {
   useResource,
 } from './components';
 import './market.css';
+import { PurchaseCards } from './purchases';
 
 const choices = <T extends string>(value: string | null, allowed: readonly T[], fallback: T): T =>
   allowed.includes(value as T) ? (value as T) : fallback;
@@ -120,7 +121,7 @@ export function Orders({ search }: { search: string }) {
               </span>
             )}
           </div>
-          <p>VM auctions, scheduled capacity and AI tokens, from request to completion.</p>
+          <p>Your VMs and AI token packs, from first bid to completion.</p>
         </div>
         <div className="orders-header-actions">
           <Link href="/credits" className="orders-wallet">
@@ -129,10 +130,15 @@ export function Orders({ search }: { search: string }) {
           </Link>
           <Link href="/new" className="button primary">
             <Plus size={16} />
-            New order
+            New purchase
           </Link>
         </div>
       </header>
+      {!filtered && !cursor && <PurchaseCards compact />}
+      <div className="purchase-history-heading">
+        <h2>Order history</h2>
+        <p>Track purchases, live auctions and scheduled VM bookings.</p>
+      </div>
       <section className="card market-orders">
         <div className="market-filterbar orders-filters">
           <div className="orders-filter-fields">
@@ -144,9 +150,9 @@ export function Orders({ search }: { search: string }) {
                 onChange={(e) => filter('kind', e.target.value)}
               >
                 <option value="all">All types</option>
-                <option value="auction">Instant</option>
-                <option value="agreement">Scheduled</option>
-                <option value="token">AI tokens</option>
+                <option value="auction">VM auctions</option>
+                <option value="agreement">Scheduled VMs</option>
+                <option value="token">AI token packs</option>
               </select>
             </label>
             <label className="field">
@@ -462,7 +468,7 @@ export function Orders({ search }: { search: string }) {
               ) : (
                 <Link href="/new" className="button primary">
                   <Plus size={15} />
-                  New order
+                  New purchase
                 </Link>
               )}
             </EmptyState>

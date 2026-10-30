@@ -56,7 +56,7 @@ test('buyer manually reviews an immutable request, receives a VM and one demo in
   expect((await page.request.get('/api/provider/dashboard')).status()).toBe(403);
   expect((await page.request.get('/api/provider/earnings')).status()).toBe(403);
 
-  await page.goto('/new');
+  await page.goto('/new/vm');
   await page
     .getByLabel('Describe your environment')
     .fill('A small Linux environment for an interactive command line.');
@@ -230,7 +230,7 @@ test('buyer Muse fixture prepares an editable review with an honest receipt', as
   await signIn(page, buyerEmail, buyerPassword!);
   const me = await (await page.request.get('/api/me')).json();
   test.skip(me.modes.muse !== 'fixture', 'Browser tests do not call paid Muse.');
-  await page.goto('/new');
+  await page.goto('/new/vm');
   await page
     .getByLabel('Describe your environment')
     .fill('A Linux environment with 2 vCPUs and 4 GB memory for 30 minutes.');

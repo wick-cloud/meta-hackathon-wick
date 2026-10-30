@@ -1233,8 +1233,12 @@ export function Credits() {
       <PageHeader
         eyebrow="BROKER PILOT WALLET"
         title="Broker wallet"
-        description="Available credit, reservations and scheduled capacity charges."
-      />
+        description="USD credit for agent budgets and scheduled VM bookings. Token packs track your AI usage separately."
+      >
+        <Link href="/agents" className="button secondary">
+          Manage agent budgets <ArrowRight size={15} />
+        </Link>
+      </PageHeader>
       <ErrorBox
         error={wallet.error || history.error}
         retry={() => {
@@ -1251,9 +1255,9 @@ export function Credits() {
             icon={<Wallet size={18} />}
           />
           <StatCard
-            label="Reserved for agreements"
+            label="Reserved credit"
             value={money(wallet.data.reservedCents)}
-            note="Unavailable for other orders"
+            note="Agent budgets and scheduled bookings"
             icon={<ShieldCheck size={18} />}
           />
           <StatCard
@@ -1267,10 +1271,9 @@ export function Credits() {
       <div className="market-notice">
         <Wallet size={19} />
         <p>
-          This is Broker pilot credit, separate from Wick compute credits. No payment is collected
-          in this pilot. Ask your administrator for a credit grant. Scheduled booked capacity is
-          paid even while idle; unfilled credit and failed-start adjustments appear here after
-          reconciliation.
+          Use wallet credit to fund an agent budget or reserve scheduled VM capacity. Your agent
+          spends its budget on prepaid token packs; inference then consumes those tokens. This pilot
+          uses administrator-funded credit, separate from Wick compute credits.
         </p>
       </div>
       <section className="card market-panel">
@@ -1318,7 +1321,7 @@ export function Credits() {
           <EmptyState
             icon={<Wallet size={25} />}
             title="No credit entries yet"
-            description="Your administrator’s grants and scheduled-capacity reservations will appear here."
+            description="Credit grants, agent funding and scheduled VM reservations will appear here."
           />
         )}
         <LoadMore
