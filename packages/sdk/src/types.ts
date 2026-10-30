@@ -14,6 +14,9 @@ export type BrokerScope =
   | 'vms:terminal'
   | 'vms:terminate'
   | 'billing:read'
+  | 'inference:read'
+  | 'inference:use'
+  | 'tokens:buy'
   | 'provider:read'
   | 'provider:bids:write'
   | 'provider:capacity:write'
@@ -26,6 +29,7 @@ export interface BrokerKeyLimits {
 }
 export interface BrokerKeyAuthority {
   id: string;
+  grantId?: string;
   scopes: BrokerScope[];
   limits: BrokerKeyLimits;
 }

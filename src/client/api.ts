@@ -262,6 +262,7 @@ export const statusLabel = (status: string) =>
     cancelled: 'Cancelled',
     accepted: 'Accepted',
     won: 'Awarded',
+    awarded: 'Pack purchased',
     lost: 'Released',
     approved: 'Approved',
     active: 'Active',

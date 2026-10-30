@@ -54,6 +54,166 @@ class FakeTerminal {
 }
 const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
 describe('Broker MCP role and scope boundaries', () => {
+  it('accepts long signed instant quotes and rejects out-of-contract inference quantities', async () => {
+    const request = vi.fn(async () => ({ id: 'order-one' }));
+    const client = { baseUrl: 'https://broker.example', request } as unknown as BrokerClient;
+    const tools = buildTools(
+      client,
+      { ...principal, apiKey: { ...principal.apiKey, scopes: ['tokens:buy', 'inference:use'] } },
+      manager(client),
+    );
+    const buy = tools.find((t) => t.name === 'token_order_create')!;
+    const input = {
+      mode: 'instant',
+      inputTokens: 1000000,
+      outputTokens: 100000,
+      maxTotalCents: 500,
+      quoteId: 'signed-quote.'.padEnd(700, 'a'),
+    };
+    await buy.run({ operationKey: 'long-quote-purchase', input });
+    expect(request).toHaveBeenCalledExactlyOnceWith('POST', '/api/token-orders', {
+      body: input,
+      operationKey: 'long-quote-purchase',
+      signal: undefined,
+    });
+    for (const invalid of [
+      { ...input, quoteId: 'a'.repeat(4001) },
+      { ...input, inputTokens: 10000001 },
+      { ...input, outputTokens: 1000001 },
+    ])
+      expect(
+        buy.schema.safeParse({ operationKey: 'invalid-purchase', input: invalid }).success,
+      ).toBe(false);
+    const complete = tools.find((t) => t.name === 'inference_complete')!;
+    const body = {
+      model: 'meta/muse-spark-open',
+      messages: [{ role: 'user', content: '' }],
+      max_tokens: 8192,
+      top_p: 0,
+    };
+    expect(
+      complete.schema.safeParse({ operationKey: 'completion-valid', input: body }).success,
+    ).toBe(true);
+    for (const invalid of [
+      { ...body, max_tokens: 8193 },
+      { ...body, messages: Array.from({ length: 65 }, () => ({ role: 'user', content: '' })) },
+      { ...body, messages: [{ role: 'user', content: 'a'.repeat(60001) }] },
+    ])
+      expect(
+        complete.schema.safeParse({ operationKey: 'completion-invalid', input: invalid }).success,
+      ).toBe(false);
+  });
+  it('gives an inference grant only token-market tools and rejects unsupported completion capabilities', async () => {
+    const request = vi.fn(async () => ({ id: 'call-one' }));
+    const client = { baseUrl: 'https://broker.example', request } as unknown as BrokerClient;
+    const tools = buildTools(
+      client,
+      {
+        ...principal,
+        apiKey: {
+          id: 'grant-key',
+          grantId: 'grant-one',
+          scopes: ['account:read', 'inference:read', 'inference:use', 'tokens:buy'],
+          limits: {},
+        },
+      },
+      manager(client),
+    );
+    expect(tools.map((t) => t.name)).toEqual([
+      'inference_compatible_models_list',
+      'inference_models_get',
+      'inference_grant_get',
+      'inference_packs_list',
+      'inference_quotes_get',
+      'token_order_create',
+      'token_order_get',
+      'token_order_cancel',
+      'inference_receipt_get',
+      'inference_complete',
+      'account_get',
+      'token_order_wait',
+    ]);
+    const tool = tools.find((t) => t.name === 'inference_complete')!;
+    const input = {
+      model: 'meta/muse-spark-open',
+      messages: [{ role: 'user', content: 'Hello' }],
+      max_tokens: 64,
+      stream: false,
+    };
+    for (const invalid of [
+      { input },
+      { operationKey: 'completion-one', input: { ...input, stream: true } },
+      { operationKey: 'completion-one', input: { ...input, tools: [] } },
+      {
+        operationKey: 'completion-one',
+        input: { ...input, messages: [{ role: 'tool', content: 'Hidden tool call' }] },
+      },
+    ])
+      await expect(tool.run(invalid)).rejects.toThrow();
+    expect(request).not.toHaveBeenCalled();
+    await tool.run({ operationKey: 'completion-one', input });
+    expect(request).toHaveBeenCalledExactlyOnceWith('POST', '/api/v1/chat/completions', {
+      body: input,
+      operationKey: 'completion-one',
+      signal: undefined,
+    });
+    expect(tool.readOnly).toBe(false);
+    expect(tools.find((t) => t.name === 'inference_quotes_get')!.readOnly).toBe(true);
+    expect(tools.some((t) => /grant_create|budget_update|terminal|provider_/.test(t.name))).toBe(
+      false,
+    );
+  });
+  it('bounds token waits and links to the existing token order without mutating', async () => {
+    const wait = vi.fn(async () => ({ id: 'token-order', state: 'pending' }));
+    const client = {
+      baseUrl: 'https://broker.example',
+      inference: { orders: { wait } },
+    } as unknown as BrokerClient;
+    const tool = buildTools(
+      client,
+      {
+        ...principal,
+        apiKey: { ...principal.apiKey, scopes: ['inference:read'] },
+      },
+      manager(client),
+    ).find((t) => t.name === 'token_order_wait')!;
+    await expect(tool.run({ id: 'token-order', timeoutSeconds: 31 })).rejects.toThrow();
+    expect(wait).not.toHaveBeenCalled();
+    await expect(tool.run({ id: 'token-order' })).resolves.toMatchObject({
+      data: { state: 'pending' },
+      links: { ui: 'https://broker.example/token-orders/token-order' },
+    });
+    expect(wait).toHaveBeenCalledExactlyOnceWith('token-order', {
+      timeoutMs: 30000,
+      signal: undefined,
+    });
+  });
+  it('exposes provider inference offers only under provider role and existing supplier scopes', () => {
+    const client = { baseUrl: 'https://broker.example' } as BrokerClient;
+    const provider = {
+      ...principal,
+      role: 'provider',
+      apiKey: { ...principal.apiKey, scopes: ['provider:read', 'provider:offerings:write'] },
+    };
+    const tools = buildTools(client, provider, manager(client));
+    expect(tools.map((t) => t.name)).toEqual(
+      expect.arrayContaining([
+        'provider_inference_offering_get',
+        'provider_inference_offering_update',
+        'provider_inference_packs_list',
+      ]),
+    );
+    expect(
+      tools
+        .find((t) => t.name === 'provider_inference_offering_update')!
+        .schema.safeParse({ input: {} }).success,
+    ).toBe(false);
+    expect(
+      buildTools(client, { ...provider, role: 'buyer' }, manager(client)).some((t) =>
+        t.name.startsWith('provider_inference'),
+      ),
+    ).toBe(false);
+  });
   it('advertises only the key role/scopes and no secret inputs or exec/file tools', () => {
     const client = { baseUrl: 'https://broker.example' } as BrokerClient;
     const tools = buildTools(client, principal, manager(client));

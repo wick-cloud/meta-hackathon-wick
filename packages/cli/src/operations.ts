@@ -13,6 +13,143 @@ export interface Operation {
 /** Client routing only: authorization, pricing and lifecycle always belong to Broker. */
 export const OPERATIONS: readonly Operation[] = [
   {
+    command: 'inference compatible-models',
+    tool: 'inference_compatible_models_list',
+    method: 'GET',
+    path: '/api/v1/models',
+    scope: 'inference:read',
+    role: 'buyer',
+    description:
+      'Read canonical inference model identifiers in OpenAI-compatible format. Read the inference catalog for route qualification and reservation limits.',
+  },
+  {
+    command: 'inference models',
+    tool: 'inference_models_get',
+    method: 'GET',
+    path: '/api/inference/models',
+    scope: 'inference:read',
+    role: 'buyer',
+    description:
+      'Read Meta model routes, provider qualification and token reservation limits. Creates nothing.',
+  },
+  {
+    command: 'inference grant',
+    tool: 'inference_grant_get',
+    method: 'GET',
+    path: '/api/inference/grant',
+    scope: 'inference:read',
+    role: 'buyer',
+    description:
+      'Read the key’s bound task grant, spent funds and purchase holds. Cannot increase its budget.',
+  },
+  {
+    command: 'inference packs',
+    tool: 'inference_packs_list',
+    method: 'GET',
+    path: '/api/inference/packs',
+    scope: 'inference:read',
+    role: 'buyer',
+    description:
+      'Read a bounded page of prepaid input/output packs and their available, consumed and held tokens.',
+  },
+  {
+    command: 'inference quote',
+    tool: 'inference_quotes_get',
+    method: 'POST',
+    path: '/api/inference/quotes',
+    scope: 'inference:read',
+    role: 'buyer',
+    body: 'tokenQuote',
+    description:
+      'Read expiring fixed-price token pack quotes. Does not purchase, reserve grant funds or call a model.',
+  },
+  {
+    command: 'tokens create',
+    tool: 'token_order_create',
+    method: 'POST',
+    path: '/api/token-orders',
+    scope: 'tokens:buy',
+    role: 'buyer',
+    mutation: true,
+    body: 'tokenOrder',
+    description:
+      'Place a binding 30-second token auction or accept an exact instant quote within the funded grant. An award charges once for prepaid input/output quota; unused quota is non-refundable.',
+  },
+  {
+    command: 'tokens get',
+    tool: 'token_order_get',
+    method: 'GET',
+    path: '/api/token-orders/:id',
+    scope: 'inference:read',
+    role: 'buyer',
+    description:
+      'Read an owned token order, bids, funded pack and grant. Does not purchase or run inference.',
+  },
+  {
+    command: 'tokens cancel',
+    tool: 'token_order_cancel',
+    method: 'POST',
+    path: '/api/token-orders/:id/cancel',
+    scope: 'tokens:buy',
+    role: 'buyer',
+    mutation: true,
+    description:
+      'Cancel an open token auction and release its pending purchase hold. Does not refund an awarded pack.',
+  },
+  {
+    command: 'inference receipt',
+    tool: 'inference_receipt_get',
+    method: 'GET',
+    path: '/api/inference/requests/:id',
+    scope: 'inference:read',
+    role: 'buyer',
+    description:
+      'Read a persisted inference quota receipt, including uncertain settlement. Does not replay generation or recover a transcript.',
+  },
+  {
+    command: 'inference complete',
+    tool: 'inference_complete',
+    method: 'POST',
+    path: '/api/v1/chat/completions',
+    scope: 'inference:use',
+    role: 'buyer',
+    mutation: true,
+    body: 'inferenceCompletion',
+    description:
+      'Run one buffered text-only Meta completion using prepaid quota. Requires a stable operation key and explicit output cap, including reasoning. No streaming, tools, automatic retry or automatic purchase; repeated completed keys return a receipt-only error.',
+  },
+  {
+    command: 'provider inference get',
+    tool: 'provider_inference_offering_get',
+    method: 'GET',
+    path: '/api/provider/inference/offering',
+    scope: 'provider:read',
+    role: 'provider',
+    description:
+      'Read your inference offering, native cost floor and qualified route. Creates no endpoint.',
+  },
+  {
+    command: 'provider inference update',
+    tool: 'provider_inference_offering_update',
+    method: 'PUT',
+    path: '/api/provider/inference/offering',
+    scope: 'provider:offerings:write',
+    role: 'provider',
+    mutation: true,
+    body: 'tokenOffering',
+    description:
+      'Publish or revise your inference offering at an expected revision. Future accepted packs incur the fixed 15% provider commission; existing pack terms remain fixed.',
+  },
+  {
+    command: 'provider inference packs',
+    tool: 'provider_inference_packs_list',
+    method: 'GET',
+    path: '/api/provider/inference/packs',
+    scope: 'provider:read',
+    role: 'provider',
+    description: 'Read a bounded page of your sold token packs and their provider revenue shares.',
+  },
+  {
     command: 'orders auctions',
     tool: 'auctions_list',
     method: 'GET',

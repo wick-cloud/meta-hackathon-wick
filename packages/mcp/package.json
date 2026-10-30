@@ -1,5 +1,5 @@
 {
-  "version": "0.1.1",
+  "version": "0.2.0",
   "type": "module",
   "engines": {
     "node": ">=22.12.0"
@@ -32,8 +32,8 @@
     }
   },
   "dependencies": {
-    "@wick-cloud/broker-sdk": "0.1.1",
-    "@wick-cloud/broker-cli": "0.1.1",
+    "@wick-cloud/broker-sdk": "0.2.0",
+    "@wick-cloud/broker-cli": "0.2.0",
     "@modelcontextprotocol/server": "2.4.0",
     "zod": "^4.1.12"
   }

@@ -25,7 +25,8 @@
     "build:app": "NODE_ENV=production vite build && tsc -p tsconfig.server.json",
     "build:packages": "npm run build --workspace @wick-cloud/broker-sdk && npm run build --workspace @wick-cloud/broker-cli && npm run build --workspace @wick-cloud/broker-mcp && npm rebuild --workspace @wick-cloud/broker-cli --workspace @wick-cloud/broker-mcp --ignore-scripts",
     "pretest": "npm run build:packages",
-    "test:developer-e2e": "npm run build:packages && tsx tests/developer-access-e2e.ts"
+    "test:developer-e2e": "npm run build:packages && tsx tests/developer-access-e2e.ts",
+    "inference:readiness": "tsx scripts/inference-readiness.ts"
   },
   "dependencies": {
     "@fastify/middie": "^9.0.3",

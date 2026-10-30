@@ -90,7 +90,7 @@ export function createRequireActor(auth: ReturnType<typeof createAuth>, pool: Po
         throw new HttpError(401, 'A valid Broker API key is required. Wick keys are not accepted.');
       const row = (
         await pool.query(
-          `SELECT k.id key_id,k.secret_digest,k.scopes,k.limits,k.issued_role,k.issued_provider_id,k.last_used_at,
+          `SELECT k.id key_id,k.grant_id,k.secret_digest,k.scopes,k.limits,k.issued_role,k.issued_provider_id,k.last_used_at,
         u.id,u.email,u.name,u.role,u."providerId",p.id::text actual_provider_id,
         (k.revoked_at IS NULL AND k.expires_at>clock_timestamp()) active
         FROM broker_api_keys k JOIN "user" u ON u.id=k.user_id
@@ -134,7 +134,12 @@ export function createRequireActor(auth: ReturnType<typeof createAuth>, pool: Po
         name: row.name,
         role: row.role,
         ...(row.providerId ? { providerId: row.providerId } : {}),
-        apiKey: { id: row.key_id, scopes: row.scopes, limits: row.limits },
+        apiKey: {
+          id: row.key_id,
+          scopes: row.scopes,
+          limits: row.limits,
+          ...(row.grant_id ? { grantId: row.grant_id } : {}),
+        },
       };
       if (!row.last_used_at || Date.now() - new Date(row.last_used_at).getTime() >= 60000)
         await pool.query(

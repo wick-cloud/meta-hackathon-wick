@@ -7,6 +7,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { resolve } from 'node:path';
 import type { BrokerClient } from '@wick-cloud/broker-sdk';
+import { BrokerError } from '@wick-cloud/broker-sdk';
 import { runCli, attachTerminal, type CliIO } from '../packages/cli/src/index.js';
 import {
   credentialFile,
@@ -99,13 +100,124 @@ describe('Broker CLI credentials', () => {
   });
 });
 describe('Broker CLI machine operations', () => {
+  it('preserves the inference receipt ID separately from HTTP correlation in JSON errors', async () => {
+    const request = vi.fn(async () => {
+      throw new BrokerError('Read the receipt.', {
+        status: 409,
+        code: 'inference_outcome_unknown',
+        requestId: 'http-request-1',
+        inferenceRequestId: '11111111-1111-4111-8111-111111111111',
+        operationKey: 'completion-recovery',
+      });
+    });
+    const output = io(
+      { request } as unknown as BrokerClient,
+      JSON.stringify({
+        model: 'meta/muse-spark-open',
+        messages: [{ role: 'user', content: 'Hello' }],
+        max_tokens: 64,
+      }),
+    );
+    expect(
+      await runCli(
+        [
+          'inference',
+          'complete',
+          '--file',
+          '-',
+          '--operation-key',
+          'completion-recovery',
+          '--json',
+        ],
+        output,
+      ),
+    ).toBe(1);
+    expect(JSON.parse(output.stdout())).toMatchObject({
+      requestId: 'http-request-1',
+      inferenceRequestId: '11111111-1111-4111-8111-111111111111',
+      operationKey: 'completion-recovery',
+    });
+    expect(request).toHaveBeenCalledOnce();
+  });
+  it('creates a token auction once and waits on its token-order identifier', async () => {
+    const request = vi.fn(async () => ({ id: 'tokens-one', status: 'open' }));
+    const wait = vi.fn(async () => ({ id: 'tokens-one', state: 'pending' }));
+    const output = io(
+      { request, inference: { orders: { wait } } } as unknown as BrokerClient,
+      JSON.stringify({
+        mode: 'auction',
+        inputTokens: 1000000,
+        outputTokens: 100000,
+        maxTotalCents: 500,
+      }),
+    );
+    expect(
+      await runCli(
+        [
+          'tokens',
+          'create',
+          '--file',
+          '-',
+          '--operation-key',
+          'token-order-001',
+          '--wait',
+          '--json',
+        ],
+        output,
+      ),
+    ).toBe(0);
+    expect(request).toHaveBeenCalledExactlyOnceWith('POST', '/api/token-orders', {
+      body: { mode: 'auction', inputTokens: 1000000, outputTokens: 100000, maxTotalCents: 500 },
+      operationKey: 'token-order-001',
+    });
+    expect(wait).toHaveBeenCalledExactlyOnceWith('tokens-one', { timeoutMs: 30000 });
+    expect(JSON.parse(output.stdout())).toEqual({ id: 'tokens-one', state: 'pending' });
+  });
+  it('uses the nested token-order detail for --wait and rejects completion --wait before sending', async () => {
+    const request = vi.fn(async () => ({ order: { id: 'tokens-one', status: 'open' } }));
+    const wait = vi.fn(async () => ({ id: 'tokens-one', state: 'complete' }));
+    const output = io({ request, inference: { orders: { wait } } } as unknown as BrokerClient);
+    expect(await runCli(['tokens', 'get', 'tokens-one', '--wait', '--json'], output)).toBe(0);
+    expect(wait).toHaveBeenCalledExactlyOnceWith('tokens-one', { timeoutMs: 30000 });
+    request.mockClear();
+    expect(
+      await runCli(
+        ['inference', 'complete', '--wait', '--json'],
+        io({ request } as unknown as BrokerClient),
+      ),
+    ).toBe(1);
+    expect(request).not.toHaveBeenCalled();
+  });
+  it('requires a completion operation key but not one for a nonbinding quote', async () => {
+    const request = vi.fn(async () => ({ items: [] }));
+    const quote = io(
+      { request } as unknown as BrokerClient,
+      JSON.stringify({ inputTokens: 1000000, outputTokens: 100000 }),
+    );
+    expect(await runCli(['inference', 'quote', '--file', '-', '--json'], quote)).toBe(0);
+    expect(request).toHaveBeenCalledExactlyOnceWith('POST', '/api/inference/quotes', {
+      body: { inputTokens: 1000000, outputTokens: 100000 },
+    });
+    request.mockClear();
+    const complete = io(
+      { request } as unknown as BrokerClient,
+      JSON.stringify({
+        model: 'meta/muse-spark-open',
+        messages: [{ role: 'user', content: 'Hello' }],
+        max_tokens: 64,
+      }),
+    );
+    expect(await runCli(['inference', 'complete', '--file', '-', '--json'], complete)).toBe(1);
+    expect(request).not.toHaveBeenCalled();
+    expect(JSON.parse(complete.stdout()).error).toContain('--operation-key');
+  });
   it('runs through the installed executable symlink', async () => {
     const result = await promisify(execFile)(process.execPath, [
       resolve('node_modules/.bin/wick-broker'),
       '--version',
       '--json',
     ]);
-    expect(JSON.parse(result.stdout)).toEqual({ version: '0.1.1' });
+    expect(JSON.parse(result.stdout)).toEqual({ version: '0.2.0' });
     expect(result.stderr).toBe('');
   });
   it('provides help and version without a credential', async () => {
@@ -114,7 +226,7 @@ describe('Broker CLI machine operations', () => {
     expect(help.stdout()).toContain('WICK_BROKER_API_KEY');
     const version = io();
     expect(await runCli(['--version'], version)).toBe(0);
-    expect(version.stdout().trim()).toBe('0.1.1');
+    expect(version.stdout().trim()).toBe('0.2.0');
   });
   it('rejects noninteractive mutations before any request without a stable key', async () => {
     const request = vi.fn();

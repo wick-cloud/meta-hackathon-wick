@@ -2,9 +2,11 @@ import { BrokerError } from './errors.js';
 import { BrokerTerminal, type TerminalOptions } from './terminal.js';
 import type * as T from './types.js';
 import type * as A from './agreements.js';
+import type * as I from './inference.js';
 import type { OrdersPage, OrderKind, OrderStatusFilter, OrderCreatedFilter } from './orders.js';
 export * from './types.js';
 export * from './agreements.js';
+export * from './inference.js';
 export * from './orders.js';
 export * from './errors.js';
 export * from './terminal.js';
@@ -263,6 +265,8 @@ export class BrokerClient {
             typeof data.requestId === 'string'
               ? data.requestId
               : (response.headers.get('x-request-id') ?? undefined),
+          inferenceRequestId:
+            typeof data.inferenceRequestId === 'string' ? data.inferenceRequestId : undefined,
           operationKey: op,
           ...(retryMs === undefined ? {} : { retryAfterMs: retryMs }),
         });
@@ -325,6 +329,45 @@ export class BrokerClient {
   catalog = {
     list: (options: ReadOptions = {}) =>
       this.request<{ items: T.CatalogItem[] }>('GET', '/api/catalog', options),
+  };
+  /** Prepaid inference: purchases debit the bound grant; completions consume its paid quota. */
+  inference = {
+    catalog: (options: ReadOptions = {}) =>
+      this.request<I.InferenceCatalog>('GET', '/api/inference/models', options),
+    models: (options: ReadOptions = {}) =>
+      this.request<I.InferenceModelList>('GET', '/api/v1/models', options),
+    grant: (options: ReadOptions = {}) =>
+      this.request<I.InferenceGrant>('GET', '/api/inference/grant', options),
+    packs: (query: T.Pagination = {}, options: ReadOptions = {}) =>
+      this.request<T.Page<I.TokenPack>>('GET', '/api/inference/packs', {
+        ...options,
+        query: { ...query },
+      }),
+    quote: (input: I.TokenQuoteInput, options: ReadOptions = {}) =>
+      this.request<{ items: I.TokenQuote[] }>('POST', '/api/inference/quotes', {
+        ...options,
+        body: input,
+      }),
+    orders: {
+      create: (input: Omit<I.TokenOrderInput, 'operationKey'>, options: MutationOptions) =>
+        this.#write<I.TokenOrder>('POST', '/api/token-orders', input, options),
+      get: (id: string, options: ReadOptions = {}) =>
+        this.request<I.TokenOrderDetail>('GET', `/api/token-orders/${segment(id)}`, options),
+      cancel: (id: string, options: MutationOptions) =>
+        this.#write<I.TokenOrder>('POST', `/api/token-orders/${segment(id)}/cancel`, {}, options),
+      wait: (id: string, options: WaitOptions = {}) =>
+        this.#wait(
+          id,
+          (signal) => this.inference.orders.get(id, { signal }),
+          (result) => result.order.status !== 'open',
+          { timeoutMs: 30000, ...options },
+        ),
+    },
+    receipt: (id: string, options: ReadOptions = {}) =>
+      this.request<I.InferenceReceipt>('GET', `/api/inference/requests/${segment(id)}`, options),
+    /** Buffered text only. A repeated completed key returns a receipt, never a regenerated answer. */
+    complete: (input: I.InferenceCompletionInput, options: MutationOptions) =>
+      this.#write<I.InferenceCompletion>('POST', '/api/v1/chat/completions', input, options),
   };
   orders = {
     list: (query: OrdersQuery = {}, options: ReadOptions = {}) =>
@@ -451,6 +494,23 @@ export class BrokerClient {
       }),
   };
   provider = {
+    inference: {
+      offering: (options: ReadOptions = {}) =>
+        this.request<{ offering: I.TokenOffering | null; catalog: I.InferenceCatalog }>(
+          'GET',
+          '/api/provider/inference/offering',
+          options,
+        ),
+      updateOffering: (
+        input: Omit<I.TokenOfferingInput, 'operationKey'>,
+        options: MutationOptions,
+      ) => this.#write<I.TokenOffering>('PUT', '/api/provider/inference/offering', input, options),
+      packs: (query: T.Pagination = {}, options: ReadOptions = {}) =>
+        this.request<T.Page<I.TokenPack>>('GET', '/api/provider/inference/packs', {
+          ...options,
+          query: { ...query },
+        }),
+    },
     dashboard: (options: ReadOptions = {}) =>
       this.request<T.ProviderDashboard>('GET', '/api/provider/dashboard', options),
     capacity: (input: { total: number; expectedRevision?: number }, options: MutationOptions) =>

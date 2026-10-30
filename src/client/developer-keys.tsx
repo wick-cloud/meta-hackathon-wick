@@ -5,6 +5,7 @@ import {
   EmptyState,
   ErrorBox,
   LoadMore,
+  Link,
   MarketDialog,
   PageHeader,
   Spinner,
@@ -39,6 +40,9 @@ const labels: Record<BrokerScope, string> = {
   'provider:capacity:write': 'Change available capacity',
   'provider:policy:write': 'Apply selling policies',
   'provider:offerings:write': 'Publish and update offerings',
+  'inference:read': 'Read this agent’s budget, token packs and requests',
+  'inference:use': 'Use this agent’s prepaid token packs',
+  'tokens:buy': 'Buy token packs within this agent’s funded budget',
 };
 const shortMoney = (cents?: number) => (cents === undefined ? '—' : `$${(cents / 100).toFixed(2)}`);
 function Limits({ value }: { value: BrokerKeyLimits }) {
@@ -162,6 +166,15 @@ export function DeveloperKeys() {
           </p>
         </div>
       </div>
+      {role === 'buyer' && (
+        <p className="key-fine">
+          For a funded token budget,{' '}
+          <Link href="/agents" className="text-link">
+            create an agent
+          </Link>
+          . Agent keys use that agent’s budget and do not inherit general account spending access.
+        </p>
+      )}
       <ErrorBox
         error={list.error || (!creating && !revoking && !created ? error : '')}
         retry={list.error ? list.reload : undefined}
@@ -190,7 +203,7 @@ export function DeveloperKeys() {
                 <tr>
                   <th>Name / prefix</th>
                   <th>Access</th>
-                  <th>Per-operation limits</th>
+                  <th>Budget / limits</th>
                   <th>Last used</th>
                   <th>Expires</th>
                   <th>Status</th>
@@ -218,7 +231,13 @@ export function DeveloperKeys() {
                         </details>
                       </td>
                       <td>
-                        <Limits value={key.limits} />
+                        {key.grantId ? (
+                          <Link href={`/agents/${key.grantId}`} className="text-link">
+                            Funded agent budget
+                          </Link>
+                        ) : (
+                          <Limits value={key.limits} />
+                        )}
                       </td>
                       <td>{key.lastUsedAt ? dateTime(key.lastUsedAt) : 'Never'}</td>
                       <td>{dateTime(key.expiresAt)}</td>
@@ -268,9 +287,9 @@ export function DeveloperKeys() {
         <pre>
           {[
             'npm install \\',
-            `  ${window.location.origin}/downloads/0.1.1/wick-cloud-broker-sdk-0.1.1.tgz \\`,
-            `  ${window.location.origin}/downloads/0.1.1/wick-cloud-broker-cli-0.1.1.tgz \\`,
-            `  ${window.location.origin}/downloads/0.1.1/wick-cloud-broker-mcp-0.1.1.tgz`,
+            `  ${window.location.origin}/downloads/0.2.0/wick-cloud-broker-sdk-0.2.0.tgz \\`,
+            `  ${window.location.origin}/downloads/0.2.0/wick-cloud-broker-cli-0.2.0.tgz \\`,
+            `  ${window.location.origin}/downloads/0.2.0/wick-cloud-broker-mcp-0.2.0.tgz`,
           ].join('\n')}
         </pre>
         <div className="key-setup-grid">
@@ -289,8 +308,9 @@ export function DeveloperKeys() {
           </div>
         </div>
         <p className="key-fine">
-          Permissions and limits apply to all clients. Limits are per operation, not daily or
-          lifetime budgets. Revoking a key stops access; existing orders and commitments continue.
+          General account key limits apply per operation, not daily or lifetime. Agent keys use
+          their funded agent budget. Revoking a key stops access; admitted work may finish within
+          its existing reservations.
         </p>
       </section>
       {creating && (

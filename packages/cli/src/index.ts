@@ -18,7 +18,7 @@ import {
   validateBrokerKey,
 } from './profile.js';
 
-const VERSION = '0.1.1';
+const VERSION = '0.2.0';
 const MAX_INPUT = 65536;
 const MAX_TERMINAL_FRAME = 32768;
 export interface CliIO {
@@ -39,7 +39,7 @@ function line(io: CliIO, value: unknown) {
   io.output.write(`${JSON.stringify(value)}\n`);
 }
 function help(): string {
-  return `Wick Broker ${VERSION}\n\nUsage: wick-broker <command> [id] [options]\n\n${OPERATIONS.map((o) => `  ${o.command}${o.path.includes(':id') ? ' <id>' : ''}`).join('\n')}\n  auth login [--stdin]\n  auth logout\n  vms wait <id>\n  vms terminal <id>\n\nOptions:\n  --file <path|->       JSON request body (maximum 64 KiB)\n  --operation-key <key> Stable key for a mutation; required without a TTY\n  --json               JSON output only; errors also use JSON\n  --wait               Wait for auction outcome without creating another order\n  --timeout <seconds>  Finite wait deadline, default 120, maximum 900\n  --api-url <origin>   Broker API origin; saved keys never cross origins\n  --limit/--cursor      Bounded list pagination\n  --kind/--status/--created  Orders filters\n  --from/--to          Commitment date range\n  --prompt/--strategy/--description  Muse proposal text\n\nCredentials: WICK_BROKER_API_KEY and WICK_BROKER_API_URL.\nWick keys are separate. Do not put API keys in command-line arguments.\n`;
+  return `Wick Broker ${VERSION}\n\nUsage: wick-broker <command> [id] [options]\n\n${OPERATIONS.map((o) => `  ${o.command}${o.path.includes(':id') ? ' <id>' : ''}`).join('\n')}\n  auth login [--stdin]\n  auth logout\n  tokens wait <id>\n  vms wait <id>\n  vms terminal <id>\n\nOptions:\n  --file <path|->       JSON request body (maximum 64 KiB)\n  --operation-key <key> Stable key for a mutation; required without a TTY\n  --json               JSON output only; errors also use JSON\n  --wait               Wait for auction outcome without creating another order\n  --timeout <seconds>  Finite wait: tokens default 30s, others 120s, maximum 900s\n  --api-url <origin>   Broker API origin; saved keys never cross origins\n  --limit/--cursor      Bounded list pagination\n  --kind/--status/--created  Orders filters\n  --from/--to          Commitment date range\n  --prompt/--strategy/--description  Muse proposal text\n\nCredentials: WICK_BROKER_API_KEY and WICK_BROKER_API_URL.\nWick keys are separate. Do not put API keys in command-line arguments.\n`;
 }
 async function inputText(input: Readable, limit = MAX_INPUT): Promise<string> {
   const chunks: Buffer[] = [];
@@ -135,6 +135,7 @@ function errorResult(error: unknown) {
     code?: string;
     status?: number;
     requestId?: string;
+    inferenceRequestId?: string;
     operationKey?: string;
     message?: string;
   };
@@ -147,6 +148,7 @@ function errorResult(error: unknown) {
     code: value.code ?? 'client_error',
     ...(value.status ? { status: value.status } : {}),
     ...(value.requestId ? { requestId: value.requestId } : {}),
+    ...(value.inferenceRequestId ? { inferenceRequestId: value.inferenceRequestId } : {}),
     ...(value.operationKey ? { operationKey: value.operationKey } : {}),
   };
 }
@@ -324,7 +326,7 @@ export async function runCli(args: string[], io: CliIO = defaultIO()): Promise<n
       await attachTerminal(client, positionals[2]!, io);
       return 0;
     }
-    const timeoutSeconds = Number(flags.timeout ?? 120);
+    const timeoutSeconds = Number(flags.timeout ?? (positionals[0] === 'tokens' ? 30 : 120));
     if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0 || timeoutSeconds > 900)
       throw new Error('Timeout must be greater than zero and no more than 900 seconds.');
     if (positionals[0] === 'vms' && positionals[1] === 'wait') {
@@ -332,10 +334,24 @@ export async function runCli(args: string[], io: CliIO = defaultIO()): Promise<n
       line(io, await client.vms.wait(positionals[2]!, { timeoutMs: timeoutSeconds * 1000 }));
       return 0;
     }
+    if (positionals[0] === 'tokens' && positionals[1] === 'wait') {
+      if (positionals.length !== 3) throw new Error('Use tokens wait <id>.');
+      line(
+        io,
+        await client.inference.orders.wait(positionals[2]!, { timeoutMs: timeoutSeconds * 1000 }),
+      );
+      return 0;
+    }
     const { operation, ids } = findOperation(positionals);
-    if (flags.wait && operation.command !== 'orders create' && operation.command !== 'orders get')
+    const tokenOrder = operation.command === 'tokens create' || operation.command === 'tokens get';
+    if (
+      flags.wait &&
+      !tokenOrder &&
+      operation.command !== 'orders create' &&
+      operation.command !== 'orders get'
+    )
       throw new Error(
-        '--wait is supported only for auction create/get. Use vms wait for environment readiness.',
+        '--wait is supported only for orders/tokens create/get. Use vms wait for environment readiness.',
       );
     const body = flags.file
       ? await readBody(flags.file, io.input)
@@ -376,16 +392,17 @@ export async function runCli(args: string[], io: CliIO = defaultIO()): Promise<n
       ...(operationKey ? { operationKey } : {}),
     });
     if (flags.wait) {
-      if (operation.command !== 'orders create' && operation.command !== 'orders get')
-        throw new Error(
-          '--wait is supported only for auction create/get. Use vms wait for environment readiness.',
-        );
       const id =
         typeof result.id === 'string'
           ? result.id
-          : (result.request as { id?: string } | undefined)?.id;
+          : ((tokenOrder ? result.order : result.request) as { id?: string } | undefined)?.id;
       if (!id) throw new Error('Auction result did not include an order identifier.');
-      line(io, await client.orders.wait(id, { timeoutMs: timeoutSeconds * 1000 }));
+      line(
+        io,
+        await (tokenOrder ? client.inference.orders : client.orders).wait(id, {
+          timeoutMs: timeoutSeconds * 1000,
+        }),
+      );
     } else line(io, result);
     return 0;
   } catch (error) {

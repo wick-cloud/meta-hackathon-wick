@@ -109,10 +109,21 @@ export interface CreditWallet {
 }
 export interface CreditEntry {
   id: string;
-  kind: 'grant' | 'reserve' | 'book' | 'settle' | 'release' | 'failed_start_credit';
+  kind:
+    | 'grant'
+    | 'reserve'
+    | 'book'
+    | 'settle'
+    | 'release'
+    | 'failed_start_credit'
+    | 'agent_fund'
+    | 'token_purchase'
+    | 'agent_release'
+    | 'token_refund';
   amountCents: number;
   reservedDeltaCents: number;
   agreementId?: string;
+  grantId?: string;
   operationKey: string;
   createdAt: string;
   description: string;

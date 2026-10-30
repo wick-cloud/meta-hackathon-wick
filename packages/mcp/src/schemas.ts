@@ -49,6 +49,58 @@ const desired = z
   })
   .strict();
 export const bodySchemas: Record<string, z.ZodType> = {
+  tokenQuote: z
+    .object({
+      grantId: id.optional(),
+      modelId: z.literal('meta/muse-spark-open').optional(),
+      inputTokens: z.number().int().positive().max(10_000_000),
+      outputTokens: z.number().int().positive().max(1_000_000),
+    })
+    .strict(),
+  tokenOrder: z
+    .object({
+      grantId: id.optional(),
+      modelId: z.literal('meta/muse-spark-open').optional(),
+      inputTokens: z.number().int().positive().max(10_000_000),
+      outputTokens: z.number().int().positive().max(1_000_000),
+      mode: z.enum(['auction', 'instant']),
+      maxTotalCents: cents.min(1),
+      quoteId: z.string().min(1).max(4000).optional(),
+    })
+    .strict(),
+  inferenceCompletion: z
+    .object({
+      model: z.literal('meta/muse-spark-open'),
+      messages: z
+        .array(
+          z
+            .object({
+              role: z.enum(['system', 'user', 'assistant']),
+              content: z.string().max(60000),
+            })
+            .strict(),
+        )
+        .min(1)
+        .max(64),
+      max_tokens: z.number().int().positive().max(8192),
+      temperature: z.number().min(0).max(2).optional(),
+      top_p: z.number().min(0).max(1).optional(),
+      stream: z.literal(false).optional(),
+    })
+    .strict(),
+  tokenOffering: z
+    .object({
+      expectedRevision: z.number().int().positive().max(2_000_000_000),
+      active: z.boolean(),
+      autoBid: z.boolean(),
+      inputRateMicrosPerMillion: z.number().int().positive().max(1_000_000_000_000),
+      outputRateMicrosPerMillion: z.number().int().positive().max(1_000_000_000_000),
+      instantMarkupBps: z.number().int().nonnegative().max(100_000),
+      minimumPriceCents: cents.min(1),
+      maxOutstandingInputTokens: z.number().int().positive().max(100_000_000),
+      maxOutstandingOutputTokens: z.number().int().positive().max(10_000_000),
+    })
+    .strict(),
   order: z
     .object({
       description: text,
@@ -135,7 +187,7 @@ export const filtersSchema = z
   .object({
     limit: z.number().int().min(1).max(100).optional(),
     cursor: z.string().max(768).optional(),
-    kind: z.enum(['all', 'auction', 'agreement']).optional(),
+    kind: z.enum(['all', 'auction', 'agreement', 'token']).optional(),
     status: z.enum(['all', 'active', 'history', 'attention']).optional(),
     created: z.enum(['all', '24h', '7d', '30d']).optional(),
     from: z.string().max(64).optional(),

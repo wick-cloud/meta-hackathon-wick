@@ -23,9 +23,15 @@ import { registerAgreements, startAgreementWorkers } from './agreements/index.js
 import { registerAgreementBilling } from './agreement-billing.js';
 import { registerDeveloperKeys } from './developer-keys.js';
 import { registerClientReleases } from './client-releases.js';
+import { createInferenceRuntime, type InferenceRuntime } from './inference/runtime.js';
+import { registerInference, startInferenceWorkers } from './inference/index.js';
 export async function buildApp(
   config: Config,
-  options: { wrapWick?: (adapter: WickAdapter) => WickAdapter; clientRoot?: string } = {},
+  options: {
+    wrapWick?: (adapter: WickAdapter) => WickAdapter;
+    wrapInference?: (runtime: InferenceRuntime) => InferenceRuntime;
+    clientRoot?: string;
+  } = {},
 ) {
   const app = Fastify({
     logger: {
@@ -49,6 +55,7 @@ export async function buildApp(
   boss.on('error', () => app.log.error('Durable queue error'));
   await boss.start();
   const auth = createAuth(config, pool);
+  const inference = await createInferenceRuntime(config);
   const ctx: AppContext = {
     pool,
     boss,
@@ -57,6 +64,7 @@ export async function buildApp(
       ? options.wrapWick(createWickAdapter(config, pool))
       : createWickAdapter(config, pool),
     muse: createMuseAdapter(config),
+    inference: options.wrapInference ? options.wrapInference(inference) : inference,
     requireActor: createRequireActor(auth, pool),
   };
   registerBrokerKeyAccess(app, ctx.requireActor);
@@ -122,6 +130,9 @@ export async function buildApp(
     return reply.status(status).send({
       code,
       requestId: request.id,
+      ...((error as { inferenceRequestId?: string }).inferenceRequestId
+        ? { inferenceRequestId: (error as { inferenceRequestId: string }).inferenceRequestId }
+        : {}),
       error:
         status >= 500
           ? 'The service could not complete this request. Please try again.'
@@ -168,12 +179,14 @@ export async function buildApp(
   await registerMarketplace(app, ctx);
   registerOrders(app, ctx);
   await registerAgreements(app, ctx);
+  await registerInference(app, ctx);
   registerAgreementBilling(app, ctx);
   registerNegotiation(app, ctx);
   await registerMuse(app, ctx);
   await registerTerminal(app, ctx);
   await startMarketplaceWorkers(ctx);
   await startAgreementWorkers(ctx);
+  await startInferenceWorkers(ctx);
   const clientRoot = resolve(options.clientRoot ?? 'dist/client');
   if (existsSync(resolve(clientRoot, 'index.html'))) {
     await app.register(fastifyStatic, { root: clientRoot, prefix: '/', wildcard: false });

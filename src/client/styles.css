@@ -603,6 +603,7 @@ svg {
   border-radius: 50%;
 }
 .status-running,
+.status-awarded,
 .status-ready,
 .status-won,
 .status-approved {
