@@ -583,7 +583,7 @@ test('agent setup and purchase form fit a narrow viewport and preserve back navi
   );
   await page.screenshot({ path: test.info().outputPath('agent-mobile.png'), fullPage: true });
   await page.getByRole('link', { name: 'Buy token pack', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Buy a token pack', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Buy AI tokens', exact: true })).toBeVisible();
   await page.screenshot({
     path: test.info().outputPath('token-composer-mobile.png'),
     fullPage: true,

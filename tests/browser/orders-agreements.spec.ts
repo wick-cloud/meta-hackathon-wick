@@ -300,7 +300,7 @@ test('Returning to the description preserves the manually reviewed environment c
           ? { request: { ...request, id: 'edited-request', status: 'open' }, bids: [] }
           : undefined,
   );
-  await page.goto('/new');
+  await page.goto('/new/vm');
   await page.getByLabel('Describe your environment').fill('My environment');
   await page.getByRole('button', { name: 'Review manually', exact: true }).click();
   await page.getByRole('combobox', { name: /^Reference configuration\b/ }).selectOption('large');

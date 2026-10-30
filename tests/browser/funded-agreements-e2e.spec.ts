@@ -96,7 +96,7 @@ test('actual fixture buyer/provider agreement flow, auction history, wallet and 
     ).toBeVisible();
 
     console.info('Fixture auth and pilot-credit grant complete.');
-    await buyer.page.goto('/new');
+    await buyer.page.goto('/new/vm');
     await buyer.page
       .getByLabel('Describe your environment')
       .fill('Instant terminal check (fixture)');
@@ -333,7 +333,7 @@ test('actual fixture buyer/provider agreement flow, auction history, wallet and 
     await expect(buyer.page.locator('.terminal-status')).toHaveText('Connected');
     await screenshot(buyer.page, 'buyer-scheduled-terminal');
     await buyer.page.goto('/credits');
-    await expect(buyer.page.getByText('Reserved for agreements', { exact: true })).toBeVisible();
+    await expect(buyer.page.getByText('Reserved credit', { exact: true })).toBeVisible();
     await screenshot(buyer.page, 'buyer-wallet');
   } finally {
     for (const requestId of ownedRequests) {

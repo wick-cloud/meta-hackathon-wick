@@ -401,22 +401,6 @@
   color: var(--muted);
   font-size: 10px;
 }
-.inference-order-switch {
-  display: flex;
-  gap: 8px;
-  border-bottom: 1px solid var(--line);
-  padding-bottom: 12px;
-  font-size: 12px;
-}
-.inference-order-switch > * {
-  padding: 9px 13px;
-  border-radius: 7px;
-  color: var(--muted);
-}
-.inference-order-switch > span {
-  background: var(--accent-soft);
-  color: var(--accent);
-}
 .inference-fixed-model {
   display: flex;
   align-items: center;
@@ -543,29 +527,6 @@
   margin-top: 6px;
   color: var(--muted);
 }
-.inference-new-order-link {
-  margin-bottom: 20px;
-  display: flex;
-  gap: 14px;
-  align-items: center;
-  padding: 16px 20px;
-  border: 1px solid var(--line-strong);
-  border-radius: 10px;
-  background: var(--card);
-}
-.inference-new-order-link > div {
-  flex: 1;
-}
-.inference-new-order-link strong {
-  display: block;
-  font-size: 13px;
-}
-.inference-new-order-link span {
-  display: block;
-  font-size: 12px;
-  color: var(--muted);
-  margin-top: 4px;
-}
 .orders-kind-icon.token {
   color: var(--accent);
   background: var(--accent-soft);
@@ -628,12 +589,6 @@
   }
   .inference-dialog-actions {
     flex-wrap: wrap;
-  }
-  .inference-order-switch {
-    gap: 0;
-  }
-  .inference-order-switch > * {
-    padding: 9px;
   }
   .inference-card-footer {
     flex-wrap: wrap;

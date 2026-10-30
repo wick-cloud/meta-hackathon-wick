@@ -51,6 +51,7 @@ import {
 } from './components';
 import './market.css';
 import './inference.css';
+import { PurchaseContext, TokenPurchaseSteps } from './purchases';
 
 const count = (n: number) => n.toLocaleString('en-US');
 const providerName = (provider: string) =>
@@ -190,7 +191,7 @@ function CopyButton({ text, label = 'Copy' }: { text: string; label?: string }) 
   );
 }
 
-export function Agents() {
+export function Agents({ search = '' }: { search?: string }) {
   const list = usePagedResource<InferenceGrant>('/api/inference/grants', 10000),
     catalog = useResource<InferenceCatalog>('/api/inference/models'),
     wallet = useResource<CreditWallet>('/api/credits'),
@@ -211,6 +212,9 @@ export function Agents() {
     setError('');
     setCreating(true);
   }
+  useEffect(() => {
+    if (new URLSearchParams(search).get('create') === '1') openCreate();
+  }, [search]);
   async function create(event: FormEvent) {
     event.preventDefault();
     setBusy(true);
@@ -239,9 +243,9 @@ export function Agents() {
   return (
     <div className="inference-workspace">
       <PageHeader
-        eyebrow="AGENT WORKSPACE"
-        title="Agents"
-        description="Give each agent a funded budget and one key for buying and using Meta model tokens."
+        eyebrow="AI TOKEN BUDGETS"
+        title="Agent budgets"
+        description="Set a spending limit for each agent. Its private key buys and uses AI token packs within that budget."
       >
         <Link href="/credits" className="button secondary">
           <Wallet size={16} />
@@ -1030,20 +1034,18 @@ export function TokenComposer({ search }: { search: string }) {
   }
   return (
     <div className="inference-workspace">
-      <Link href={initial ? `/agents/${initial}` : '/orders'} className="back-link">
-        <ArrowLeft size={15} />
-        {initial ? 'Back to agent' : 'All orders'}
-      </Link>
+      <PurchaseContext kind="tokens" />
       <PageHeader
-        eyebrow="NEW ORDER · AI TOKENS"
-        title="Buy a token pack"
-        description="Prepay for Meta Muse Spark Open. Use your agent’s key for every request."
-      />
-      <div className="inference-order-switch">
-        <Link href="/new">VM auction</Link>
-        <Link href="/agreements/new">Scheduled VMs</Link>
-        <span>AI tokens</span>
-      </div>
+        eyebrow="AI INFERENCE"
+        title="Buy AI tokens"
+        description="Prepaid input and output tokens for Meta Muse Spark Open, assigned to your agent’s budget."
+      >
+        <Link href={initial ? `/agents/${initial}` : '/agents'} className="button secondary">
+          <Bot size={15} />
+          {initial ? 'Agent budget' : 'Agent budgets'}
+        </Link>
+      </PageHeader>
+      <TokenPurchaseSteps hasAgent={activeGrants.length > 0} />
       {catalog.data && <Readiness catalog={catalog.data} />}
       <ErrorBox
         error={catalog.error || grants.error || selectedDetail.error}
@@ -1053,271 +1055,303 @@ export function TokenComposer({ search }: { search: string }) {
           selectedDetail.reload();
         }}
       />
-      <form className="inference-composer-grid" onSubmit={purchase}>
-        <section className="card">
-          <h2>Choose your pack</h2>
-          <fieldset disabled={busy || !!uncertainOrder} className="inference-fieldset">
-            <label className="field">
-              <span>Funded agent</span>
-              <select
-                value={grantId}
-                onChange={(e) => {
-                  setGrantId(e.target.value);
-                  invalidate();
-                }}
-                required
-              >
-                <option value="">Choose an agent</option>
-                {grant && !activeGrants.some((item) => item.id === grant.id) && (
-                  <option value={grant.id}>{grant.name}</option>
-                )}
-                {activeGrants.map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {item.name} · {money(item.availableCents)} available
-                  </option>
-                ))}
-              </select>
-            </label>
-            <LoadMore
-              available={!!grants.nextCursor}
-              loading={grants.loadingMore}
-              onLoad={() => void grants.loadMore()}
-              error={grants.moreError}
-            />
-            <Link href="/agents" className="text-link">
-              Create or fund an agent <ArrowRight size={13} />
+      {!grants.loading && !grants.error && activeGrants.length === 0 && !grantId ? (
+        <section className="card purchase-first-agent">
+          <span className="purchase-choice-icon">
+            <Bot size={23} />
+          </span>
+          <h2>
+            {grants.nextCursor
+              ? 'Choose or create an agent budget.'
+              : 'Give your agent a budget first.'}
+          </h2>
+          <p>
+            {grants.nextCursor
+              ? 'Load more to find an existing active budget, or create a new one from your wallet.'
+              : 'Reserve a spending limit from your Broker wallet. Then choose a prepaid token pack for that agent.'}
+          </p>
+          <div className="purchase-first-agent-actions">
+            <Link href="/agents?create=1" className="button primary">
+              Create agent budget <ArrowRight size={15} />
             </Link>
-            <div className="inference-fixed-model">
-              <Sparkles size={20} />
-              <div>
-                <strong>Meta Muse Spark Open</strong>
-                <code>{INFERENCE_MODEL_ID}</code>
+            <Link href="/credits" className="button secondary">
+              <Wallet size={15} /> View wallet
+            </Link>
+          </div>
+          <LoadMore
+            available={!!grants.nextCursor}
+            loading={grants.loadingMore}
+            onLoad={() => void grants.loadMore()}
+            error={grants.moreError}
+          />
+        </section>
+      ) : (
+        <form className="inference-composer-grid" onSubmit={purchase}>
+          <section className="card">
+            <h2>Choose your pack</h2>
+            <fieldset disabled={busy || !!uncertainOrder} className="inference-fieldset">
+              <label className="field">
+                <span>Agent budget</span>
+                <select
+                  value={grantId}
+                  onChange={(e) => {
+                    setGrantId(e.target.value);
+                    invalidate();
+                  }}
+                  required
+                >
+                  <option value="">Choose an agent budget</option>
+                  {grant && !activeGrants.some((item) => item.id === grant.id) && (
+                    <option value={grant.id}>{grant.name}</option>
+                  )}
+                  {activeGrants.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.name} · {money(item.availableCents)} available
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <LoadMore
+                available={!!grants.nextCursor}
+                loading={grants.loadingMore}
+                onLoad={() => void grants.loadMore()}
+                error={grants.moreError}
+              />
+              <Link href="/agents" className="text-link">
+                Create or fund an agent budget <ArrowRight size={13} />
+              </Link>
+              <div className="inference-fixed-model">
+                <Sparkles size={20} />
+                <div>
+                  <strong>Meta Muse Spark Open</strong>
+                  <code>{INFERENCE_MODEL_ID}</code>
+                </div>
               </div>
-            </div>
-            <div className="inference-form-grid">
-              <label className="field">
-                <span>Input tokens</span>
-                <input
-                  type="number"
-                  required
-                  min={minimumInputTokens}
-                  max={1000000000}
-                  step={1}
-                  value={inputTokens}
-                  onChange={(e) => {
-                    setInputTokens(Number(e.target.value));
-                    invalidate();
+              <div className="inference-form-grid">
+                <label className="field">
+                  <span>Input tokens</span>
+                  <input
+                    type="number"
+                    required
+                    min={minimumInputTokens}
+                    max={1000000000}
+                    step={1}
+                    value={inputTokens}
+                    onChange={(e) => {
+                      setInputTokens(Number(e.target.value));
+                      invalidate();
+                    }}
+                  />
+                </label>
+                <label className="field">
+                  <span>Output tokens</span>
+                  <input
+                    type="number"
+                    required
+                    min={1}
+                    max={1000000000}
+                    step={1}
+                    value={outputTokens}
+                    onChange={(e) => {
+                      setOutputTokens(Number(e.target.value));
+                      invalidate();
+                    }}
+                  />
+                </label>
+              </div>
+              {routes.length > 0 && (
+                <p className="inference-muted">
+                  Routes reserve at least{' '}
+                  {count(Math.min(...routes.map((route) => route.minimumInputReservation)))} input
+                  tokens per request. Output tokens include all charged generation.
+                </p>
+              )}
+              <fieldset className="inference-buy-modes">
+                <legend>How to buy</legend>
+                <label className={mode === 'auction' ? 'selected' : ''}>
+                  <input
+                    type="radio"
+                    name="purchase-mode"
+                    checked={mode === 'auction'}
+                    onChange={() => {
+                      setMode('auction');
+                      setAccepted(false);
+                    }}
+                  />
+                  <span>
+                    <strong>30-second reverse auction</strong>
+                    <small>
+                      Providers compete for your exact pack. Lowest eligible fixed price wins.
+                    </small>
+                  </span>
+                  <Clock3 size={18} />
+                </label>
+                <label className={mode === 'instant' ? 'selected' : ''}>
+                  <input
+                    type="radio"
+                    name="purchase-mode"
+                    checked={mode === 'instant'}
+                    disabled={!grant?.allowInstant}
+                    onChange={() => {
+                      setMode('instant');
+                      setAccepted(false);
+                    }}
+                  />
+                  <span>
+                    <strong>Buy at an instant price</strong>
+                    <small>
+                      {grant?.allowInstant
+                        ? 'Review a current provider quote and purchase immediately.'
+                        : 'Instant purchases are disabled for this agent.'}
+                    </small>
+                  </span>
+                  <ArrowRight size={18} />
+                </label>
+              </fieldset>
+              {mode === 'auction' ? (
+                <MoneyInput
+                  id="token-auction-max"
+                  label="Maximum total price"
+                  value={maximum}
+                  min={0.01}
+                  onChange={(value) => {
+                    setMaximum(value);
+                    setAccepted(false);
                   }}
                 />
-              </label>
-              <label className="field">
-                <span>Output tokens</span>
-                <input
-                  type="number"
-                  required
-                  min={1}
-                  max={1000000000}
-                  step={1}
-                  value={outputTokens}
-                  onChange={(e) => {
-                    setOutputTokens(Number(e.target.value));
-                    invalidate();
-                  }}
-                />
-              </label>
-            </div>
-            {routes.length > 0 && (
-              <p className="inference-muted">
-                Routes reserve at least{' '}
-                {count(Math.min(...routes.map((route) => route.minimumInputReservation)))} input
-                tokens per request. Output tokens include all charged generation.
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    className="button secondary"
+                    disabled={
+                      quoting || !eligible || inputTokens < minimumInputTokens || outputTokens < 1
+                    }
+                    onClick={() => void getQuotes()}
+                  >
+                    {quoting ? <Spinner label="Getting prices" /> : 'Get instant prices'}
+                  </button>
+                  <div className="inference-quotes">
+                    {quotes.map((quote) => (
+                      <label
+                        key={quote.quoteId}
+                        className={quoteId === quote.quoteId ? 'selected' : ''}
+                      >
+                        <input
+                          type="radio"
+                          name="quote"
+                          checked={quoteId === quote.quoteId}
+                          disabled={Date.parse(quote.expiresAt) <= now}
+                          onChange={() => {
+                            setQuoteId(quote.quoteId);
+                            setAccepted(false);
+                          }}
+                        />
+                        <span>
+                          <strong>{providerName(quote.provider)}</strong>
+                          <small>
+                            {Date.parse(quote.expiresAt) <= now
+                              ? 'Quote expired · refresh prices'
+                              : `Valid until ${dateTime(quote.expiresAt)}`}
+                          </small>
+                        </span>
+                        <strong>{money(quote.priceCents)}</strong>
+                      </label>
+                    ))}
+                  </div>
+                </>
+              )}
+            </fieldset>
+          </section>
+          <aside className="card inference-purchase-summary">
+            <span className="eyebrow">YOUR PURCHASE</span>
+            <h2>
+              {count(inputTokens)} input
+              <br />
+              <span>+ {count(outputTokens)} output tokens</span>
+            </h2>
+            <dl className="inference-definitions">
+              <div>
+                <dt>Model</dt>
+                <dd>Meta Muse Spark Open</dd>
+              </div>
+              <div>
+                <dt>Agent</dt>
+                <dd>{grant?.name ?? 'Choose an agent'}</dd>
+              </div>
+              <div>
+                <dt>Available budget</dt>
+                <dd>{money(grant?.availableCents)}</dd>
+              </div>
+              <div>
+                <dt>Per-purchase limit</dt>
+                <dd>{money(grant?.maxPurchaseCents)}</dd>
+              </div>
+              <div>
+                <dt>{mode === 'auction' ? 'Maximum hold' : 'Fixed pack price'}</dt>
+                <dd>
+                  {mode === 'auction'
+                    ? money(maximum)
+                    : selected
+                      ? money(selected.priceCents)
+                      : 'Get a quote'}
+                </dd>
+              </div>
+            </dl>
+            <p className="inference-muted">
+              Charged once when purchased. Using prepaid tokens does not charge the budget again.
+              The pack expires by the agent’s budget expiry.
+            </p>
+            <label className="inference-checkbox">
+              <input
+                type="checkbox"
+                checked={accepted}
+                disabled={busy || !!uncertainOrder}
+                onChange={(e) => setAccepted(e.target.checked)}
+              />
+              <span>
+                I understand that purchased tokens are prepaid and unused or expired tokens are not
+                automatically refundable.
+              </span>
+            </label>
+            {!eligible && (
+              <p className="inference-warning">
+                Select an active funded agent with a qualified provider route to purchase.
               </p>
             )}
-            <fieldset className="inference-buy-modes">
-              <legend>How to buy</legend>
-              <label className={mode === 'auction' ? 'selected' : ''}>
-                <input
-                  type="radio"
-                  name="purchase-mode"
-                  checked={mode === 'auction'}
-                  onChange={() => {
-                    setMode('auction');
-                    setAccepted(false);
-                  }}
-                />
-                <span>
-                  <strong>30-second reverse auction</strong>
-                  <small>
-                    Providers compete for your exact pack. Lowest eligible fixed price wins.
-                  </small>
-                </span>
-                <Clock3 size={18} />
-              </label>
-              <label className={mode === 'instant' ? 'selected' : ''}>
-                <input
-                  type="radio"
-                  name="purchase-mode"
-                  checked={mode === 'instant'}
-                  disabled={!grant?.allowInstant}
-                  onChange={() => {
-                    setMode('instant');
-                    setAccepted(false);
-                  }}
-                />
-                <span>
-                  <strong>Buy at an instant price</strong>
-                  <small>
-                    {grant?.allowInstant
-                      ? 'Review a current provider quote and purchase immediately.'
-                      : 'Instant purchases are disabled for this agent.'}
-                  </small>
-                </span>
-                <ArrowRight size={18} />
-              </label>
-            </fieldset>
-            {mode === 'auction' ? (
-              <MoneyInput
-                id="token-auction-max"
-                label="Maximum total price"
-                value={maximum}
-                min={0.01}
-                onChange={(value) => {
-                  setMaximum(value);
-                  setAccepted(false);
-                }}
-              />
-            ) : (
-              <>
-                <button
-                  type="button"
-                  className="button secondary"
-                  disabled={
-                    quoting || !eligible || inputTokens < minimumInputTokens || outputTokens < 1
-                  }
-                  onClick={() => void getQuotes()}
-                >
-                  {quoting ? <Spinner label="Getting prices" /> : 'Get instant prices'}
-                </button>
-                <div className="inference-quotes">
-                  {quotes.map((quote) => (
-                    <label
-                      key={quote.quoteId}
-                      className={quoteId === quote.quoteId ? 'selected' : ''}
-                    >
-                      <input
-                        type="radio"
-                        name="quote"
-                        checked={quoteId === quote.quoteId}
-                        disabled={Date.parse(quote.expiresAt) <= now}
-                        onChange={() => {
-                          setQuoteId(quote.quoteId);
-                          setAccepted(false);
-                        }}
-                      />
-                      <span>
-                        <strong>{providerName(quote.provider)}</strong>
-                        <small>
-                          {Date.parse(quote.expiresAt) <= now
-                            ? 'Quote expired · refresh prices'
-                            : `Valid until ${dateTime(quote.expiresAt)}`}
-                        </small>
-                      </span>
-                      <strong>{money(quote.priceCents)}</strong>
-                    </label>
-                  ))}
-                </div>
-              </>
-            )}
-          </fieldset>
-        </section>
-        <aside className="card inference-purchase-summary">
-          <span className="eyebrow">YOUR PURCHASE</span>
-          <h2>
-            {count(inputTokens)} input
-            <br />
-            <span>+ {count(outputTokens)} output tokens</span>
-          </h2>
-          <dl className="inference-definitions">
-            <div>
-              <dt>Model</dt>
-              <dd>Meta Muse Spark Open</dd>
-            </div>
-            <div>
-              <dt>Agent</dt>
-              <dd>{grant?.name ?? 'Choose an agent'}</dd>
-            </div>
-            <div>
-              <dt>Available budget</dt>
-              <dd>{money(grant?.availableCents)}</dd>
-            </div>
-            <div>
-              <dt>Per-purchase limit</dt>
-              <dd>{money(grant?.maxPurchaseCents)}</dd>
-            </div>
-            <div>
-              <dt>{mode === 'auction' ? 'Maximum hold' : 'Fixed pack price'}</dt>
-              <dd>
-                {mode === 'auction'
-                  ? money(maximum)
-                  : selected
-                    ? money(selected.priceCents)
-                    : 'Get a quote'}
-              </dd>
-            </div>
-          </dl>
-          <p className="inference-muted">
-            Whole-cent price, charged once when purchased. Using prepaid tokens does not charge the
-            budget again. The pack expires by the agent’s budget expiry.
-          </p>
-          <label className="inference-checkbox">
-            <input
-              type="checkbox"
-              checked={accepted}
-              disabled={busy || !!uncertainOrder}
-              onChange={(e) => setAccepted(e.target.checked)}
-            />
-            <span>
-              I understand that purchased tokens are prepaid and unused or expired tokens are not
-              automatically refundable.
-            </span>
-          </label>
-          {!eligible && (
-            <p className="inference-warning">
-              Select an active funded agent with a qualified provider route to purchase.
-            </p>
-          )}
-          <ErrorBox error={error} />
-          <button
-            className="button primary full-width"
-            disabled={
-              busy ||
-              (!uncertainOrder &&
-                (!eligible ||
-                  !accepted ||
-                  inputTokens < minimumInputTokens ||
-                  outputTokens < 1 ||
-                  (mode === 'instant'
-                    ? !quoteFresh ||
-                      !grant?.allowInstant ||
-                      selected!.priceCents >
-                        Math.min(grant?.availableCents ?? 0, grant?.maxPurchaseCents ?? 0)
-                    : maximum < 0.01 ||
-                      maximum >
-                        Math.min(grant?.availableCents ?? 0, grant?.maxPurchaseCents ?? 0))))
-            }
-          >
-            {busy ? (
-              <Spinner label="Placing order" />
-            ) : uncertainOrder ? (
-              'Recover saved order'
-            ) : mode === 'auction' ? (
-              'Start 30-second auction'
-            ) : (
-              `Buy pack${selected ? ` · ${money(selected.priceCents)}` : ''}`
-            )}
-          </button>
-        </aside>
-      </form>
+            <ErrorBox error={error} />
+            <button
+              className="button primary full-width"
+              disabled={
+                busy ||
+                (!uncertainOrder &&
+                  (!eligible ||
+                    !accepted ||
+                    inputTokens < minimumInputTokens ||
+                    outputTokens < 1 ||
+                    (mode === 'instant'
+                      ? !quoteFresh ||
+                        !grant?.allowInstant ||
+                        selected!.priceCents >
+                          Math.min(grant?.availableCents ?? 0, grant?.maxPurchaseCents ?? 0)
+                      : maximum < 0.01 ||
+                        maximum >
+                          Math.min(grant?.availableCents ?? 0, grant?.maxPurchaseCents ?? 0))))
+              }
+            >
+              {busy ? (
+                <Spinner label="Placing order" />
+              ) : uncertainOrder ? (
+                'Recover saved order'
+              ) : mode === 'auction' ? (
+                'Start 30-second auction'
+              ) : (
+                `Buy pack${selected ? ` · ${money(selected.priceCents)}` : ''}`
+              )}
+            </button>
+          </aside>
+        </form>
+      )}
     </div>
   );
 }

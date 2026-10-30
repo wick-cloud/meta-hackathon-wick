@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { Fragment, useEffect, useRef, useState, type FormEvent } from 'react';
 import {
   Activity,
   ArrowRight,
@@ -20,6 +20,7 @@ import {
   CalendarClock,
   KeyRound,
   Bot,
+  Server,
 } from 'lucide-react';
 import {
   api,
@@ -39,6 +40,7 @@ import { ProviderScheduled } from './scheduled-provider';
 import { AdminCreditGrant } from './admin-credits';
 import { DeveloperKeys } from './developer-keys';
 import { Agents, AgentDetail, TokenComposer, TokenOrderPage, ProviderInference } from './inference';
+import { PurchaseChooser } from './purchases';
 import {
   ProviderCapacity,
   ProviderPolicy,
@@ -49,17 +51,18 @@ import {
   AdminConfig,
 } from './provider';
 
-const buyerNavigation = [
-  { path: '/orders', label: 'Orders', icon: ListOrdered },
-  { path: '/new', label: 'New order', icon: Plus },
-  { path: '/agents', label: 'Agents', icon: Bot },
-  { path: '/alternatives', label: 'Alternatives', icon: Sparkles },
-  { path: '/vms', label: 'My VMs', icon: LayoutGrid },
-  { path: '/invoices', label: 'Invoices', icon: CircleDollarSign },
-  { path: '/credits', label: 'Broker wallet', icon: Wallet },
-  { path: '/keys', label: 'API keys', icon: KeyRound },
+type NavigationItem = { path: string; label: string; icon: typeof Box; group?: string };
+const buyerNavigation: NavigationItem[] = [
+  { path: '/orders', label: 'Orders', icon: ListOrdered, group: 'WORKSPACE' },
+  { path: '/vms', label: 'Virtual machines', icon: LayoutGrid, group: 'WORKSPACE' },
+  { path: '/new/vm', label: 'Launch a VM', icon: Server, group: 'COMPUTE & AI' },
+  { path: '/token-orders/new', label: 'Buy AI tokens', icon: Sparkles, group: 'COMPUTE & AI' },
+  { path: '/agents', label: 'Agent budgets', icon: Bot, group: 'COMPUTE & AI' },
+  { path: '/credits', label: 'Broker wallet', icon: Wallet, group: 'ACCOUNT' },
+  { path: '/invoices', label: 'Invoices', icon: CircleDollarSign, group: 'ACCOUNT' },
+  { path: '/keys', label: 'API keys', icon: KeyRound, group: 'ACCOUNT' },
 ];
-const providerNavigation = [
+const providerNavigation: NavigationItem[] = [
   { path: '/provider/capacity', label: 'Capacity', icon: Cpu },
   { path: '/provider/policy', label: 'Policy', icon: Settings2 },
   { path: '/provider/requests', label: 'Requests', icon: Box },
@@ -362,13 +365,13 @@ export default function App() {
     user.role === 'provider'
       ? providerNavigation
       : user.role === 'admin'
-        ? [{ path: '/admin', label: 'Configuration', icon: Settings2 }]
+        ? [{ path: '/admin', label: 'Configuration', icon: Settings2 } as NavigationItem]
         : buyerNavigation;
   let content;
   if (path === '/keys' && user.role !== 'admin') content = <DeveloperKeys key={user.id} />;
   else if (user.role === 'buyer') {
     if (path === '/orders') content = <Orders search={search} />;
-    else if (path === '/agents') content = <Agents key={user.id} />;
+    else if (path === '/agents') content = <Agents key={user.id} search={search} />;
     else if (path.startsWith('/agents/'))
       content = <AgentDetail key={`${user.id}:${path}`} id={path.split('/')[2]!} />;
     else if (path === '/token-orders/new')
@@ -392,20 +395,9 @@ export default function App() {
     else if (path.startsWith('/vms/')) content = <VMDetail id={path.split('/')[2]!} />;
     else if (path === '/vms') content = <MyVMs />;
     else if (path === '/invoices') content = <Invoices />;
-    else
-      content = (
-        <>
-          <Link href="/token-orders/new" className="inference-new-order-link">
-            <Sparkles size={20} />
-            <div>
-              <strong>Give your agent AI tokens</strong>
-              <span>Buy Meta model input and output token packs with a funded agent budget.</span>
-            </div>
-            <ArrowRight size={17} />
-          </Link>
-          <NewEnvironment key={location} />
-        </>
-      );
+    else if (path === '/new/vm' || (path === '/new' && new URLSearchParams(search).has('copy')))
+      content = <NewEnvironment key={location} />;
+    else content = <PurchaseChooser />;
   } else if (user.role === 'provider') {
     if (path === '/provider/policy') content = <ProviderPolicy />;
     else if (path === '/provider/requests') content = <ProviderRequests />;
@@ -424,20 +416,22 @@ export default function App() {
     );
   const currentNav =
     navigation.find((item) => path === item.path || path.startsWith(item.path + '/'))?.label ||
-    (path === '/requests/review' || path === '/agreements/new' || path === '/token-orders/new'
-      ? 'New order'
-      : path.startsWith('/requests/') ||
-          path.startsWith('/agreements/') ||
-          path.startsWith('/token-orders/')
-        ? 'Orders'
-        : navigation[0]?.label);
+    (path === '/new' && !new URLSearchParams(search).has('copy')
+      ? 'New purchase'
+      : path === '/requests/review' || path === '/agreements/new' || path === '/new'
+        ? 'Launch a VM'
+        : path.startsWith('/requests/') ||
+            path.startsWith('/agreements/') ||
+            path.startsWith('/token-orders/')
+          ? 'Orders'
+          : navigation[0]?.label);
   const isNavActive = (to: string) =>
     path === to ||
     path.startsWith(to + '/') ||
-    (to === '/new' &&
+    (to === '/new/vm' &&
       (path === '/requests/review' ||
         path === '/agreements/new' ||
-        path === '/token-orders/new')) ||
+        (path === '/new' && new URLSearchParams(search).has('copy')))) ||
     (to === '/orders' &&
       ((path.startsWith('/requests/') && path !== '/requests/review') ||
         (path.startsWith('/agreements/') && path !== '/agreements/new') ||
@@ -497,24 +491,41 @@ export default function App() {
                 <span>{user.role === 'buyer' ? 'Customer account' : user.name}</span>
               </div>
             </div>
-            <div className="nav-label">
-              {user.role === 'provider'
-                ? 'MANAGE SUPPLY'
-                : user.role === 'admin'
-                  ? 'WORKSPACE SETTINGS'
-                  : 'WORKSPACE'}
-            </div>
+            {user.role === 'buyer' && (
+              <Link
+                href="/new"
+                className="button primary buyer-new-purchase"
+                aria-current={
+                  path === '/new' && !new URLSearchParams(search).has('copy') ? 'page' : undefined
+                }
+              >
+                <Plus size={15} /> New purchase <ArrowRight size={14} />
+              </Link>
+            )}
+            {user.role !== 'buyer' && (
+              <div className="nav-label">
+                {user.role === 'provider'
+                  ? 'MANAGE SUPPLY'
+                  : user.role === 'admin'
+                    ? 'WORKSPACE SETTINGS'
+                    : 'WORKSPACE'}
+              </div>
+            )}
             <nav aria-label="Main navigation">
-              {navigation.map(({ path: to, label, icon: Icon }) => (
-                <Link
-                  key={to}
-                  href={to}
-                  className={`nav-item ${isNavActive(to) ? 'active' : ''}`}
-                  aria-current={isNavActive(to) ? 'page' : undefined}
-                >
-                  <Icon size={18} />
-                  <span>{label}</span>
-                </Link>
+              {navigation.map(({ path: to, label, icon: Icon, group }, index) => (
+                <Fragment key={to}>
+                  {group && navigation[index - 1]?.group !== group && (
+                    <div className="buyer-nav-heading">{group}</div>
+                  )}
+                  <Link
+                    href={to}
+                    className={`nav-item ${isNavActive(to) ? 'active' : ''}`}
+                    aria-current={isNavActive(to) ? 'page' : undefined}
+                  >
+                    <Icon size={18} />
+                    <span>{label}</span>
+                  </Link>
+                </Fragment>
               ))}
             </nav>
             <div className="sidebar-bottom">
@@ -634,7 +645,7 @@ export default function App() {
             </main>
             <footer className="app-footer">
               <span>
-                Wick Broker<span className="middle-dot">·</span>Environments on your terms.
+                Wick Broker<span className="middle-dot">·</span>Compute and AI, on your terms.
               </span>
               <span>
                 <ShieldCheck size={13} />

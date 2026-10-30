@@ -4,6 +4,7 @@ import { parseExplicitBuyerDescription } from '../shared/muse-contracts';
 import { addCents } from '../shared/money';
 import { seedAlternativeDraft } from './negotiation';
 import { AgreementCharges } from './agreement-charges';
+import { PurchaseContext } from './purchases';
 import {
   ArrowDownToLine,
   ArrowRight,
@@ -215,23 +216,24 @@ export function NewEnvironment() {
   }
   return (
     <>
+      <PurchaseContext kind="vm" />
       <PageHeader
-        eyebrow="CREATE AN ORDER"
-        title="New order"
-        description="Choose an instant auction or reserve scheduled capacity."
+        eyebrow="VIRTUAL MACHINES"
+        title="Launch a VM"
+        description="Choose your compute and rental time. Providers compete to host your environment."
       />
       <div className="market-mode-picker" aria-label="Choose order type">
         <div className="market-mode selected">
           <Radio size={20} />
           <div>
-            <strong>Instant · 30-second auction</strong>
+            <strong>Single VM · 30-second auction</strong>
             <p>One environment, a fixed rental and a live provider auction.</p>
           </div>
         </div>
         <Link href="/agreements/new" className="market-mode">
           <Layers3 size={20} />
           <div>
-            <strong>Scheduled · bulk agreement</strong>
+            <strong>Scheduled VMs · bulk agreement</strong>
             <p>Book capacity for seven days. Start your VMs when you need them.</p>
           </div>
           <ArrowRight size={17} />
@@ -395,7 +397,7 @@ export function RequestReview() {
           title="No request to review yet"
           description="Describe what you need, or choose your configuration manually."
         >
-          <Link href="/new" className="button primary">
+          <Link href="/new/vm" className="button primary">
             New environment
             <ArrowRight size={16} />
           </Link>
@@ -427,7 +429,7 @@ export function RequestReview() {
   }
   return (
     <>
-      <Link href="/new" className="back-link">
+      <Link href="/new/vm" className="back-link">
         <ChevronLeft size={16} />
         Back to description
       </Link>
@@ -952,7 +954,7 @@ export function AuctionPage({ id }: { id: string }) {
                 <RefreshCw size={16} />
                 Try again · review first
               </Link>
-              <Link href="/new" className="button secondary">
+              <Link href="/new/vm" className="button secondary">
                 Change requirements
               </Link>
               {request.status === 'no_offers' && (
@@ -1018,7 +1020,7 @@ export function MyVMs() {
         title="Environments"
         description="Manage your VMs, terminals and rental deadlines."
       >
-        <Link href="/new" className="button primary">
+        <Link href="/new/vm" className="button primary">
           <Plus size={16} />
           New environment
         </Link>
@@ -1120,7 +1122,7 @@ export function MyVMs() {
                 : 'Describe your next environment and let providers find you a match.'
             }
           >
-            <Link href="/new" className="button primary">
+            <Link href="/new/vm" className="button primary">
               <Plus size={16} />
               New environment
             </Link>
