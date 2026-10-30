@@ -481,51 +481,33 @@
   color: var(--muted);
   font-size: 19px;
 }
-.inference-order-hero {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 24px;
-}
-.inference-order-hero h2 {
-  margin-top: 20px;
-  font-size: 23px;
-}
-.inference-order-hero p {
-  color: var(--muted);
-}
-.inference-order-price {
+.token-auction-price {
+  margin: 20px 0;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  align-items: flex-end;
-  flex-shrink: 0;
+  gap: 7px;
 }
-.inference-order-price > strong {
+.token-auction-price > span {
+  color: var(--muted);
+  font-size: 12px;
+}
+.token-auction-price > strong {
   font-size: 34px;
   letter-spacing: -1px;
-  font-weight: 600;
+  font-variant-numeric: tabular-nums;
 }
-.inference-order-price > span {
-  font-size: 11px;
-  color: var(--muted);
+.token-auction-quota {
+  margin-top: 20px;
 }
-.inference-bids > div {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 15px 0;
-  border-bottom: 1px solid var(--line);
-  font-size: 14px;
+.token-auction-quota .inference-muted {
+  margin-top: 16px;
 }
-.inference-bids > div > span {
-  flex: 1;
+.token-auction-grid .bid-provider {
+  min-width: 0;
 }
-.inference-bids small {
-  display: block;
-  font-size: 11px;
-  margin-top: 6px;
-  color: var(--muted);
+.token-auction-grid .bid-price {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
 }
 .orders-kind-icon.token {
   color: var(--accent);
@@ -575,13 +557,6 @@
   }
   .inference-intro h2 {
     font-size: 16px;
-  }
-  .inference-order-hero {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-  .inference-order-price {
-    align-items: flex-start;
   }
   .inference-quota > div {
     flex-direction: column;
