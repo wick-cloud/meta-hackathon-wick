@@ -29,6 +29,7 @@
   display: flex;
   gap: 8px;
   align-items: center;
+  margin: 0;
 }
 .buying-muse {
   display: flex;
@@ -157,6 +158,7 @@
   border: 1px solid var(--line);
   border-radius: 6px;
   font-size: 13px;
+  cursor: pointer;
 }
 .buying-choice:has(input:checked) {
   border-color: var(--accent);
@@ -179,6 +181,16 @@
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 16px;
+}
+.buying-form-grid .field {
+  margin-bottom: 0;
+}
+.buying-inactive > .agent-row-icon {
+  margin-bottom: 18px;
+}
+.buying-inactive > p {
+  color: var(--soft);
+  max-width: 60ch;
 }
 .buying-check {
   display: flex;
@@ -242,13 +254,88 @@
   display: flex;
   align-items: center;
   gap: 10px;
+  min-width: 0;
 }
-.agent-table-heading > svg {
+.agent-row-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 34px;
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
   color: var(--muted);
+}
+.agent-row-name {
+  min-width: 0;
+}
+.agent-name-link {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink);
+  font-weight: 550;
+}
+.agent-name-link:hover {
+  color: var(--accent);
+}
+.agent-table {
+  table-layout: fixed;
+  min-width: 900px;
+}
+.agent-table th:first-child {
+  width: 31%;
+}
+.agent-table th:nth-child(2) {
+  width: 10%;
+}
+.agent-table th:nth-child(3) {
+  width: 16%;
+}
+.agent-table th:nth-child(4) {
+  width: 17%;
+}
+.agent-table th:nth-child(5) {
+  width: 16%;
+}
+.agent-table th:last-child {
+  width: 10%;
 }
 .agent-table td,
 .agent-table th {
   white-space: nowrap;
+  padding: 16px;
+}
+.agent-table th {
+  padding-top: 12px;
+  padding-bottom: 12px;
+  background: var(--bg);
+}
+.agent-table th:first-child,
+.agent-table td:first-child {
+  padding-left: 20px;
+}
+.agent-table th:last-child,
+.agent-table td:last-child {
+  padding-right: 20px;
+  text-align: right;
+}
+.agent-table tbody tr:hover,
+.agent-table tbody tr:focus-within {
+  background: var(--surface-hover);
+}
+.agent-open-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--soft);
+  font-size: 12px;
+}
+.agent-open-link:hover {
+  color: var(--accent);
 }
 .agent-table td small {
   display: block;
@@ -260,6 +347,13 @@
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
+.agent-table td.money-column {
+  color: var(--ink);
+  font-weight: 550;
+}
+.agent-table td.money-column small {
+  font-weight: 400;
+}
 .agent-table-filters {
   display: flex;
   justify-content: space-between;
@@ -270,7 +364,30 @@
 }
 .agent-table-filters .field {
   margin: 0;
-  max-width: 300px;
+}
+.agent-search {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex: 1;
+  max-width: 430px;
+}
+.agent-search-input {
+  position: relative;
+  flex: 1;
+}
+.agent-search-input > svg {
+  position: absolute;
+  left: 11px;
+  top: 10px;
+  color: var(--muted);
+  pointer-events: none;
+}
+.agent-search .agent-search-input input {
+  padding-left: 35px;
+}
+.agent-status-filter {
+  width: 150px;
 }
 .agent-table-footer {
   display: flex;
@@ -287,6 +404,58 @@
 }
 .agent-table-shell {
   padding: 0 !important;
+  overflow: hidden;
+}
+.agent-table-shell .table-scroll {
+  position: relative;
+}
+.agent-table-shell > .loading-row {
+  padding: 30px 20px;
+}
+.agent-detail .page-heading {
+  margin-bottom: 14px;
+}
+.agent-detail .page-heading h1 {
+  overflow-wrap: anywhere;
+}
+.agent-detail .agent-detail-meta {
+  margin-bottom: 20px;
+}
+.agent-detail .inference-stats {
+  gap: 0;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--card);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+.agent-detail .inference-stats .stat-card {
+  border: 0;
+  border-right: 1px solid var(--line);
+  border-radius: 0;
+  box-shadow: none;
+  padding: 17px 20px;
+  background: transparent;
+}
+.agent-detail .inference-stats .stat-card:last-child {
+  border-right: 0;
+}
+.agent-detail .inference-stats .stat-card > strong {
+  font-size: 24px;
+  letter-spacing: -0.6px;
+  margin-top: 10px;
+}
+.agent-detail .inference-stats .stat-card > small {
+  margin-top: 5px;
+  font-size: 11px;
+  line-height: 1.5;
+}
+.agent-detail .inference-stats .stat-top {
+  font-size: 12px;
+}
+.agent-detail .buying-tabs {
+  margin-bottom: 20px;
+  padding-top: 6px;
 }
 .supply-allocation {
   display: grid;
@@ -333,6 +502,15 @@
   border-top: 1px solid var(--line);
 }
 @media (max-width: 1050px) {
+  .agent-detail .inference-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .agent-detail .inference-stats .stat-card:nth-child(2) {
+    border-right: 0;
+  }
+  .agent-detail .inference-stats .stat-card:nth-child(-n + 2) {
+    border-bottom: 1px solid var(--line);
+  }
   .buying-grid {
     grid-template-columns: 1fr;
   }
@@ -356,11 +534,28 @@
   }
   .agent-table-filters {
     flex-wrap: wrap;
+    padding: 14px;
   }
-  .agent-table-filters .field {
+  .agent-search {
+    flex-basis: 100%;
     max-width: none;
-    flex: 1;
-    min-width: 140px;
+  }
+  .agent-status-filter {
+    width: 100%;
+  }
+  .agent-detail .inference-stats .stat-card {
+    padding: 14px;
+  }
+  .agent-detail .inference-stats .stat-card > strong {
+    font-size: 23px;
+  }
+  .agent-detail .buying-tabs {
+    gap: 20px;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+  }
+  .agent-detail .buying-tabs a {
+    white-space: nowrap;
   }
   .buying-tabs a {
     font-size: 12px;
