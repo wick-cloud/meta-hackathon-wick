@@ -683,7 +683,7 @@ test('agent setup and purchase form fit a narrow viewport and preserve back navi
   await fixture(page);
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/agents');
-  await page.getByRole('link', { name: /Research assistant/ }).click();
+  await page.getByRole('link', { name: 'Research assistant', exact: true }).click();
   await page.getByRole('link', { name: 'Connection', exact: true }).click();
   await page.getByText('JavaScript setup example', { exact: true }).click();
   await expect(page.locator('.inference-code-details pre')).toContainText('/api/v1');
@@ -903,6 +903,74 @@ test('owner reviews buying policy before enabling, reviews a recommendation, and
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
+
+test('agent inventory keeps long names contained and search filters in the URL', async ({
+  page,
+}) => {
+  const f = await fixture(page);
+  f.grant.name = 'Research assistant for a very long customer project with a detailed name';
+  await page.goto('/agents');
+  const table = page.getByRole('table', { name: 'Agent budgets and token allowance' });
+  await expect(table).toBeVisible();
+  await expect(page.getByRole('link', { name: f.grant.name, exact: true })).toHaveAttribute(
+    'title',
+    f.grant.name,
+  );
+  await page.getByLabel('Find an agent').fill('Research');
+  await page.getByRole('button', { name: 'Search', exact: true }).click();
+  await expect(page).toHaveURL(/\/agents\?q=Research$/);
+  await page.getByRole('combobox', { name: 'Status', exact: true }).selectOption('active');
+  await expect(page).toHaveURL(/q=Research&status=active/);
+  await page.screenshot({
+    path: test.info().outputPath('agents-table-desktop.png'),
+    fullPage: true,
+  });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect
+    .poll(() =>
+      page.evaluate(() => ({
+        width: innerWidth,
+        scrollWidth: document.documentElement.scrollWidth,
+      })),
+    )
+    .toEqual({ width: 390, scrollWidth: 390 });
+  await page.screenshot({
+    path: test.info().outputPath('agents-table-mobile.png'),
+    fullPage: true,
+  });
+  expect(f.writes).toHaveLength(0);
+});
+
+for (const state of ['closed', 'closing', 'expired'] as const) {
+  test(`${state} agent shows history and read-only policy instead of buying controls`, async ({
+    page,
+  }) => {
+    const f = await fixture(page);
+    if (state === 'expired') f.grant.expiresAt = new Date(Date.now() - 1000).toISOString();
+    else f.grant.status = state;
+    await page.goto(`/agents/${grantId}`);
+    await expect(
+      page.getByRole('heading', {
+        name: `This agent ${state === 'closing' ? 'is closing' : state === 'closed' ? 'is closed' : 'has expired'}`,
+      }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole('link', { name: 'View activity & receipts', exact: true }),
+    ).toBeVisible();
+    await expect(page.getByRole('link', { name: 'Buy manually', exact: true })).toHaveCount(0);
+    await page.getByRole('link', { name: 'Buying policy', exact: true }).click();
+    await expect(
+      page.getByRole('heading', { name: 'Purchasing is disabled', exact: true }),
+    ).toBeVisible();
+    await expect(page.getByText('Draft changes', { exact: true })).toHaveCount(0);
+    await expect(page.getByRole('radio')).toHaveCount(0);
+    await page.screenshot({
+      path: test.info().outputPath('agent-readonly-policy.png'),
+      fullPage: true,
+    });
+    expect(f.writes).toHaveLength(0);
+  });
+}
 
 test('a reviewed Muse purchase opens its permanent countdown and receipt without duplicate submission', async ({
   page,

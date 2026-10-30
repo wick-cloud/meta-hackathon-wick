@@ -72,6 +72,20 @@ export function AgentBuying({
     });
   }, [data, draft, policy, grant.maxPurchaseCents, detail.catalog.routes]);
   const stale = !!draft && draft.expectedRevision !== (policy?.revision ?? 0);
+  const dirty =
+    !!draft &&
+    !!policy &&
+    (
+      [
+        'mode',
+        'paused',
+        'maxPurchaseCents',
+        'outputPerCall',
+        'targetCalls',
+        'refillAtCalls',
+        'allowInstant',
+      ] as const
+    ).some((key) => draft[key] !== policy[key]);
   function change<K extends keyof BuyingPolicyInput>(key: K, value: BuyingPolicyInput[K]) {
     setReview(false);
     setDraft((old) => (old ? { ...old, [key]: value } : old));
@@ -161,31 +175,36 @@ export function AgentBuying({
       </DetailRow>
       <DetailRow label="Expiry">{dateTime(grant.expiresAt)}</DetailRow>
       <p className="buying-note">
-        Only you can add funds. Purchases keep this fixed expiry. No VM purchasing permission is
-        granted.
+        {active
+          ? 'Only you can add funds. Purchases keep this fixed expiry. No VM purchasing permission is granted.'
+          : 'Purchasing is disabled. These limits are retained with the agent’s history.'}
       </p>
-      <div className="buying-actions">
-        <Link className="text-link" href={`/agents/${grant.id}?tab=policy`}>
-          Manage limits <ArrowRight size={14} />
-        </Link>
-        {policy && (
-          <button
-            className="button secondary small"
-            disabled={busy || !active}
-            onClick={() =>
-              void save({
-                operationKey: '',
-                expectedRevision: policy.revision,
-                ...policy,
-                paused: !policy.paused,
-              } as BuyingPolicyInput)
-            }
-          >
-            {policy.paused ? <Play size={13} /> : <Pause size={13} />}{' '}
-            {policy.paused ? 'Resume buying' : 'Pause buying'}
-          </button>
-        )}
-      </div>
+      {active && (tab !== 'policy' || policy) && (
+        <div className="buying-actions">
+          {tab !== 'policy' && active && (
+            <Link className="text-link" href={`/agents/${grant.id}?tab=policy`}>
+              Manage limits <ArrowRight size={14} />
+            </Link>
+          )}
+          {policy && active && (
+            <button
+              className="button secondary small"
+              disabled={busy || !active}
+              onClick={() =>
+                void save({
+                  operationKey: '',
+                  expectedRevision: policy.revision,
+                  ...policy,
+                  paused: !policy.paused,
+                } as BuyingPolicyInput)
+              }
+            >
+              {policy.paused ? <Play size={13} /> : <Pause size={13} />}{' '}
+              {policy.paused ? 'Resume buying' : 'Pause buying'}
+            </button>
+          )}
+        </div>
+      )}
     </section>
   );
   const allowancePanel = (
@@ -204,10 +223,9 @@ export function AgentBuying({
           </DetailRow>
           <DetailRow label="Available input">{count(allowance.availableInputTokens)}</DetailRow>
           <DetailRow label="Available output">{count(allowance.availableOutputTokens)}</DetailRow>
-          <div className="buying-note">
-            Call counts use qualified input bounds, or the conservative fixture request bound, and
-            the configured output cap. Quota from different packs is not combined.
-          </div>
+          <p className="buying-note">
+            Based on the input and output needed for each call. Each call uses one pack.
+          </p>
           <DetailRow label="Unresolved usage">{allowance.unresolvedRequests} requests</DetailRow>
           <small>
             {count(allowance.heldInputTokens)} input · {count(allowance.heldOutputTokens)} output
@@ -227,100 +245,129 @@ export function AgentBuying({
       {tab === 'overview' && data && (
         <div className="buying-grid">
           <div className="buying-stack">
-            <section className="card buying-recommendation">
-              <div className="buying-section-heading">
-                <span className="buying-muse">
-                  <Sparkles size={16} /> Muse purchasing assistant
+            {!active ? (
+              <section className="card buying-inactive">
+                <span className="agent-row-icon">
+                  <ShieldCheck size={20} />
                 </span>
-                <span className="buying-badge">
-                  {policy?.paused ? 'Paused' : policy ? modes[policy.mode] : 'Not configured'}
-                </span>
-              </div>
-              <h2>
-                {latest?.status === 'ordered'
-                  ? 'Your next pack is purchased.'
-                  : eligible
-                    ? 'A purchase ready for your review.'
-                    : !policy
-                      ? 'A budget with buying boundaries.'
-                      : 'Buy only what your agent can use.'}
-              </h2>
-              <p>
-                {latest?.reason ??
-                  'Set a buying policy. Muse can recommend a pack using your remaining allowance, approved routes, and fixed expiry.'}
-              </p>
-              {latest?.candidate && (
-                <div className="buying-candidate">
-                  <DetailRow label="Recommended allowance">
-                    {count(latest.candidate.inputTokens)} input ·{' '}
-                    {count(latest.candidate.outputTokens)} output
-                  </DetailRow>
-                  <DetailRow label="Purchase method">
-                    {latest.candidate.mode === 'auction' ? '30-second auction' : 'Instant quote'}
-                  </DetailRow>
-                  <DetailRow label="Maximum purchase">
-                    {money(latest.candidate.maxTotalCents)}
-                  </DetailRow>
-                  <DetailRow label="Pack expiry">{dateTime(grant.expiresAt)}</DetailRow>
-                </div>
-              )}
-              <div className="buying-actions">
-                {latest?.orderId ? (
-                  <Link className="button primary" href={`/token-orders/${latest.orderId}`}>
-                    Open purchase <ArrowRight size={15} />
-                  </Link>
-                ) : eligible ? (
-                  <button
-                    className="button primary"
-                    disabled={busy || !active}
-                    onClick={() => setConfirm(latest!)}
-                  >
-                    Review purchase <ArrowRight size={15} />
-                  </button>
-                ) : policy ? (
-                  <button
-                    className="button primary"
-                    disabled={
-                      busy ||
-                      !active ||
-                      policy.paused ||
-                      (latest?.status === 'evaluating' && Date.parse(latest.expiresAt) > now) ||
-                      Date.parse(policy.nextEvaluationAt) > now
-                    }
-                    onClick={() => void evaluate()}
-                  >
-                    {busy ? (
-                      <Spinner label="Evaluating" />
-                    ) : (
-                      <>
-                        <Sparkles size={15} /> Get Muse recommendation
-                      </>
-                    )}
-                  </button>
-                ) : (
-                  <Link className="button primary" href={`/agents/${grant.id}?tab=policy`}>
-                    Set buying policy
-                  </Link>
-                )}
-                <Link className="text-link" href={`/token-orders/new?grantId=${grant.id}`}>
-                  Buy manually
-                </Link>
-              </div>
-              <small>
-                {latest?.mode === 'fixture'
-                  ? 'Fixture recommendation · no model call.'
-                  : latest?.modelCalled
-                    ? 'Real Muse evaluation attempted · see the outcome above.'
-                    : 'No model decision has been claimed.'}{' '}
-                Decisions are limited to one per minute, up to 20 per grant.
-              </small>
-              {latest?.status === 'recommended' && !eligible && (
-                <p className="buying-warning">
-                  This recommendation expired or its policy changed. Request a fresh one before
-                  buying.
+                <h2>
+                  {grant.status === 'closed'
+                    ? 'This agent is closed'
+                    : grant.status === 'closing'
+                      ? 'This agent is closing'
+                      : 'This agent has expired'}
+                </h2>
+                <p>
+                  {grant.status === 'closing'
+                    ? 'New purchases and inference are stopped. Pending usage is being reconciled before the remaining funds return to your wallet.'
+                    : 'New purchases and inference are stopped. Your token orders, usage, and receipts remain available.'}
                 </p>
-              )}
-            </section>
+                <div className="buying-actions">
+                  <Link className="button secondary" href={`/agents/${grant.id}?tab=activity`}>
+                    View activity & receipts <ArrowRight size={14} />
+                  </Link>
+                  <Link className="text-link" href="/agents?create=1">
+                    Create another agent
+                  </Link>
+                </div>
+              </section>
+            ) : (
+              <section className="card buying-recommendation">
+                <div className="buying-section-heading">
+                  <span className="buying-muse">
+                    <Sparkles size={16} /> Muse purchasing assistant
+                  </span>
+                  <span className="buying-badge">
+                    {policy?.paused ? 'Paused' : policy ? modes[policy.mode] : 'Not configured'}
+                  </span>
+                </div>
+                <h2>
+                  {latest?.status === 'ordered'
+                    ? 'Your next pack is purchased.'
+                    : eligible
+                      ? 'A purchase ready for your review.'
+                      : !policy
+                        ? 'Choose how your agent buys tokens.'
+                        : 'Buy only what your agent can use.'}
+                </h2>
+                <p>
+                  {latest?.reason ??
+                    'Set a buying policy. Muse can recommend a pack using your remaining allowance, approved routes, and fixed expiry.'}
+                </p>
+                {latest?.candidate && (
+                  <div className="buying-candidate">
+                    <DetailRow label="Recommended allowance">
+                      {count(latest.candidate.inputTokens)} input ·{' '}
+                      {count(latest.candidate.outputTokens)} output
+                    </DetailRow>
+                    <DetailRow label="Purchase method">
+                      {latest.candidate.mode === 'auction' ? '30-second auction' : 'Instant quote'}
+                    </DetailRow>
+                    <DetailRow label="Maximum purchase">
+                      {money(latest.candidate.maxTotalCents)}
+                    </DetailRow>
+                    <DetailRow label="Pack expiry">{dateTime(grant.expiresAt)}</DetailRow>
+                  </div>
+                )}
+                <div className="buying-actions">
+                  {latest?.orderId ? (
+                    <Link className="button primary" href={`/token-orders/${latest.orderId}`}>
+                      Open purchase <ArrowRight size={15} />
+                    </Link>
+                  ) : eligible ? (
+                    <button
+                      className="button primary"
+                      disabled={busy || !active}
+                      onClick={() => setConfirm(latest!)}
+                    >
+                      Review purchase <ArrowRight size={15} />
+                    </button>
+                  ) : policy ? (
+                    <button
+                      className="button primary"
+                      disabled={
+                        busy ||
+                        !active ||
+                        policy.paused ||
+                        (latest?.status === 'evaluating' && Date.parse(latest.expiresAt) > now) ||
+                        Date.parse(policy.nextEvaluationAt) > now
+                      }
+                      onClick={() => void evaluate()}
+                    >
+                      {busy ? (
+                        <Spinner label="Evaluating" />
+                      ) : (
+                        <>
+                          <Sparkles size={15} /> Get Muse recommendation
+                        </>
+                      )}
+                    </button>
+                  ) : (
+                    <Link className="button primary" href={`/agents/${grant.id}?tab=policy`}>
+                      Set buying policy
+                    </Link>
+                  )}
+                  <Link className="text-link" href={`/token-orders/new?grantId=${grant.id}`}>
+                    Buy manually
+                  </Link>
+                </div>
+                <small>
+                  {latest?.mode === 'fixture'
+                    ? 'Fixture recommendation · no model call.'
+                    : latest?.modelCalled
+                      ? 'Real Muse evaluation attempted · see the outcome above.'
+                      : 'Muse has not evaluated this agent yet.'}{' '}
+                  Decisions are limited to one per minute, up to 20 per grant.
+                </small>
+                {latest?.status === 'recommended' && !eligible && (
+                  <p className="buying-warning">
+                    {policy?.paused
+                      ? 'Buying is paused. Resume buying before requesting a fresh recommendation.'
+                      : 'This recommendation expired or its policy changed. Request a fresh one before buying.'}
+                  </p>
+                )}
+              </section>
+            )}
             <DecisionHistory decisions={data.decisions.slice(0, 3)} />
           </div>
           <aside className="buying-stack">
@@ -329,7 +376,27 @@ export function AgentBuying({
           </aside>
         </div>
       )}
-      {tab === 'policy' && draft && (
+      {tab === 'policy' && !active && data && (
+        <div className="buying-grid">
+          <section className="card buying-inactive">
+            <span className="agent-row-icon">
+              <ShieldCheck size={20} />
+            </span>
+            <h2>Purchasing is disabled</h2>
+            <p>
+              This agent is {grant.status === 'active' ? 'expired' : grant.status}. Its saved limits
+              are available for reference. Create a new agent to buy more tokens.
+            </p>
+            <div className="buying-actions">
+              <Link className="button secondary" href="/agents?create=1">
+                Create another agent <ArrowRight size={14} />
+              </Link>
+            </div>
+          </section>
+          {currentPolicy}
+        </div>
+      )}
+      {tab === 'policy' && active && draft && (
         <div className="buying-grid">
           <form
             className="card buying-form"
@@ -340,7 +407,9 @@ export function AgentBuying({
           >
             <div className="buying-section-heading">
               <h2>Purchase controls</h2>
-              <span className="buying-badge">Draft changes</span>
+              <span className="buying-badge">
+                {dirty ? 'Unsaved changes' : policy ? 'Saved' : 'Not configured'}
+              </span>
             </div>
             {stale && (
               <div className="buying-warning">

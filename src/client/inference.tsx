@@ -13,6 +13,7 @@ import {
   Plus,
   RefreshCw,
   Radio,
+  Search,
   ShieldCheck,
   Sparkles,
   Wallet,
@@ -272,9 +273,8 @@ export function Agents({ search = '' }: { search?: string }) {
   return (
     <div className="inference-workspace">
       <PageHeader
-        eyebrow="AI TOKEN BUDGETS"
         title="Agents"
-        description="Budgets, purchased allowance, and your next buying decision."
+        description="Manage your agents’ budgets, token allowance, and buying policies."
       >
         <Link href="/credits" className="button secondary">
           <Wallet size={16} />
@@ -290,16 +290,17 @@ export function Agents({ search = '' }: { search?: string }) {
       <section className="card agent-table-shell">
         <div className="agent-table-filters">
           <form
-            className="buying-actions"
-            style={{ margin: 0 }}
+            className="agent-search"
             onSubmit={(e) => {
               e.preventDefault();
               filter('q', String(new FormData(e.currentTarget).get('q') ?? ''));
             }}
           >
-            <label className="field">
-              <span>Find an agent</span>
+            <label className="field agent-search-input">
+              <span className="sr-only">Find an agent</span>
+              <Search size={16} aria-hidden="true" />
               <input
+                type="search"
                 key={q}
                 name="q"
                 defaultValue={q}
@@ -309,8 +310,8 @@ export function Agents({ search = '' }: { search?: string }) {
             </label>
             <button className="button secondary">Search</button>
           </form>
-          <label className="field">
-            <span>Status</span>
+          <label className="field agent-status-filter">
+            <span className="sr-only">Status</span>
             <select value={status} onChange={(e) => filter('status', e.target.value)}>
               <option value="all">All statuses</option>
               <option value="active">Active</option>
@@ -323,15 +324,18 @@ export function Agents({ search = '' }: { search?: string }) {
           <Spinner label="Loading agents" />
         ) : list.data?.items.length ? (
           <div className="table-scroll">
-            <table className="agent-table">
+            <table className="agent-table" aria-label="Agent budgets and token allowance">
+              <caption className="sr-only">Agent budgets and token allowance</caption>
               <thead>
                 <tr>
                   <th>Agent</th>
                   <th>Status</th>
                   <th className="money-column">Available budget</th>
-                  <th>Usable allowance</th>
+                  <th>Calls available</th>
                   <th>Expires</th>
-                  <th />
+                  <th>
+                    <span className="sr-only">Actions</span>
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -339,9 +343,15 @@ export function Agents({ search = '' }: { search?: string }) {
                   <tr key={grant.id}>
                     <td>
                       <div className="agent-table-heading">
-                        <Bot size={18} />
-                        <div>
-                          <Link className="text-link" href={`/agents/${grant.id}`}>
+                        <span className="agent-row-icon">
+                          <Bot size={17} />
+                        </span>
+                        <div className="agent-row-name">
+                          <Link
+                            className="agent-name-link"
+                            title={grant.name}
+                            href={`/agents/${grant.id}`}
+                          >
                             {grant.name}
                           </Link>
                           <small>
@@ -350,27 +360,54 @@ export function Agents({ search = '' }: { search?: string }) {
                               : grant.buyingMode === 'automatic'
                                 ? 'Automatic buying'
                                 : grant.buyingMode
-                                  ? 'Review purchases'
+                                  ? grant.buyingMode === 'suggest'
+                                    ? 'Suggestions only'
+                                    : 'Review purchases'
                                   : 'Manual buying'}{' '}
-                            · {grant.mode}
+                            {grant.mode === 'fixture' && ' · Demo'}
                           </small>
                         </div>
                       </div>
                     </td>
                     <td>
-                      <State value={grant.status} />
+                      <State
+                        value={
+                          grant.status === 'active' && Date.parse(grant.expiresAt) <= Date.now()
+                            ? 'expired'
+                            : grant.status
+                        }
+                      />
                     </td>
                     <td className="money-column">
                       {money(grant.availableCents)}
                       <small>{money(grant.heldCents)} held</small>
                     </td>
                     <td>
-                      {count(grant.eligibleCalls)} eligible calls
+                      <strong>{count(grant.eligibleCalls)}</strong> calls
                       <small>At {count(grant.outputPerCall)} output / call</small>
                     </td>
-                    <td>{dateTime(grant.expiresAt)}</td>
                     <td>
-                      <Link href={`/agents/${grant.id}`} className="text-link">
+                      <time dateTime={grant.expiresAt} title={dateTime(grant.expiresAt)}>
+                        {new Date(grant.expiresAt).toLocaleDateString('en-US', {
+                          month: 'short',
+                          day: 'numeric',
+                          year: 'numeric',
+                        })}
+                        <small>
+                          {new Date(grant.expiresAt).toLocaleTimeString('en-US', {
+                            hour: 'numeric',
+                            minute: '2-digit',
+                            timeZoneName: 'short',
+                          })}
+                        </small>
+                      </time>
+                    </td>
+                    <td>
+                      <Link
+                        href={`/agents/${grant.id}`}
+                        className="agent-open-link"
+                        aria-label={`Open ${grant.name}`}
+                      >
                         Open <ArrowRight size={13} />
                       </Link>
                     </td>
@@ -652,15 +689,14 @@ export function AgentDetail({ id, search = '' }: { id: string; search?: string }
     }
   }
   return (
-    <div className="inference-workspace">
+    <div className="inference-workspace agent-detail">
       <Link href="/agents" className="back-link">
         <ArrowLeft size={15} />
         All agents
       </Link>
       <PageHeader
-        eyebrow="FUNDED AGENT"
         title={grant?.name ?? 'Agent'}
-        description="Your agent buys and uses tokens within the budget you fund."
+        description="Token allowance and spending controls for this agent."
       >
         <button
           className="button secondary"
@@ -689,26 +725,12 @@ export function AgentDetail({ id, search = '' }: { id: string; search?: string }
       {resource.loading && <Spinner label="Loading agent" />}
       {detail && grant && (
         <>
-          <nav className="buying-tabs" aria-label="Agent sections">
-            {[
-              ['overview', 'Overview'],
-              ['policy', 'Buying policy'],
-              ['activity', 'Activity & receipts'],
-              ['connection', 'Connection'],
-            ].map(([value, label]) => (
-              <Link
-                key={value}
-                href={`/agents/${id}?tab=${value}`}
-                aria-current={tab === value ? 'page' : undefined}
-              >
-                {label}
-              </Link>
-            ))}
-          </nav>
-          <div className="inference-inline">
-            <State value={grant.status} />
+          <div className="inference-inline agent-detail-meta">
+            <State value={grant.status === 'active' && !active ? 'expired' : grant.status} />
             <Mode mode={grant.mode} />
-            <span className="inference-muted">Expires {dateTime(grant.expiresAt)}</span>
+            <span className="inference-muted">
+              {active ? 'Expires' : 'Expiry'} {dateTime(grant.expiresAt)}
+            </span>
           </div>
           <div className="inference-stats">
             <StatCard
@@ -733,6 +755,22 @@ export function AgentDetail({ id, search = '' }: { id: string; search?: string }
               note={`${money(grant.returnedCents)} returned to wallet`}
             />
           </div>
+          <nav className="buying-tabs" aria-label="Agent sections">
+            {[
+              ['overview', 'Overview'],
+              ['policy', 'Buying policy'],
+              ['activity', 'Activity & receipts'],
+              ['connection', 'Connection'],
+            ].map(([value, label]) => (
+              <Link
+                key={value}
+                href={`/agents/${id}?tab=${value}`}
+                aria-current={tab === value ? 'page' : undefined}
+              >
+                {label}
+              </Link>
+            ))}
+          </nav>
           {tab !== 'connection' && (
             <AgentBuying
               key={id}
