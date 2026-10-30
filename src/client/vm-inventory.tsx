@@ -39,6 +39,7 @@ import {
   useSession,
 } from './components';
 import './vm-inventory.css';
+import { ArchiveNote, RecordViews } from './record-views';
 
 export function MyVMs({ search = '' }: { search?: string }) {
   const navigate = useNavigate(),
@@ -160,22 +161,17 @@ export function MyVMs({ search = '' }: { search?: string }) {
       {!confirm && <ErrorBox error={actionError} />}
       <section className="card vm-inventory-panel" aria-label="VM inventory">
         <div className="vm-panel-toolbar">
-          <div className="vm-filter-tabs" aria-label="Filter VMs by lifecycle">
-            {[
-              { value: 'all', label: 'All VMs' },
-              { value: 'active', label: 'Active' },
-              { value: 'past', label: 'History' },
-            ].map((tab) => (
-              <button
-                key={tab.value}
-                className={status === tab.value ? 'selected' : ''}
-                aria-pressed={status === tab.value}
-                onClick={() => filter({ status: tab.value })}
-              >
-                {tab.label}
-              </button>
-            ))}
-          </div>
+          <RecordViews
+            label="VM views"
+            value={
+              status === 'past'
+                ? 'archive'
+                : status === 'all' || status === 'active'
+                  ? status
+                  : null
+            }
+            onChange={(view) => filter({ status: view === 'archive' ? 'past' : view })}
+          />
           <button
             className="icon-button"
             aria-label="Refresh VMs"
@@ -186,6 +182,11 @@ export function MyVMs({ search = '' }: { search?: string }) {
             <RefreshCw size={16} className={list.refreshing ? 'spin' : undefined} />
           </button>
         </div>
+        {status === 'past' && (
+          <ArchiveNote>
+            Completed VMs and their rental history. VMs awaiting cleanup stay in Active.
+          </ArchiveNote>
+        )}
         <div className="vm-table-controls">
           <form className="vm-search" role="search" onSubmit={submitSearch}>
             <Search size={16} />
@@ -233,7 +234,7 @@ export function MyVMs({ search = '' }: { search?: string }) {
             >
               <option value="all">All statuses</option>
               <option value="active">Active</option>
-              <option value="past">History</option>
+              <option value="past">Archive</option>
               {vmStatuses.map((s) => (
                 <option value={s} key={s}>
                   {s[0]!.toUpperCase() + s.slice(1)}
@@ -265,21 +266,29 @@ export function MyVMs({ search = '' }: { search?: string }) {
             title={
               paged
                 ? 'No VMs on this page'
-                : filtered
-                  ? 'No VMs match these filters'
-                  : 'Your first VM starts here'
+                : status === 'past'
+                  ? 'No archived VMs yet'
+                  : filtered
+                    ? 'No VMs match these filters'
+                    : 'Your first VM starts here'
             }
             description={
               paged
                 ? 'Return to the first page to see the latest matching VMs.'
-                : filtered
-                  ? 'Try another name, ID, provider or status.'
-                  : 'Launch an environment to access your own terminal and track it here.'
+                : status === 'past'
+                  ? 'Completed VMs appear here after cleanup is confirmed.'
+                  : filtered
+                    ? 'Try another name, ID, provider or status.'
+                    : 'Launch an environment to access your own terminal and track it here.'
             }
           >
             {paged ? (
               <button className="button secondary" onClick={() => filter({})}>
                 First page
+              </button>
+            ) : status === 'past' ? (
+              <button className="button secondary" onClick={() => filter({ status: 'active' })}>
+                View active VMs
               </button>
             ) : filtered ? (
               <button className="button secondary" onClick={() => navigate('/vms')}>

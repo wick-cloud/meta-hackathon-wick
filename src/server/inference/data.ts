@@ -180,6 +180,8 @@ export const packView = (r: Row): TokenPack => ({
 export const PACK_VIEW_COLUMNS = `id,order_id,grant_id,provider,source_mode,status,input_tokens,output_tokens,
 available_input,available_output,held_input,held_output,consumed_input,consumed_output,retired_input,retired_output,
 price_cents,refund_cents,expires_at,created_at,retirement_reason`;
+// Expiry alone cannot hide quota held for an in-flight or unresolved request.
+export const PACK_ACTIVE_PREDICATE = `(status<>'settled' OR held_input>0 OR held_output>0)`;
 export const receiptView = (r: Row): InferenceReceipt => ({
   id: r.id,
   grantId: r.grant_id,

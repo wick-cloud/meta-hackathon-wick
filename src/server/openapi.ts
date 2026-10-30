@@ -46,6 +46,14 @@ export function brokerOpenApi() {
           schema: { type: 'string', format: 'date-time' },
           description: 'Calendar range must be no longer than 62 days.',
         });
+    if (['/api/inference/packs', '/api/provider/inference/packs'].includes(route.path))
+      parameters.push({
+        name: 'view',
+        in: 'query',
+        schema: { type: 'string', enum: ['all', 'active', 'archive'], default: 'all' },
+        description:
+          'Archive contains settled batches with no held quota. Unresolved usage stays active.',
+      });
     if (route.mutation)
       parameters.push({
         name: 'Idempotency-Key',

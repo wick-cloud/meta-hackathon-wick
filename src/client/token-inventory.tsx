@@ -15,6 +15,7 @@ import {
   useResource,
 } from './components';
 import './token-inventory.css';
+import { ArchiveNote, RecordViews, type RecordView } from './record-views';
 
 const count = (value: number) => value.toLocaleString('en-US');
 const provider = (value: string) =>
@@ -71,6 +72,9 @@ export function TokenInventory({ search }: { search: string }) {
     navigate = useNavigate(),
     now = useNow();
   const params = new URLSearchParams({ limit: '25' });
+  const view =
+    query.get('view') === 'archive' ? 'archive' : query.get('view') === 'active' ? 'active' : 'all';
+  if (view !== 'all') params.set('view', view);
   if (cursor) params.set('cursor', cursor);
   const list = useResource<{ items: TokenPack[]; nextCursor?: string }>(
     `/api/inference/packs?${params}`,
@@ -80,6 +84,15 @@ export function TokenInventory({ search }: { search: string }) {
     const q = new URLSearchParams(search);
     if (id) q.set('connect', id);
     else q.delete('connect');
+    return `/tokens${q.size ? `?${q}` : ''}`;
+  }
+  function listUrl(cursor?: string, selectedView: RecordView = view) {
+    const q = new URLSearchParams(search);
+    q.delete('cursor');
+    q.delete('connect');
+    if (cursor) q.set('cursor', cursor);
+    if (selectedView === 'all') q.delete('view');
+    else q.set('view', selectedView);
     return `/tokens${q.size ? `?${q}` : ''}`;
   }
   return (
@@ -104,8 +117,21 @@ export function TokenInventory({ search }: { search: string }) {
       ) : (
         list.data && (
           <section className="card token-inventory-card">
+            <div className="record-view-bar">
+              <RecordViews
+                label="Token pack views"
+                value={view}
+                onChange={(value) => navigate(listUrl(undefined, value))}
+              />
+            </div>
+            {view === 'archive' && (
+              <ArchiveNote>
+                Expired, used-up and closed batches after usage settlement. Pending usage stays in
+                Active; purchase and refund records remain available.
+              </ArchiveNote>
+            )}
             <div className="token-inventory-heading">
-              <h2>Your token batches</h2>
+              <h2>{view === 'archive' ? 'Archived token batches' : 'Your token batches'}</h2>
               <span>Newest purchases first · 25 per page</span>
             </div>
             {list.data.items.length ? (
@@ -217,15 +243,36 @@ export function TokenInventory({ search }: { search: string }) {
             ) : (
               <EmptyState
                 icon={<Sparkles size={26} />}
-                title="No token batches on this page"
+                title={
+                  view === 'archive' && !cursor
+                    ? 'No archived token batches yet'
+                    : 'No token batches on this page'
+                }
                 description={
                   cursor
                     ? 'Return to your newest purchases.'
-                    : 'Purchased token packs will appear here after an auction or instant purchase.'
+                    : view === 'archive'
+                      ? 'Expired, used-up and closed batches appear here after pending usage settles.'
+                      : view === 'active'
+                        ? 'No active batches. Previous purchases are available in Archive.'
+                        : 'Purchased token packs will appear here after an auction or instant purchase.'
                 }
               >
-                <Link href={cursor ? '/tokens' : '/token-orders/new'} className="button primary">
-                  {cursor ? 'Newest purchases' : 'Buy your first token pack'}
+                <Link
+                  href={
+                    cursor
+                      ? listUrl()
+                      : view === 'archive'
+                        ? listUrl(undefined, 'active')
+                        : '/token-orders/new'
+                  }
+                  className="button primary"
+                >
+                  {cursor
+                    ? 'Newest purchases'
+                    : view === 'archive'
+                      ? 'View active token packs'
+                      : 'Buy token pack'}
                   <ArrowRight size={15} />
                 </Link>
               </EmptyState>
@@ -233,7 +280,7 @@ export function TokenInventory({ search }: { search: string }) {
             {(cursor || list.data.nextCursor) && (
               <div className="token-inventory-pagination">
                 {cursor ? (
-                  <Link href="/tokens" className="button secondary small">
+                  <Link href={listUrl()} className="button secondary small">
                     <ArrowLeft size={14} />
                     Newest purchases
                   </Link>
@@ -241,10 +288,7 @@ export function TokenInventory({ search }: { search: string }) {
                   <span />
                 )}
                 {list.data.nextCursor && (
-                  <Link
-                    href={`/tokens?cursor=${encodeURIComponent(list.data.nextCursor)}`}
-                    className="button secondary small"
-                  >
+                  <Link href={listUrl(list.data.nextCursor)} className="button secondary small">
                     Older purchases
                     <ArrowRight size={14} />
                   </Link>

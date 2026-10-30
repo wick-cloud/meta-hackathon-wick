@@ -47,23 +47,6 @@
   padding: 0 18px;
   border-bottom: 1px solid var(--line);
 }
-.vm-filter-tabs {
-  display: flex;
-  gap: 22px;
-}
-.vm-filter-tabs button {
-  padding: 19px 0 16px;
-  color: var(--muted);
-  font-size: 12px;
-  border: 0;
-  border-bottom: 2px solid transparent;
-  background: none;
-  cursor: pointer;
-}
-.vm-filter-tabs button.selected {
-  color: var(--ink);
-  border-bottom-color: var(--accent);
-}
 .vm-table-controls {
   padding: 16px 18px;
   display: flex;

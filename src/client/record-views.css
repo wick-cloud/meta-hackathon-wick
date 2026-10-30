@@ -1,0 +1,39 @@
+.record-view-tabs {
+  display: flex;
+  gap: 22px;
+}
+.record-view-tabs button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 18px 0 15px;
+  color: var(--muted);
+  font-size: 12px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  cursor: pointer;
+}
+.record-view-tabs button.selected {
+  color: var(--ink);
+  border-bottom-color: var(--accent);
+}
+.record-view-bar {
+  padding: 0 20px;
+  border-bottom: 1px solid var(--line);
+}
+.record-archive-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 13px 20px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.record-archive-note svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+}

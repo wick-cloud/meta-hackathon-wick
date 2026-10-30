@@ -205,7 +205,7 @@ test('search, filters, sorting and both pagination directions are URL backed', a
   await page.getByRole('button', { name: 'Clear VM search' }).click();
   await page.getByRole('combobox', { name: 'Filter VMs by provider' }).selectOption('modal');
   await expect(page.getByRole('table').locator('tbody tr')).toHaveCount(2);
-  await page.getByRole('button', { name: 'History', exact: true }).click();
+  await page.getByRole('button', { name: 'Archive', exact: true }).click();
   await expect(page.getByRole('table').locator('tbody tr')).toHaveCount(1);
   await expect(page.getByRole('link', { name: 'Old training VM', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Newest first' }).click();
@@ -239,6 +239,45 @@ test('termination requires confirmation and an uncertain retry preserves its ope
     .filter({ has: page.getByRole('link', { name: 'Research workspace', exact: true }) });
   await expect(row).toContainText('Cleanup pending');
   await expect(row.getByRole('link', { name: 'Open terminal Research workspace' })).toHaveCount(0);
+});
+
+test('Archive keeps completed VMs discoverable without hiding cleanup or changing records', async ({
+  page,
+}) => {
+  const f = await fixture(page);
+  await page.goto('/vms?cursor=2');
+  await page.getByRole('button', { name: 'Archive', exact: true }).click();
+  await expect(page).toHaveURL(/status=past/);
+  expect(new URL(page.url()).searchParams.has('cursor')).toBe(false);
+  await expect(page.getByRole('table').locator('tbody tr')).toHaveCount(2);
+  await expect(page.getByRole('link', { name: 'Archived worker', exact: true })).toHaveAttribute(
+    'href',
+    `/vms/${ids[4]}`,
+  );
+  await expect(page.getByRole('link', { name: 'Failed cleanup', exact: true })).toHaveCount(0);
+  await expect(
+    page.getByText('Completed VMs and their rental history.', { exact: false }),
+  ).toBeVisible();
+  await page.reload();
+  await expect(page.getByRole('button', { name: 'Archive', exact: true })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+  await page.getByRole('button', { name: 'Active', exact: true }).click();
+  await expect(page.getByRole('link', { name: 'Failed cleanup', exact: true })).toBeVisible();
+  await page.goBack();
+  await expect(page.getByRole('link', { name: 'Archived worker', exact: true })).toBeVisible();
+  expect(f.writes).toHaveLength(0);
+});
+
+test('an empty Archive links back to active VMs', async ({ page }) => {
+  const f = await fixture(page);
+  f.rows.splice(3);
+  await page.goto('/vms?status=past');
+  await expect(page.getByRole('heading', { name: 'No archived VMs yet' })).toBeVisible();
+  await page.getByRole('button', { name: 'View active VMs' }).click();
+  await expect(page.getByRole('link', { name: 'Research workspace', exact: true })).toBeVisible();
+  expect(f.writes).toHaveLength(0);
 });
 
 test('the table fits a phone and supports keyboard access to offscreen columns', async ({

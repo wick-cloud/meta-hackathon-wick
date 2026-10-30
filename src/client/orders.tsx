@@ -34,6 +34,7 @@ import {
 } from './components';
 import './market.css';
 import { PurchaseCards } from './purchases';
+import { ArchiveNote, RecordViews } from './record-views';
 
 const choices = <T extends string>(value: string | null, allowed: readonly T[], fallback: T): T =>
   allowed.includes(value as T) ? (value as T) : fallback;
@@ -140,6 +141,19 @@ export function Orders({ search }: { search: string }) {
         <p>Track purchases, live auctions and scheduled VM bookings.</p>
       </div>
       <section className="card market-orders">
+        <div className="record-view-bar">
+          <RecordViews
+            label="Order views"
+            value={status === 'history' ? 'archive' : status === 'attention' ? null : status}
+            onChange={(view) => filter('status', view === 'archive' ? 'history' : view)}
+          />
+        </div>
+        {status === 'history' && (
+          <ArchiveNote>
+            Completed, cancelled and unmatched purchases. Order details and billing history remain
+            available.
+          </ArchiveNote>
+        )}
         <div className="market-filterbar orders-filters">
           <div className="orders-filter-fields">
             <label className="field">
@@ -165,7 +179,7 @@ export function Orders({ search }: { search: string }) {
                 <option value="all">All statuses</option>
                 <option value="active">Active</option>
                 <option value="attention">Needs attention</option>
-                <option value="history">History</option>
+                <option value="history">Archive</option>
               </select>
             </label>
             <label className="field">
@@ -454,14 +468,20 @@ export function Orders({ search }: { search: string }) {
           <div className="orders-empty">
             <EmptyState
               icon={<ListOrdered size={22} />}
-              title="No orders in this view"
+              title={status === 'history' ? 'No archived orders yet' : 'No orders in this view'}
               description={
-                filtered
-                  ? 'No orders match these filters. Clear them to return to the full list.'
-                  : 'Your VM auctions, scheduled agreements and AI token orders will appear here.'
+                status === 'history'
+                  ? 'Completed orders appear here. Live auctions and pending cleanup stay in Active.'
+                  : filtered
+                    ? 'No orders match these filters. Clear them to return to the full list.'
+                    : 'Your VM auctions, scheduled agreements and AI token orders will appear here.'
               }
             >
-              {filtered ? (
+              {status === 'history' ? (
+                <button className="button secondary" onClick={() => filter('status', 'active')}>
+                  View active orders
+                </button>
+              ) : filtered ? (
                 <button className="button secondary" onClick={() => navigate('/orders')}>
                   Clear filters
                 </button>
