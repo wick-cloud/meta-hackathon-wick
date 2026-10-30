@@ -31,7 +31,7 @@ test('buyer review preserves explicit budget and unsupported region without gran
   await signIn(page, buyerEmail!, buyerPassword!);
   const me = await (await page.request.get('/api/me')).json();
   test.skip(me.modes.wick !== 'fixture' || me.modes.muse !== 'fixture', 'Offline fixture only.');
-  await page.goto('/new');
+  await page.goto('/new/vm');
   await page
     .getByLabel('Describe your environment')
     .fill(
@@ -119,7 +119,7 @@ test('reviewed provider limits and explicit buyer counteroffer acceptance create
     expect(offering).toBeTruthy();
     const supported = me.catalog.find((item: { id: string }) => item.id === offering.catalogId);
     const description = `Browser counteroffer ${Date.now()}: 999 vCPUs and 999 GiB RAM, region: moon-1, 45 minutes, budget $10.00.`;
-    await page.goto('/new');
+    await page.goto('/new/vm');
     await page.getByLabel('Describe your environment').fill(description);
     await page.getByRole('button', { name: 'Review unsupported needs and alternatives' }).click();
     await expect(page.getByLabel('Allow only the alternatives I specify below')).not.toBeChecked();

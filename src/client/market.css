@@ -113,7 +113,7 @@
   margin: 0;
 }
 .orders-table {
-  min-width: 1040px;
+  min-width: 920px;
   table-layout: fixed;
 }
 .orders-table th:nth-child(1) {
