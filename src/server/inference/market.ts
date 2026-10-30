@@ -1,4 +1,5 @@
 import { moneyAmount } from './data.js';
+import { admitBuyingDecision } from './buying-guard.js';
 import { centsFromUnits, moneyUnits } from '../../shared/money.js';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
@@ -35,7 +36,7 @@ import {
 
 export const TOKEN_CLOSE_QUEUE = 'broker-token-auction-close';
 export const OFFER_SELECT = `SELECT r.*,o.revision,o.active,o.auto_bid,o.input_rate,o.output_rate,o.instant_markup_bps,
-  o.minimum_price_cents,o.max_outstanding_input,o.max_outstanding_output FROM broker_inference_routes r
+  o.minimum_price_cents,o.max_outstanding_input,o.max_outstanding_output,o.sales_start_at,o.sales_end_at FROM broker_inference_routes r
   JOIN broker_token_offerings o USING(provider)`;
 const quantities = z.object({
   grantId: z.uuid().optional(),
@@ -146,6 +147,13 @@ function grantIdFor(actor: Actor, requested?: string): string {
   if (!requested) failure(400, 'grant_required', 'Select a funded agent grant.');
   return requested;
 }
+export function offeringOpen(row: Row, at: Date) {
+  return (
+    row.active &&
+    (!row.sales_start_at || new Date(row.sales_start_at) <= at) &&
+    (!row.sales_end_at || new Date(row.sales_end_at) > at)
+  );
+}
 function hasCapacity(row: Row, input: number, output: number) {
   return (
     Number(row.outstanding_input) + input <= Number(row.max_outstanding_input) &&
@@ -216,7 +224,7 @@ export async function quotes(
       }
       const native = runtime(ctx).routes.get(row.provider as InferenceProvider)!;
       if (
-        !row.active ||
+        !offeringOpen(row, now) ||
         input.inputTokens < (native.mode === 'fixture' ? 20 : native.inputBound) ||
         native.validUntil < new Date(grant.expires_at).getTime() ||
         !hasCapacity(row, input.inputTokens, input.outputTokens)
@@ -314,7 +322,12 @@ async function purchase(db: PoolClient, grant: Row, order: Row, route: Row, bid:
   });
   return pack;
 }
-export async function createTokenOrder(ctx: AppContext, actor: Actor, raw: unknown) {
+export async function createTokenOrder(
+  ctx: AppContext,
+  actor: Actor,
+  raw: unknown,
+  buying?: { decisionId: string; automatic: boolean },
+) {
   const input = createOrderSchema.parse(raw),
     grantId = grantIdFor(actor, input.grantId),
     digest = operationFingerprint(input);
@@ -352,6 +365,8 @@ export async function createTokenOrder(ctx: AppContext, actor: Actor, raw: unkno
         'budget_exceeded',
         'The purchase ceiling exceeds the available grant budget or per-purchase limit.',
       );
+    if (buying)
+      await admitBuyingDecision(db, actor, grant, input, buying.decisionId, buying.automatic);
     const bounds = (
       await db.query(
         `SELECT
@@ -421,7 +436,7 @@ export async function createTokenOrder(ctx: AppContext, actor: Actor, raw: unkno
       }
       const native = runtime(ctx).routes.get(row.provider as InferenceProvider)!;
       if (
-        !row.active ||
+        !offeringOpen(row, now) ||
         input.inputTokens < (native.mode === 'fixture' ? 20 : native.inputBound) ||
         native.validUntil < new Date(grant.expires_at).getTime() ||
         !hasCapacity(row, input.inputTokens, input.outputTokens)
@@ -478,6 +493,11 @@ export async function createTokenOrder(ctx: AppContext, actor: Actor, raw: unkno
         ],
       )
     ).rows[0];
+    if (buying)
+      await db.query(
+        "UPDATE broker_inference_buying_decisions SET status='ordered',order_id=$2 WHERE id=$1",
+        [buying.decisionId, order.id],
+      );
     await db.query(
       'UPDATE broker_inference_grants SET available_cents=available_cents-$2,held_cents=held_cents+$2 WHERE id=$1',
       [grantId, input.maxTotalCents],
@@ -586,7 +606,7 @@ export async function closeTokenAuction(ctx: AppContext, id: string) {
       const row = rows.find((r) => r.provider === bid.provider);
       if (
         !row ||
-        !row.active ||
+        !offeringOpen(row, now) ||
         !row.auto_bid ||
         row.fingerprint !== bid.snapshot.fingerprint ||
         row.revision !== bid.snapshot.revision ||
@@ -755,6 +775,13 @@ export async function retirePackLocked(
 }
 export async function closeGrantLocked(db: PoolClient, grant: Row, reason: string) {
   if (grant.status === 'closed') return;
+  await db.query('UPDATE broker_inference_buying_policies SET paused=true WHERE grant_id=$1', [
+    grant.id,
+  ]);
+  await db.query(
+    `UPDATE broker_inference_buying_decisions SET status='superseded',reason='The grant was closed or expired.' WHERE grant_id=$1 AND status IN('evaluating','recommended')`,
+    [grant.id],
+  );
   const orders = (
     await db.query(
       "SELECT * FROM broker_token_orders WHERE grant_id=$1 AND status='open' ORDER BY id FOR UPDATE",
@@ -817,6 +844,8 @@ export async function updateOffering(ctx: AppContext, actor: Actor, raw: unknown
       minimumPriceCents: moneyAmount(100_000_000),
       maxOutstandingInputTokens: integer(100_000_000),
       maxOutstandingOutputTokens: integer(10_000_000),
+      salesStartAt: z.string().datetime().nullable().optional(),
+      salesEndAt: z.string().datetime().nullable().optional(),
     })
     .strict()
     .parse(raw);
@@ -848,9 +877,21 @@ export async function updateOffering(ctx: AppContext, actor: Actor, raw: unknown
             'commitments_exceed_capacity',
             'Capacity cannot be reduced below outstanding prepaid commitments.',
           );
+        const salesStart =
+          input.salesStartAt === undefined ? row.sales_start_at : input.salesStartAt;
+        const salesEnd = input.salesEndAt === undefined ? row.sales_end_at : input.salesEndAt;
+        if (
+          Boolean(salesStart) !== Boolean(salesEnd) ||
+          (salesStart && new Date(salesStart) >= new Date(salesEnd))
+        )
+          failure(
+            400,
+            'invalid_sales_window',
+            'Provide a start and later end, or clear both selling times.',
+          );
         await db.query(
           `UPDATE broker_token_offerings SET active=$2,auto_bid=$3,input_rate=$4,output_rate=$5,instant_markup_bps=$6,
-        minimum_price_cents=$7,max_outstanding_input=$8,max_outstanding_output=$9,revision=revision+1,updated_at=clock_timestamp() WHERE provider=$1`,
+        minimum_price_cents=$7,max_outstanding_input=$8,max_outstanding_output=$9,sales_start_at=$10,sales_end_at=$11,revision=revision+1,updated_at=clock_timestamp() WHERE provider=$1`,
           [
             row.provider,
             input.active,
@@ -861,6 +902,8 @@ export async function updateOffering(ctx: AppContext, actor: Actor, raw: unknown
             input.minimumPriceCents,
             input.maxOutstandingInputTokens,
             input.maxOutstandingOutputTokens,
+            salesStart,
+            salesEnd,
           ],
         );
         return offeringView(

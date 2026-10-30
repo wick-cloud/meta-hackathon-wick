@@ -1,3 +1,14 @@
+import {
+  buyingWorkspace,
+  saveBuyingPolicy,
+  evaluateBuying,
+  acceptBuying,
+  maintainBuying,
+  listAgents,
+  purchaseReceipt,
+} from '../src/server/inference/buying.js';
+import { proposeTokenSupply } from '../src/server/inference/supply.js';
+import { createMuseAdapter } from '../src/server/integrations/muse.js';
 import { randomUUID } from 'node:crypto';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { Pool } from 'pg';
@@ -212,6 +223,7 @@ describe.skipIf(!url)(
         'TRUNCATE broker_inference_grants,broker_inference_routes,broker_credit_wallets,broker_operation_receipts CASCADE',
       );
       ctx.inference = await createInferenceRuntime(ctx.config);
+      ctx.muse = createMuseAdapter({ museMode: 'fixture' });
       await initializeInference(ctx);
       for (const actor of [owner, other])
         await transaction(pool, (db) =>
@@ -231,6 +243,344 @@ describe.skipIf(!url)(
         await admin.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
         await admin.end();
       }
+    });
+
+    async function buyingPolicy(grantId: string, extra: Record<string, unknown> = {}) {
+      return saveBuyingPolicy(ctx, owner, grantId, {
+        operationKey: randomUUID(),
+        expectedRevision: 0,
+        mode: 'review',
+        paused: false,
+        maxPurchaseCents: 20,
+        outputPerCall: 512,
+        targetCalls: 1,
+        refillAtCalls: 1,
+        allowInstant: false,
+        ...extra,
+      });
+    }
+    it('defaults new grants to two hours and keeps buying policies owner-only', async () => {
+      const g = await grant();
+      expect(Date.parse(g.expiresAt) - Date.parse(g.createdAt)).toBeGreaterThan(7199000);
+      expect(Date.parse(g.expiresAt) - Date.parse(g.createdAt)).toBeLessThanOrEqual(7200000);
+      const key = await agent(g.id);
+      await expect(saveBuyingPolicy(ctx, key.actor, g.id, {})).rejects.toMatchObject({
+        statusCode: 403,
+      });
+      await expect(buyingWorkspace(ctx, other, g.id)).rejects.toMatchObject({ statusCode: 404 });
+      await buyingPolicy(g.id);
+      const denied = await app.inject({
+        method: 'POST',
+        url: `/api/inference/grants/${g.id}/buying/evaluate`,
+        headers: { authorization: `Bearer ${key.token}` },
+        payload: {},
+      });
+      expect(denied.statusCode).toBe(403);
+    });
+    it('reviews a bounded recommendation, commits once under concurrency, and captures a comparable receipt', async () => {
+      const g = await grant();
+      await buyingPolicy(g.id);
+      const recommendation = await evaluateBuying(ctx, owner, g.id);
+      expect(recommendation.status).toBe('recommended');
+      expect(recommendation.mode).toBe('fixture');
+      expect(recommendation.modelCalled).toBe(false);
+      expect(recommendation.baseline?.inputTokens).toBe(recommendation.candidate?.inputTokens);
+      const orders = await Promise.all([
+        acceptBuying(ctx, owner, g.id, recommendation.id),
+        acceptBuying(ctx, owner, g.id, recommendation.id),
+      ]);
+      expect(orders[0].id).toBe(orders[1].id);
+      expect((await grantDetail(ctx, owner, g.id)).grant.heldCents).toBe(20);
+      await pool.query(
+        "UPDATE broker_token_orders SET closes_at=clock_timestamp()-interval '1 second' WHERE id=$1",
+        [orders[0].id],
+      );
+      await closeTokenAuction(ctx, orders[0].id);
+      const detail = await tokenOrderDetail(ctx, owner, orders[0].id);
+      expect(detail.order.status).toBe('awarded');
+      expect(detail.pack).not.toBeNull();
+      expect((await purchaseReceipt(ctx, owner, orders[0].id)).decision?.id).toBe(
+        recommendation.id,
+      );
+      expect(
+        (
+          await pool.query('SELECT count(*)::int n FROM broker_token_orders WHERE grant_id=$1', [
+            g.id,
+          ])
+        ).rows[0].n,
+      ).toBe(1);
+    });
+    it('invalidates recommendations on pause or policy revision and rejects stale acceptance', async () => {
+      const g = await grant();
+      await buyingPolicy(g.id);
+      const d = await evaluateBuying(ctx, owner, g.id);
+      await buyingPolicy(g.id, { expectedRevision: 1, paused: true });
+      await expect(acceptBuying(ctx, owner, g.id, d.id)).rejects.toMatchObject({
+        code: 'recommendation_changed',
+      });
+      expect((await grantDetail(ctx, owner, g.id)).grant.heldCents).toBe(0);
+      const h = await grant();
+      await buyingPolicy(h.id);
+      const expired = await evaluateBuying(ctx, owner, h.id);
+      await pool.query(
+        "UPDATE broker_inference_buying_decisions SET expires_at=clock_timestamp()-interval '1 second' WHERE id=$1",
+        [expired.id],
+      );
+      await expect(acceptBuying(ctx, owner, h.id, expired.id)).rejects.toMatchObject({
+        code: 'recommendation_changed',
+      });
+    });
+    it('automatic workers share a durable claim and never make concurrent duplicate purchases', async () => {
+      const g = await grant();
+      await buyingPolicy(g.id, { mode: 'automatic' });
+      await Promise.all([maintainBuying(ctx), maintainBuying(ctx)]);
+      const data = await buyingWorkspace(ctx, owner, g.id);
+      expect(data.policy?.modelCalls).toBe(1);
+      expect(data.decisions).toHaveLength(1);
+      expect(data.decisions[0].status).toBe('ordered');
+      expect(data.allowance.pendingOrders).toBe(1);
+      await maintainBuying(ctx);
+      expect((await grantDetail(ctx, owner, g.id)).orders).toHaveLength(1);
+    });
+    it('does not buy when allowance covers the trigger, or when an unresolved request exists', async () => {
+      const g = await grant();
+      await buy(g.id);
+      await buyingPolicy(g.id, { refillAtCalls: 0 });
+      expect((await evaluateBuying(ctx, owner, g.id)).status).toBe('blocked');
+      expect((await buyingWorkspace(ctx, owner, g.id)).policy?.modelCalls).toBe(0);
+      const h = await grant();
+      const pack = await buy(h.id),
+        key = await agent(h.id);
+      await buyingPolicy(h.id, { mode: 'automatic' });
+      await pool.query(
+        `INSERT INTO broker_inference_requests(grant_id,pack_id,buyer_id,source_key_id,provider,source_mode,operation_key,input_fingerprint,status,reserved_input,reserved_output,deadline_at)
+        VALUES($1,$2,$3,$4,$5,'fixture',$6,'test','needs_reconciliation',20,512,clock_timestamp())`,
+        [h.id, pack.id, owner.id, key.key.id, pack.provider, randomUUID()],
+      );
+      const d = await evaluateBuying(ctx, owner, h.id);
+      expect(d.reason).toContain('reconciliation');
+      expect((await buyingWorkspace(ctx, owner, h.id)).policy?.paused).toBe(true);
+    });
+    it('bounds agent search and keyset pages while isolating tenants', async () => {
+      const a = await grant(),
+        b = await grant();
+      await buyingPolicy(a.id);
+      await buyingPolicy(b.id);
+      const first = await listAgents(ctx, owner, { limit: '1', q: 'Agent' });
+      expect(first.items).toHaveLength(1);
+      expect(first.nextCursor).toBeTruthy();
+      const second = await listAgents(ctx, owner, {
+        limit: '1',
+        q: 'Agent',
+        cursor: first.nextCursor,
+      });
+      expect(second.items[0].id).not.toBe(first.items[0].id);
+      expect((await listAgents(ctx, other, {})).items).toEqual([]);
+      expect((await listAgents(ctx, owner, { q: 'not-present' })).items).toEqual([]);
+    });
+    it('provider suggestions are reviewed, scoped, and rate limited', async () => {
+      const provider = providers[0];
+      const proposed = await proposeTokenSupply(ctx, provider);
+      expect(proposed.mode).toBe('fixture');
+      expect(proposed.proposal).not.toBeNull();
+      await expect(proposeTokenSupply(ctx, provider)).rejects.toMatchObject({ statusCode: 429 });
+      await expect(proposeTokenSupply(ctx, owner)).rejects.toMatchObject({ statusCode: 403 });
+      expect(
+        (
+          await pool.query('SELECT revision FROM broker_token_offerings ORDER BY provider')
+        ).rows.every((r) => r.revision === 1),
+      ).toBe(true);
+    });
+    it('selling windows gate new quotes without cutting off already purchased packs', async () => {
+      const g = await grant(),
+        pack = await buy(g.id);
+      await pool.query(
+        "UPDATE broker_token_offerings SET sales_start_at=clock_timestamp()+interval '1 hour',sales_end_at=clock_timestamp()+interval '2 hours'",
+      );
+      expect(
+        (await quotes(ctx, owner, { grantId: g.id, inputTokens: 10000, outputTokens: 1000 })).items,
+      ).toHaveLength(0);
+      const key = await agent(g.id);
+      const result = await complete(ctx, key.actor, { ...call, operationKey: randomUUID() });
+      expect(result.broker.packId).toBe(pack.id);
+    });
+
+    it('supports instant-only supply only when the owner allows fallback and no usable call remains', async () => {
+      await pool.query('UPDATE broker_token_offerings SET auto_bid=false');
+      const g = await grant();
+      await buyingPolicy(g.id, { allowInstant: true });
+      const d = await evaluateBuying(ctx, owner, g.id);
+      expect(d.status).toBe('recommended');
+      expect(d.candidate?.mode).toBe('instant');
+      const order = await acceptBuying(ctx, owner, g.id, d.id);
+      expect(order.status).toBe('awarded');
+      const h = await grant();
+      await buyingPolicy(h.id);
+      expect((await evaluateBuying(ctx, owner, h.id)).status).toBe('blocked');
+    });
+    it('closes and pauses a grant while Muse is in flight without creating a purchase', async () => {
+      const g = await grant();
+      await buyingPolicy(g.id, { mode: 'automatic' });
+      ctx.muse.selectTokenPurchase = async (input) => {
+        await closeGrant(ctx, owner, g.id, { operationKey: randomUUID() });
+        return {
+          candidateId: input.candidates[0].id,
+          reason: 'refill',
+          mode: 'fixture',
+          modelCalled: false,
+        };
+      };
+      expect((await evaluateBuying(ctx, owner, g.id)).status).toBe('superseded');
+      const result = await buyingWorkspace(ctx, owner, g.id);
+      expect(result.policy?.paused).toBe(true);
+      expect(result.allowance.pendingOrders).toBe(0);
+      expect((await grantDetail(ctx, owner, g.id)).grant.status).toBe('closed');
+    });
+    it('preserves funds on model failure and expires a recommendation that completes late', async () => {
+      const g = await grant();
+      await buyingPolicy(g.id);
+      ctx.muse = { ...ctx.muse, mode: 'real' };
+      ctx.muse.selectTokenPurchase = async () => {
+        throw new Error('fixture model failure');
+      };
+      const failed = await evaluateBuying(ctx, owner, g.id);
+      expect(failed.status).toBe('failed');
+      expect(failed.modelCalled).toBe(true);
+      ctx.muse = { ...ctx.muse, mode: 'fixture' };
+      expect((await grantDetail(ctx, owner, g.id)).grant.heldCents).toBe(0);
+      const h = await grant();
+      await buyingPolicy(h.id);
+      ctx.muse.selectTokenPurchase = async (input) => {
+        await pool.query(
+          "UPDATE broker_inference_buying_decisions SET expires_at=clock_timestamp()-interval '1 second' WHERE grant_id=$1",
+          [h.id],
+        );
+        return {
+          candidateId: input.candidates[0].id,
+          reason: 'refill',
+          mode: 'fixture',
+          modelCalled: false,
+        };
+      };
+      expect((await evaluateBuying(ctx, owner, h.id)).status).toBe('superseded');
+      expect((await grantDetail(ctx, owner, h.id)).grant.heldCents).toBe(0);
+    });
+    it('preserves the lifetime evaluation cap through policy edits and recovers expired claims', async () => {
+      const g = await grant();
+      await buyingPolicy(g.id);
+      await pool.query(
+        'UPDATE broker_inference_buying_policies SET model_calls=20 WHERE grant_id=$1',
+        [g.id],
+      );
+      await buyingPolicy(g.id, { expectedRevision: 1 });
+      const d = await evaluateBuying(ctx, owner, g.id);
+      expect(d.status).toBe('blocked');
+      expect(d.reason).toContain('20-decision');
+      const h = await grant();
+      await buyingPolicy(h.id);
+      await pool.query(
+        `INSERT INTO broker_inference_buying_decisions(grant_id,policy_revision,status,reason,source_mode,expires_at)
+        VALUES($1,1,'evaluating','interrupted local fixture','fixture',clock_timestamp()-interval '1 second')`,
+        [h.id],
+      );
+      expect((await evaluateBuying(ctx, owner, h.id)).status).toBe('recommended');
+      expect(
+        (await buyingWorkspace(ctx, owner, h.id)).decisions.filter(
+          (d) => d.status === 'superseded',
+        ),
+      ).toHaveLength(1);
+    });
+    it('rechecks manual spending and instant allowance before accepting a recommendation', async () => {
+      const g = await grant(20);
+      await buyingPolicy(g.id);
+      const d = await evaluateBuying(ctx, owner, g.id);
+      await createTokenOrder(ctx, owner, {
+        grantId: g.id,
+        mode: 'auction',
+        inputTokens: 20,
+        outputTokens: 512,
+        maxTotalCents: 20,
+        operationKey: randomUUID(),
+      });
+      await expect(acceptBuying(ctx, owner, g.id, d.id)).rejects.toMatchObject({ statusCode: 409 });
+      expect((await grantDetail(ctx, owner, g.id)).grant.heldCents).toBe(20);
+      await pool.query('UPDATE broker_token_offerings SET auto_bid=false');
+      const h = await grant();
+      await buyingPolicy(h.id, { allowInstant: true, refillAtCalls: 8 });
+      const instant = await evaluateBuying(ctx, owner, h.id);
+      await buy(h.id);
+      await expect(acceptBuying(ctx, owner, h.id, instant.id)).rejects.toMatchObject({
+        code: 'purchase_not_needed',
+      });
+    });
+
+    it('keeps agent page enrichment and the buying due scan bounded with substantial history', async () => {
+      const g = await grant();
+      await buy(g.id);
+      await buyingPolicy(g.id, { mode: 'automatic', refillAtCalls: 0 });
+      await pool.query(
+        `INSERT INTO broker_inference_grants(buyer_id,name,status,source_mode,funded_cents,available_cents,returned_cents,max_purchase_cents,allowed_providers,expires_at,created_at)
+        SELECT CASE WHEN n<=4000 THEN $1 ELSE $2 END,'Archived agent '||n,'closed','fixture',1,0,1,1,'["modal","baseten"]',
+        clock_timestamp()-interval '1 day',clock_timestamp()-interval '2 days'-n*interval '1 second' FROM generate_series(1,14000)n`,
+        [owner.id, other.id],
+      );
+      await pool.query(`INSERT INTO broker_inference_buying_policies(grant_id,mode,paused,max_purchase_cents,output_per_call,target_calls,refill_at_calls)
+        SELECT id,'automatic',true,1,512,1,0 FROM broker_inference_grants WHERE status='closed'`);
+      await pool.query('ANALYZE broker_inference_grants');
+      await pool.query('ANALYZE broker_inference_buying_policies');
+      const spy = vi.spyOn(pool, 'query');
+      let pageCalls: unknown[][] = [],
+        dueCalls: unknown[][] = [];
+      try {
+        expect((await listAgents(ctx, owner, { limit: '5' })).items).toHaveLength(5);
+        pageCalls = spy.mock.calls.map((args) => [...args]);
+        spy.mockClear();
+        await maintainBuying(ctx);
+        dueCalls = spy.mock.calls.map((args) => [...args]);
+      } finally {
+        spy.mockRestore();
+      }
+      expect(pageCalls).toHaveLength(2);
+      expect((pageCalls[1][1] as string[][])[0]).toHaveLength(5);
+      const due = dueCalls.find((args) =>
+        String(args[0]).includes('SELECT p.grant_id,g.buyer_id'),
+      )!;
+      expect(due).toBeDefined();
+      await pool.query(
+        "UPDATE broker_inference_buying_policies SET next_evaluation_at=clock_timestamp()-interval '1 second' WHERE grant_id=$1",
+        [g.id],
+      );
+      const walk = (node: any): any[] => [node, ...(node.Plans ?? []).flatMap(walk)];
+      const evidence = [];
+      for (const [label, args] of [
+        ['agents', pageCalls[0]],
+        ['allowance', pageCalls[1]],
+        ['worker', due],
+      ] as const) {
+        const plan = (
+          await pool.query(`EXPLAIN(ANALYZE,BUFFERS,FORMAT JSON) ${args[0]}`, args[1] as unknown[])
+        ).rows[0]['QUERY PLAN'][0];
+        const nodes = walk(plan.Plan);
+        expect(plan.Plan['Actual Rows']).toBeLessThanOrEqual(
+          label === 'agents' ? 6 : label === 'worker' ? 4 : 5,
+        );
+        expect(nodes.some((n) => String(n['Sort Method']).includes('external'))).toBe(false);
+        if (label === 'agents')
+          expect(nodes.some((n) => n['Index Name'] === 'broker_inference_grants_owner')).toBe(true);
+        if (label === 'worker')
+          expect(nodes.some((n) => n['Index Name'] === 'broker_inference_buying_due')).toBe(true);
+        evidence.push({
+          query: label,
+          rows: plan.Plan['Actual Rows'],
+          buffers: plan.Plan['Shared Hit Blocks'],
+          milliseconds: plan['Execution Time'],
+          indexes: nodes.map((n) => n['Index Name']).filter(Boolean),
+        });
+      }
+      if (process.env.BUYING_QUERY_EVIDENCE)
+        process.stdout.write(
+          'Local buying query evidence: 14,000 closed grants ' + JSON.stringify(evidence) + '\n',
+        );
     });
 
     it('lists the owner’s purchased batches across grants with stable pages and retains agent scoping', async () => {

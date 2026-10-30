@@ -86,6 +86,9 @@ export interface WickAdapter {
   terminate(id: string): Promise<void>;
 }
 export interface MuseAdapter {
+  selectTokenPurchase?(
+    input: import('../../shared/buying.js').MuseBuyingInput,
+  ): Promise<import('../../shared/buying.js').MuseBuyingSelection>;
   mode: 'fixture' | 'real';
   draftSchedule?(input: {
     kind: 'agreement' | 'offering';

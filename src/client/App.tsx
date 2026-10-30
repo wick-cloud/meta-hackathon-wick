@@ -58,9 +58,7 @@ const buyerNavigation: NavigationItem[] = [
   { path: '/orders', label: 'Orders', icon: ListOrdered, group: 'WORKSPACE' },
   { path: '/vms', label: 'Virtual machines', icon: Server, group: 'WORKSPACE' },
   { path: '/tokens', label: 'Purchased tokens', icon: Sparkles, group: 'WORKSPACE' },
-  { path: '/new/vm', label: 'Launch a VM', icon: Server, group: 'COMPUTE & AI' },
-  { path: '/token-orders/new', label: 'Buy AI tokens', icon: Sparkles, group: 'COMPUTE & AI' },
-  { path: '/agents', label: 'Agent budgets', icon: Bot, group: 'COMPUTE & AI' },
+  { path: '/agents', label: 'Agents', icon: Bot, group: 'WORKSPACE' },
   { path: '/credits', label: 'Broker wallet', icon: Wallet, group: 'ACCOUNT' },
   { path: '/invoices', label: 'Invoices', icon: CircleDollarSign, group: 'ACCOUNT' },
   { path: '/keys', label: 'API keys', icon: KeyRound, group: 'ACCOUNT' },
@@ -71,7 +69,7 @@ const providerNavigation: NavigationItem[] = [
   { path: '/provider/requests', label: 'Requests', icon: Box },
   { path: '/provider/offerings', label: 'Offerings', icon: LayoutGrid },
   { path: '/provider/scheduled', label: 'Scheduled market', icon: CalendarClock },
-  { path: '/provider/inference', label: 'AI token supply', icon: Sparkles },
+  { path: '/provider/inference', label: 'AI capacity', icon: Sparkles },
   { path: '/provider/earnings', label: 'Earnings', icon: CircleDollarSign },
   { path: '/provider/activity', label: 'Activity', icon: Activity },
   { path: '/keys', label: 'API keys', icon: KeyRound },
@@ -376,7 +374,7 @@ export default function App() {
     if (path === '/orders') content = <Orders search={search} />;
     else if (path === '/agents') content = <Agents key={user.id} search={search} />;
     else if (path.startsWith('/agents/'))
-      content = <AgentDetail key={`${user.id}:${path}`} id={path.split('/')[2]!} />;
+      content = <AgentDetail key={`${user.id}:${path}`} id={path.split('/')[2]!} search={search} />;
     else if (path === '/tokens') content = <TokenInventory key={user.id} search={search} />;
     else if (path === '/token-orders/new')
       content = <TokenComposer key={location} search={search} />;
@@ -407,7 +405,7 @@ export default function App() {
     else if (path === '/provider/requests') content = <ProviderRequests />;
     else if (path === '/provider/offerings') content = <ProviderOfferings />;
     else if (path === '/provider/scheduled') content = <ProviderScheduled />;
-    else if (path === '/provider/inference') content = <ProviderInference />;
+    else if (path === '/provider/inference') content = <ProviderInference search={search} />;
     else if (path === '/provider/earnings') content = <ProviderEarnings />;
     else if (path === '/provider/activity') content = <ProviderActivity />;
     else content = <ProviderCapacity />;

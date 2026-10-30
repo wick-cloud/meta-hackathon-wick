@@ -56,6 +56,9 @@ import {
 import './market.css';
 import './inference.css';
 import { PurchaseContext, TokenPurchaseSteps } from './purchases';
+import { AgentBuying, BuyingReceipt } from './buying';
+import { ProviderSupply, SupplyWindow } from './supply';
+import type { AgentListItem } from '../shared/buying';
 
 const count = (n: number) => n.toLocaleString('en-US');
 const providerName = (provider: string) =>
@@ -196,15 +199,37 @@ function CopyButton({ text, label = 'Copy' }: { text: string; label?: string }) 
 }
 
 export function Agents({ search = '' }: { search?: string }) {
-  const list = usePagedResource<InferenceGrant>('/api/inference/grants', 10000),
+  const navigate = useNavigate(),
+    query = new URLSearchParams(search);
+  const q = query.get('q') ?? '',
+    status = query.get('status') ?? 'all',
+    cursor = query.get('cursor');
+  const params = new URLSearchParams({ q, status, limit: '25' });
+  if (cursor) params.set('cursor', cursor);
+  const list = useResource<{ items: AgentListItem[]; nextCursor?: string }>(
+      `/api/inference/agents?${params}`,
+      10000,
+    ),
     catalog = useResource<InferenceCatalog>('/api/inference/models'),
-    wallet = useResource<CreditWallet>('/api/credits'),
-    navigate = useNavigate();
+    wallet = useResource<CreditWallet>('/api/credits');
+  function filter(key: string, value: string) {
+    const p = new URLSearchParams(search);
+    p.delete('cursor');
+    if (value) p.set(key, value);
+    else p.delete(key);
+    navigate(`/agents?${p}`);
+  }
+  function page(value?: string) {
+    const p = new URLSearchParams(search);
+    if (value) p.set('cursor', value);
+    else p.delete('cursor');
+    navigate(`/agents?${p}`);
+  }
   const [creating, setCreating] = useState(false),
     [name, setName] = useState(''),
     [budget, setBudget] = useState(1000),
     [maximum, setMaximum] = useState(500),
-    [days, setDays] = useState(1),
+    [hours, setHours] = useState(2),
     [providers, setProviders] = useState<InferenceProvider[]>(['modal', 'baseten']),
     [instant, setInstant] = useState(true),
     [busy, setBusy] = useState(false),
@@ -223,7 +248,7 @@ export function Agents({ search = '' }: { search?: string }) {
     event.preventDefault();
     setBusy(true);
     setError('');
-    creationExpiry.current ??= new Date(Date.now() + days * 86400000).toISOString();
+    creationExpiry.current ??= new Date(Date.now() + hours * 3600000).toISOString();
     const input = {
       name: name.trim(),
       budgetCents: budget,
@@ -248,8 +273,8 @@ export function Agents({ search = '' }: { search?: string }) {
     <div className="inference-workspace">
       <PageHeader
         eyebrow="AI TOKEN BUDGETS"
-        title="Agent budgets"
-        description="Set a spending limit for each agent. Its private key buys and uses AI token packs within that budget."
+        title="Agents"
+        description="Budgets, purchased allowance, and your next buying decision."
       >
         <Link href="/credits" className="button secondary">
           <Wallet size={16} />
@@ -260,79 +285,127 @@ export function Agents({ search = '' }: { search?: string }) {
           Create agent
         </button>
       </PageHeader>
-      <div className="inference-intro">
-        <span className="inference-agent-icon">
-          <Bot size={26} />
-        </span>
-        <div>
-          <h2>A budget you control. Tokens your agent can buy.</h2>
-          <p>
-            Fund an agent from your Broker wallet. It can repurchase input and output token packs
-            within that balance; only you can add funds.
-          </p>
-        </div>
-      </div>
-      {catalog.data && <Readiness catalog={catalog.data} />}
       <ErrorBox error={catalog.error} retry={catalog.reload} />
       <ErrorBox error={list.error} retry={list.reload} />
-      {list.loading ? (
-        <Spinner label="Loading agents" />
-      ) : !list.data?.items.length ? (
-        <section className="card">
+      <section className="card agent-table-shell">
+        <div className="agent-table-filters">
+          <form
+            className="buying-actions"
+            style={{ margin: 0 }}
+            onSubmit={(e) => {
+              e.preventDefault();
+              filter('q', String(new FormData(e.currentTarget).get('q') ?? ''));
+            }}
+          >
+            <label className="field">
+              <span>Find an agent</span>
+              <input
+                key={q}
+                name="q"
+                defaultValue={q}
+                placeholder="Search agent names"
+                maxLength={80}
+              />
+            </label>
+            <button className="button secondary">Search</button>
+          </form>
+          <label className="field">
+            <span>Status</span>
+            <select value={status} onChange={(e) => filter('status', e.target.value)}>
+              <option value="all">All statuses</option>
+              <option value="active">Active</option>
+              <option value="closing">Closing</option>
+              <option value="closed">Closed</option>
+            </select>
+          </label>
+        </div>
+        {list.loading ? (
+          <Spinner label="Loading agents" />
+        ) : list.data?.items.length ? (
+          <div className="table-scroll">
+            <table className="agent-table">
+              <thead>
+                <tr>
+                  <th>Agent</th>
+                  <th>Status</th>
+                  <th className="money-column">Available budget</th>
+                  <th>Usable allowance</th>
+                  <th>Expires</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {list.data.items.map((grant) => (
+                  <tr key={grant.id}>
+                    <td>
+                      <div className="agent-table-heading">
+                        <Bot size={18} />
+                        <div>
+                          <Link className="text-link" href={`/agents/${grant.id}`}>
+                            {grant.name}
+                          </Link>
+                          <small>
+                            {grant.buyingPaused
+                              ? 'Buying paused'
+                              : grant.buyingMode === 'automatic'
+                                ? 'Automatic buying'
+                                : grant.buyingMode
+                                  ? 'Review purchases'
+                                  : 'Manual buying'}{' '}
+                            · {grant.mode}
+                          </small>
+                        </div>
+                      </div>
+                    </td>
+                    <td>
+                      <State value={grant.status} />
+                    </td>
+                    <td className="money-column">
+                      {money(grant.availableCents)}
+                      <small>{money(grant.heldCents)} held</small>
+                    </td>
+                    <td>
+                      {count(grant.eligibleCalls)} eligible calls
+                      <small>At {count(grant.outputPerCall)} output / call</small>
+                    </td>
+                    <td>{dateTime(grant.expiresAt)}</td>
+                    <td>
+                      <Link href={`/agents/${grant.id}`} className="text-link">
+                        Open <ArrowRight size={13} />
+                      </Link>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
           <EmptyState
             icon={<Bot size={28} />}
-            title="Your first agent starts here"
-            description="Choose its budget, purchase limit and providers. Create its private API key after funding."
-          >
-            <button className="button primary" onClick={openCreate}>
-              Create agent
-            </button>
-          </EmptyState>
-        </section>
-      ) : (
-        <div className="inference-agent-grid">
-          {list.data.items.map((grant) => (
-            <Link href={`/agents/${grant.id}`} key={grant.id} className="card inference-agent-card">
-              <div className="inference-section-heading">
-                <span className="inference-agent-icon">
-                  <Bot size={22} />
-                </span>
-                <State value={grant.status} />
-              </div>
-              <h2>{grant.name}</h2>
-              <Mode mode={grant.mode} />
-              <div className="inference-agent-balance">
-                <strong>{money(grant.availableCents)}</strong>
-                <span>available to purchase</span>
-              </div>
-              <div
-                className="inference-budget-track"
-                aria-label={`${money(grant.spentCents)} spent of ${money(grant.fundedCents)} funded`}
-              >
-                <span
-                  style={{
-                    width: `${Math.min(100, (grant.spentCents / Math.max(1, grant.fundedCents)) * 100)}%`,
-                  }}
-                />
-              </div>
-              <div className="inference-card-meta">
-                <span>{money(grant.spentCents)} net spent</span>
-                <span>{money(grant.fundedCents)} funded</span>
-              </div>
-              <div className="inference-card-footer">
-                <span>Expires {dateTime(grant.expiresAt)}</span>
-                <ArrowRight size={16} />
-              </div>
-            </Link>
-          ))}
+            title={
+              q || status !== 'all'
+                ? 'No agents match these filters'
+                : 'Your first agent starts here'
+            }
+            description="Fund an agent, choose its buying limits, and connect its private key."
+          />
+        )}
+        <div className="agent-table-footer">
+          <span>{list.data?.items.length ?? 0} agents shown</span>
+          <div className="buying-actions" style={{ margin: 0 }}>
+            {cursor && (
+              <button className="button secondary" onClick={() => page()}>
+                Newest
+              </button>
+            )}
+            {list.data?.nextCursor && (
+              <button className="button secondary" onClick={() => page(list.data?.nextCursor)}>
+                Next page
+              </button>
+            )}
+          </div>
         </div>
-      )}
-      <LoadMore
-        available={!!list.nextCursor}
-        loading={list.loadingMore}
-        onLoad={() => void list.loadMore()}
-        error={list.moreError}
-      />
+      </section>
       {creating && (
         <MarketDialog titleId="create-agent-title" onClose={() => setCreating(false)} busy={busy}>
           <form onSubmit={create}>
@@ -378,15 +451,15 @@ export function Agents({ search = '' }: { search?: string }) {
               <label className="field">
                 <span>Budget expires in</span>
                 <select
-                  value={days}
+                  value={hours}
                   onChange={(e) => {
-                    setDays(Number(e.target.value));
+                    setHours(Number(e.target.value));
                     creationExpiry.current = null;
                   }}
                 >
-                  {[1, 3, 7].map((n) => (
+                  {[1, 2, 6, 24].map((n) => (
                     <option key={n} value={n}>
-                      {n} {n === 1 ? 'day' : 'days'}
+                      {n} {n === 1 ? 'hour' : 'hours'}
                     </option>
                   ))}
                 </select>
@@ -514,7 +587,11 @@ function PackCard({ pack }: { pack: TokenPack }) {
   );
 }
 
-export function AgentDetail({ id }: { id: string }) {
+export function AgentDetail({ id, search = '' }: { id: string; search?: string }) {
+  const selectedTab = new URLSearchParams(search).get('tab') ?? 'overview';
+  const tab = ['overview', 'policy', 'activity', 'connection'].includes(selectedTab)
+    ? selectedTab
+    : 'overview';
   const resource = useResource<InferenceGrantDetail>(
     `/api/inference/grants/${encodeURIComponent(id)}`,
     5000,
@@ -612,6 +689,22 @@ export function AgentDetail({ id }: { id: string }) {
       {resource.loading && <Spinner label="Loading agent" />}
       {detail && grant && (
         <>
+          <nav className="buying-tabs" aria-label="Agent sections">
+            {[
+              ['overview', 'Overview'],
+              ['policy', 'Buying policy'],
+              ['activity', 'Activity & receipts'],
+              ['connection', 'Connection'],
+            ].map(([value, label]) => (
+              <Link
+                key={value}
+                href={`/agents/${id}?tab=${value}`}
+                aria-current={tab === value ? 'page' : undefined}
+              >
+                {label}
+              </Link>
+            ))}
+          </nav>
           <div className="inference-inline">
             <State value={grant.status} />
             <Mode mode={grant.mode} />
@@ -640,184 +733,206 @@ export function AgentDetail({ id }: { id: string }) {
               note={`${money(grant.returnedCents)} returned to wallet`}
             />
           </div>
-          <Readiness catalog={detail.catalog} />
-          <div className="inference-detail-grid">
-            <section className="card inference-setup">
-              <div className="inference-section-heading">
-                <h2>
-                  <KeyRound size={18} />
-                  Connect this agent
-                </h2>
-                {active && (
-                  <button className="button secondary small" onClick={() => open('key')}>
-                    Create or replace API key
-                  </button>
+          {tab !== 'connection' && (
+            <AgentBuying
+              key={id}
+              detail={detail}
+              tab={tab}
+              onChanged={() => {
+                void resource.reload();
+              }}
+            />
+          )}
+          {tab === 'connection' && (
+            <>
+              <Readiness catalog={detail.catalog} />
+              <div className="inference-detail-grid">
+                <section className="card inference-setup">
+                  <div className="inference-section-heading">
+                    <h2>
+                      <KeyRound size={18} />
+                      Connect this agent
+                    </h2>
+                    {active && (
+                      <button className="button secondary small" onClick={() => open('key')}>
+                        Create or replace API key
+                      </button>
+                    )}
+                  </div>
+                  <p>
+                    Use the same private key to purchase packs and call the inference gateway. A
+                    replacement key keeps this agent’s balance and revokes its previous keys.
+                  </p>
+                  <div className="inference-endpoint">
+                    <span>OpenAI-compatible base URL</span>
+                    <code>{baseURL}</code>
+                    <CopyButton text={baseURL} label="Copy URL" />
+                  </div>
+                  <details className="inference-code-details">
+                    <summary>JavaScript setup example</summary>
+                    <p>
+                      Install <code>openai</code> and supply <code>BROKER_API_KEY</code> through
+                      your secret manager. Purchase a pack first.
+                    </p>
+                    <pre tabIndex={0}>{setup}</pre>
+                    <CopyButton text={setup} label="Copy example" />
+                  </details>
+                  <p className="inference-muted">
+                    Text chat · buffered responses · explicit output limit. Keep request IDs stable
+                    across retries.{' '}
+                    {detail.catalog.mode === 'fixture'
+                      ? 'This agent returns fixture responses.'
+                      : 'Calls require a qualified route and sufficient token quota.'}
+                  </p>
+                </section>
+                <section className="card">
+                  <h2>Budget controls</h2>
+                  <dl className="inference-definitions">
+                    <div>
+                      <dt>Providers</dt>
+                      <dd>{grant.allowedProviders.map(providerName).join(', ')}</dd>
+                    </div>
+                    <div>
+                      <dt>Purchasing</dt>
+                      <dd>
+                        {grant.allowInstant
+                          ? '30-second auction or instant price'
+                          : '30-second auction only'}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Budget changes</dt>
+                      <dd>Owner only</dd>
+                    </div>
+                  </dl>
+                  <p className="inference-muted">
+                    Purchased packs are prepaid. Unused or expired tokens are not automatically
+                    refunded. Verified provider-failure refunds restore an active budget; closed
+                    budgets return refunds to your wallet.
+                  </p>
+                  {grant.status === 'active' && (
+                    <button className="button secondary" onClick={() => open('close')}>
+                      Close agent budget
+                    </button>
+                  )}
+                </section>
+              </div>
+            </>
+          )}
+          {tab === 'activity' && (
+            <>
+              <section className="card">
+                <div className="inference-section-heading">
+                  <h2>Token packs</h2>
+                  <span className="inference-muted">Input and output quotas are separate</span>
+                </div>
+                {detail.packs.length ? (
+                  <div className="inference-pack-grid">
+                    {detail.packs.map((pack) => (
+                      <PackCard pack={pack} key={pack.id} />
+                    ))}
+                  </div>
+                ) : (
+                  <EmptyState
+                    icon={<Sparkles size={24} />}
+                    title="No token packs yet"
+                    description="Buy a prepaid pack to give your agent input and output tokens."
+                  />
                 )}
-              </div>
-              <p>
-                Use the same private key to purchase packs and call the inference gateway. A
-                replacement key keeps this agent’s balance and revokes its previous keys.
-              </p>
-              <div className="inference-endpoint">
-                <span>OpenAI-compatible base URL</span>
-                <code>{baseURL}</code>
-                <CopyButton text={baseURL} label="Copy URL" />
-              </div>
-              <details className="inference-code-details">
-                <summary>JavaScript setup example</summary>
-                <p>
-                  Install <code>openai</code> and supply <code>BROKER_API_KEY</code> through your
-                  secret manager. Purchase a pack first.
+              </section>
+              <section className="card">
+                <h2>Recent token orders</h2>
+                {detail.orders.length ? (
+                  <div className="table-scroll">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Order</th>
+                          <th>Tokens</th>
+                          <th>Status</th>
+                          <th>Price / ceiling</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {detail.orders.map((order) => (
+                          <tr key={order.id}>
+                            <td>
+                              <Link href={`/token-orders/${order.id}`} className="text-link">
+                                {order.mode === 'auction'
+                                  ? '30-second auction'
+                                  : 'Instant purchase'}{' '}
+                                <ArrowRight size={12} />
+                              </Link>
+                              <small>{dateTime(order.createdAt)}</small>
+                            </td>
+                            <td>
+                              {count(order.inputTokens)} input · {count(order.outputTokens)} output
+                            </td>
+                            <td>
+                              <State value={order.status} />
+                            </td>
+                            <td>{money(order.priceCents ?? order.maxTotalCents)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <p className="inference-muted">
+                    Purchases made by you or this agent appear here.
+                  </p>
+                )}
+              </section>
+              <section className="card">
+                <h2>Recent inference requests</h2>
+                {detail.requests.length ? (
+                  <div className="table-scroll">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Request</th>
+                          <th>Provider</th>
+                          <th>Status</th>
+                          <th>Input / output</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {detail.requests.map((request) => (
+                          <tr key={request.id}>
+                            <td>
+                              <code>{request.id.slice(0, 12)}</code>
+                              <small>{dateTime(request.createdAt)}</small>
+                            </td>
+                            <td>
+                              {providerName(request.provider)}
+                              <Mode mode={request.mode} />
+                            </td>
+                            <td>
+                              <State value={request.status} />
+                              {request.failureCode && <small>{request.failureCode}</small>}
+                            </td>
+                            <td>
+                              {request.inputTokens !== null
+                                ? `${count(request.inputTokens)} / ${count(request.outputTokens ?? 0)} used`
+                                : `${count(request.heldInputTokens)} / ${count(request.heldOutputTokens)} held`}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <p className="inference-muted">
+                    Request usage and any unresolved token holds appear here.
+                  </p>
+                )}
+                <p className="inference-muted">
+                  Unknown outcomes keep their token reservation until reconciled. Retrying the same
+                  request ID never starts another generation.
                 </p>
-                <pre tabIndex={0}>{setup}</pre>
-                <CopyButton text={setup} label="Copy example" />
-              </details>
-              <p className="inference-muted">
-                Text chat · buffered responses · explicit output limit. Keep request IDs stable
-                across retries.{' '}
-                {detail.catalog.mode === 'fixture'
-                  ? 'This agent returns fixture responses.'
-                  : 'Calls require a qualified route and sufficient token quota.'}
-              </p>
-            </section>
-            <section className="card">
-              <h2>Budget controls</h2>
-              <dl className="inference-definitions">
-                <div>
-                  <dt>Providers</dt>
-                  <dd>{grant.allowedProviders.map(providerName).join(', ')}</dd>
-                </div>
-                <div>
-                  <dt>Purchasing</dt>
-                  <dd>
-                    {grant.allowInstant
-                      ? '30-second auction or instant price'
-                      : '30-second auction only'}
-                  </dd>
-                </div>
-                <div>
-                  <dt>Budget changes</dt>
-                  <dd>Owner only</dd>
-                </div>
-              </dl>
-              <p className="inference-muted">
-                Purchased packs are prepaid. Unused or expired tokens are not automatically
-                refunded. Verified provider-failure refunds restore an active budget; closed budgets
-                return refunds to your wallet.
-              </p>
-              {grant.status === 'active' && (
-                <button className="button secondary" onClick={() => open('close')}>
-                  Close agent budget
-                </button>
-              )}
-            </section>
-          </div>
-          <section className="card">
-            <div className="inference-section-heading">
-              <h2>Token packs</h2>
-              <span className="inference-muted">Input and output quotas are separate</span>
-            </div>
-            {detail.packs.length ? (
-              <div className="inference-pack-grid">
-                {detail.packs.map((pack) => (
-                  <PackCard pack={pack} key={pack.id} />
-                ))}
-              </div>
-            ) : (
-              <EmptyState
-                icon={<Sparkles size={24} />}
-                title="No token packs yet"
-                description="Buy a prepaid pack to give your agent input and output tokens."
-              />
-            )}
-          </section>
-          <section className="card">
-            <h2>Recent token orders</h2>
-            {detail.orders.length ? (
-              <div className="table-scroll">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Order</th>
-                      <th>Tokens</th>
-                      <th>Status</th>
-                      <th>Price / ceiling</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {detail.orders.map((order) => (
-                      <tr key={order.id}>
-                        <td>
-                          <Link href={`/token-orders/${order.id}`} className="text-link">
-                            {order.mode === 'auction' ? '30-second auction' : 'Instant purchase'}{' '}
-                            <ArrowRight size={12} />
-                          </Link>
-                          <small>{dateTime(order.createdAt)}</small>
-                        </td>
-                        <td>
-                          {count(order.inputTokens)} input · {count(order.outputTokens)} output
-                        </td>
-                        <td>
-                          <State value={order.status} />
-                        </td>
-                        <td>{money(order.priceCents ?? order.maxTotalCents)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            ) : (
-              <p className="inference-muted">Purchases made by you or this agent appear here.</p>
-            )}
-          </section>
-          <section className="card">
-            <h2>Recent inference requests</h2>
-            {detail.requests.length ? (
-              <div className="table-scroll">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Request</th>
-                      <th>Provider</th>
-                      <th>Status</th>
-                      <th>Input / output</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {detail.requests.map((request) => (
-                      <tr key={request.id}>
-                        <td>
-                          <code>{request.id.slice(0, 12)}</code>
-                          <small>{dateTime(request.createdAt)}</small>
-                        </td>
-                        <td>
-                          {providerName(request.provider)}
-                          <Mode mode={request.mode} />
-                        </td>
-                        <td>
-                          <State value={request.status} />
-                          {request.failureCode && <small>{request.failureCode}</small>}
-                        </td>
-                        <td>
-                          {request.inputTokens !== null
-                            ? `${count(request.inputTokens)} / ${count(request.outputTokens ?? 0)} used`
-                            : `${count(request.heldInputTokens)} / ${count(request.heldOutputTokens)} held`}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            ) : (
-              <p className="inference-muted">
-                Request usage and any unresolved token holds appear here.
-              </p>
-            )}
-            <p className="inference-muted">
-              Unknown outcomes keep their token reservation until reconciled. Retrying the same
-              request ID never starts another generation.
-            </p>
-          </section>
+              </section>
+            </>
+          )}
         </>
       )}
       {dialog && (
@@ -1551,6 +1666,7 @@ export function TokenOrderPage({ id }: { id: string }) {
                   Prices cover the full token pack. Ties use accepted time, then bid ID.
                 </div>
               </section>
+              <BuyingReceipt order={order} />
               {resource.data.pack && (
                 <section className="card token-auction-quota">
                   <div className="inference-section-heading">
@@ -1632,11 +1748,11 @@ export function TokenOrderPage({ id }: { id: string }) {
   );
 }
 
-export function ProviderInference() {
+export function ProviderInference({ search = '' }: { search?: string }) {
+  const tab = new URLSearchParams(search).get('tab') === 'commitments' ? 'commitments' : 'supply';
   const resource = useResource<{ offering: TokenOffering | null; catalog: InferenceCatalog }>(
-      '/api/provider/inference/offering',
-    ),
-    packs = usePagedResource<TokenPack>('/api/provider/inference/packs', 10000);
+    '/api/provider/inference/offering',
+  );
   const [draft, setDraft] = useState<TokenOfferingInput | null>(null),
     [busy, setBusy] = useState(false),
     [error, setError] = useState(''),
@@ -1650,6 +1766,8 @@ export function ProviderInference() {
         expectedRevision: offering.revision,
         active: offering.active,
         autoBid: offering.autoBid,
+        salesStartAt: offering.salesStartAt ?? null,
+        salesEndAt: offering.salesEndAt ?? null,
         inputRateMicrosPerMillion: offering.inputRateMicrosPerMillion,
         outputRateMicrosPerMillion: offering.outputRateMicrosPerMillion,
         instantMarkupBps: offering.instantMarkupBps,
@@ -1687,14 +1805,13 @@ export function ProviderInference() {
     <div className="inference-workspace">
       <PageHeader
         eyebrow="PROVIDER MARKET"
-        title="AI token supply"
-        description="Publish fixed token-pack pricing and manage the quota you commit."
+        title="AI capacity"
+        description="Set the supply you offer. Protect existing commitments."
       >
         <button
           className="button secondary"
           onClick={() => {
             resource.reload();
-            packs.reload();
           }}
         >
           <RefreshCw size={15} />
@@ -1713,30 +1830,39 @@ export function ProviderInference() {
           />
         </section>
       )}
-      {offering && draft && (
+      {offering && (
+        <nav className="buying-tabs" aria-label="Provider AI capacity views">
+          <Link
+            href="/provider/inference"
+            className={tab === 'supply' ? 'active' : ''}
+            aria-current={tab === 'supply' ? 'page' : undefined}
+          >
+            Supply & pricing
+          </Link>
+          <Link
+            href="/provider/inference?tab=commitments"
+            className={tab === 'commitments' ? 'active' : ''}
+            aria-current={tab === 'commitments' ? 'page' : undefined}
+          >
+            Commitments
+          </Link>
+        </nav>
+      )}
+      {offering && draft && tab === 'supply' && (
         <>
-          <div className="inference-stats">
-            <StatCard
-              label="Provider"
-              value={providerName(offering.provider)}
-              note={`Revision ${offering.revision}`}
-            />
-            <StatCard
-              label="Committed input quota"
-              value={count(offering.outstandingInputTokens)}
-              note={`${count(offering.maxOutstandingInputTokens)} capacity`}
-            />
-            <StatCard
-              label="Committed output quota"
-              value={count(offering.outstandingOutputTokens)}
-              note={`${count(offering.maxOutstandingOutputTokens)} capacity`}
-            />
-            <StatCard
-              label="Provider share"
-              value="85%"
-              note="15% Broker commission on charged purchases"
-            />
+          <div className="buying-provider-summary">
+            <span>
+              {providerName(offering.provider)} · Revision {offering.revision}
+            </span>
+            <span>Provider share 85% · 15% Broker commission on charged purchases</span>
           </div>
+          <ProviderSupply
+            offering={offering}
+            onApply={(rates) => {
+              change('inputRateMicrosPerMillion', rates.inputRateMicrosPerMillion);
+              change('outputRateMicrosPerMillion', rates.outputRateMicrosPerMillion);
+            }}
+          />
           <form className="card" onSubmit={save}>
             <h2>Token offering</h2>
             <p className="inference-muted">
@@ -1847,6 +1973,7 @@ export function ProviderInference() {
                   Automatically bid on eligible auctions
                 </label>
               </div>
+              <SupplyWindow draft={draft} onChange={(key, value) => change(key, value)} />
             </fieldset>
             <ErrorBox error={error} />
             {saved && (
@@ -1862,67 +1989,74 @@ export function ProviderInference() {
           </form>
         </>
       )}
-      <section className="card">
-        <h2>Token commitments and earnings</h2>
-        <p className="inference-muted">
-          Revenue comes from charged pack purchases. Unallocated buyer funds incur no fee. Verified
-          refunds reverse the corresponding provider share and commission; no payout is collected
-          here.
-        </p>
-        <ErrorBox error={packs.error} retry={packs.reload} />
-        {packs.loading ? (
-          <Spinner label="Loading commitments" />
-        ) : packs.data?.items.length ? (
-          <div className="table-scroll">
-            <table>
-              <thead>
-                <tr>
-                  <th>Pack</th>
-                  <th>Outstanding quota</th>
-                  <th>Status</th>
-                  <th>Charged / refunded</th>
-                  <th>Provider net</th>
-                  <th>Broker fee</th>
-                </tr>
-              </thead>
-              <tbody>
-                {packs.data.items.map((pack) => (
-                  <tr key={pack.id}>
-                    <td>
-                      <code>{pack.id.slice(0, 12)}</code>
-                      <Mode mode={pack.mode} />
-                      <small>{dateTime(pack.expiresAt)}</small>
-                    </td>
-                    <td>
-                      {count(pack.availableInputTokens + pack.heldInputTokens)} input
-                      <br />
-                      {count(pack.availableOutputTokens + pack.heldOutputTokens)} output
-                    </td>
-                    <td>
-                      <State value={pack.status} />
-                    </td>
-                    <td>
-                      {money(pack.priceCents)} / {money(pack.refundCents)}
-                    </td>
-                    <td>{moneyMicros(pack.revenueShare.providerNetMicros)}</td>
-                    <td>{moneyMicros(pack.revenueShare.brokerFeeMicros)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <p className="inference-muted">
-            Purchased packs and their exact commission shares will appear here.
-          </p>
-        )}
-        <LoadMore
-          available={!!packs.nextCursor}
-          loading={packs.loadingMore}
-          onLoad={() => void packs.loadMore()}
-          error={packs.moreError}
-        />
-      </section>
+      {offering && tab === 'commitments' && <ProviderCommitments />}
     </div>
+  );
+}
+
+function ProviderCommitments() {
+  const packs = usePagedResource<TokenPack>('/api/provider/inference/packs', 10000);
+  return (
+    <section className="card">
+      <h2>Token commitments and earnings</h2>
+      <p className="inference-muted">
+        Revenue comes from charged pack purchases. Unallocated buyer funds incur no fee. Verified
+        refunds reverse the corresponding provider share and commission; no payout is collected
+        here.
+      </p>
+      <ErrorBox error={packs.error} retry={packs.reload} />
+      {packs.loading ? (
+        <Spinner label="Loading commitments" />
+      ) : packs.data?.items.length ? (
+        <div className="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Pack</th>
+                <th>Outstanding quota</th>
+                <th>Status</th>
+                <th>Charged / refunded</th>
+                <th>Provider net</th>
+                <th>Broker fee</th>
+              </tr>
+            </thead>
+            <tbody>
+              {packs.data.items.map((pack) => (
+                <tr key={pack.id}>
+                  <td>
+                    <code>{pack.id.slice(0, 12)}</code>
+                    <Mode mode={pack.mode} />
+                    <small>{dateTime(pack.expiresAt)}</small>
+                  </td>
+                  <td>
+                    {count(pack.availableInputTokens + pack.heldInputTokens)} input
+                    <br />
+                    {count(pack.availableOutputTokens + pack.heldOutputTokens)} output
+                  </td>
+                  <td>
+                    <State value={pack.status} />
+                  </td>
+                  <td>
+                    {money(pack.priceCents)} / {money(pack.refundCents)}
+                  </td>
+                  <td>{moneyMicros(pack.revenueShare.providerNetMicros)}</td>
+                  <td>{moneyMicros(pack.revenueShare.brokerFeeMicros)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <p className="inference-muted">
+          Purchased packs and their exact commission shares will appear here.
+        </p>
+      )}
+      <LoadMore
+        available={!!packs.nextCursor}
+        loading={packs.loadingMore}
+        onLoad={() => void packs.loadMore()}
+        error={packs.moreError}
+      />
+    </section>
   );
 }

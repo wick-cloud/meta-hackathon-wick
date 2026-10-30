@@ -64,7 +64,7 @@ async function buyer(page: Page, olderBudget = false) {
           }
         : path === '/api/orders'
           ? { items: [], serverNow: new Date().toISOString() }
-          : path === '/api/inference/grants'
+          : path === '/api/inference/grants' || path === '/api/inference/agents'
             ? {
                 items: olderBudget && url.searchParams.has('cursor') ? [grant] : [],
                 nextCursor: olderBudget && !url.searchParams.has('cursor') ? 'older' : null,
@@ -171,7 +171,7 @@ test('resource choices fit mobile and remain reachable with keyboard navigation'
   await expect(page.getByLabel('Describe your environment')).toBeVisible();
   await page.getByRole('button', { name: 'Open navigation', exact: true }).click();
   await expect(page.getByRole('dialog', { name: 'Workspace navigation' })).toBeVisible();
-  await expect(page.getByRole('link', { name: 'Buy AI tokens', exact: true })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Agents', exact: true })).toBeVisible();
   await page.keyboard.press('Escape');
   await expect(page.getByRole('dialog', { name: 'Workspace navigation' })).toHaveCount(0);
 });

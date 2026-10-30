@@ -54,6 +54,8 @@ export interface InferenceModelList {
   data: { id: string; object: 'model'; created: number; owned_by: string }[];
 }
 export interface TokenOfferingInput {
+  salesStartAt?: string | null;
+  salesEndAt?: string | null;
   operationKey: string;
   expectedRevision: number;
   active: boolean;

@@ -63,7 +63,7 @@ export async function createGrant(ctx: AppContext, actor: Actor, raw: unknown) {
         const now = await clock(db),
           expires = input.expiresAt
             ? new Date(input.expiresAt)
-            : new Date(now.getTime() + 86400000);
+            : new Date(now.getTime() + 2 * 3600000);
         if (
           expires.getTime() < now.getTime() + 60000 ||
           expires.getTime() > now.getTime() + 7 * 86400000
