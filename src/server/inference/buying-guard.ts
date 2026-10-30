@@ -4,6 +4,11 @@ import type { BuyingAllowance, BuyingDecision, BuyingPolicy } from '../../shared
 import type { Row } from '../marketplace/data.js';
 import { iso } from '../marketplace/data.js';
 import { clock, failure } from './data.js';
+import { MAX_API_BODY_BYTES } from '../http-limits.js';
+
+// Fixture input counts bytes plus framing. The complete JSON body is always larger.
+// Its minimum (20) is not an upper bound for a non-empty agent task.
+export const FIXTURE_BUYING_INPUT_BOUND = MAX_API_BODY_BYTES;
 
 export const policyView = (r: Row): BuyingPolicy => ({
   revision: r.revision,
@@ -41,7 +46,7 @@ export async function allowance(
   const packs = (
     await db.query(
       `SELECT p.available_input,p.available_output,p.held_input,p.held_output,
-    p.status,p.expires_at,p.route_fingerprint,p.snapshot,r.fingerprint,r.qualified,r.quarantined_at,r.max_output_tokens
+    p.source_mode,p.status,p.expires_at,p.route_fingerprint,p.snapshot,r.fingerprint,r.qualified,r.quarantined_at,r.max_output_tokens
     FROM (SELECT * FROM broker_token_packs WHERE grant_id=$1 AND status<>'settled' ORDER BY id LIMIT 10) p
     JOIN broker_inference_routes r ON r.provider=p.provider`,
       [grant.id],
@@ -64,7 +69,10 @@ export async function allowance(
     if (p.status !== 'active' || new Date(p.expires_at) <= now) continue;
     result.availableInputTokens += Number(p.available_input);
     result.availableOutputTokens += Number(p.available_output);
-    const bound = Number(p.snapshot.minimumInputReservation);
+    const bound =
+      p.source_mode === 'fixture'
+        ? FIXTURE_BUYING_INPUT_BOUND
+        : Number(p.snapshot.minimumInputReservation);
     if (
       p.qualified &&
       !p.quarantined_at &&

@@ -21,7 +21,7 @@ import {
   operationSchema,
   runtime,
 } from './data.js';
-import { allowance, decisionView, policyView } from './buying-guard.js';
+import { allowance, decisionView, policyView, FIXTURE_BUYING_INPUT_BOUND } from './buying-guard.js';
 import {
   createTokenOrder,
   OFFER_SELECT,
@@ -73,7 +73,7 @@ export async function listAgents(ctx: AppContext, actor: Actor, raw: unknown) {
     ? (
         await ctx.pool.query(
           `SELECT t.grant_id,sum(LEAST(
-    floor(t.available_input/GREATEST(1,(t.snapshot->>'minimumInputReservation')::numeric)),
+    floor(t.available_input/GREATEST(1,CASE WHEN t.source_mode='fixture' THEN ${FIXTURE_BUYING_INPUT_BOUND} ELSE (t.snapshot->>'minimumInputReservation')::numeric END)),
     floor(t.available_output/COALESCE(p.output_per_call,512))))::int eligible_calls
     FROM broker_token_packs t JOIN broker_inference_routes r ON r.provider=t.provider
     LEFT JOIN broker_inference_buying_policies p ON p.grant_id=t.grant_id
@@ -275,7 +275,9 @@ export async function evaluateBuying(
     }
     const inputBound = Math.max(
       0,
-      ...eligible.map((r) => (r.source_mode === 'fixture' ? 20 : Number(r.input_bound))),
+      ...eligible.map((r) =>
+        r.source_mode === 'fixture' ? FIXTURE_BUYING_INPUT_BOUND : Number(r.input_bound),
+      ),
     );
     const candidates: BuyingCandidate[] = [],
       quoteSizes: BuyingCandidate[] = [];

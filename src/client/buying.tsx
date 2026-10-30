@@ -205,8 +205,8 @@ export function AgentBuying({
           <DetailRow label="Available input">{count(allowance.availableInputTokens)}</DetailRow>
           <DetailRow label="Available output">{count(allowance.availableOutputTokens)}</DetailRow>
           <div className="buying-note">
-            Call counts use each pack’s verified input reservation and configured output cap. Quota
-            from different packs is not combined.
+            Call counts use qualified input bounds, or the conservative fixture request bound, and
+            the configured output cap. Quota from different packs is not combined.
           </div>
           <DetailRow label="Unresolved usage">{allowance.unresolvedRequests} requests</DetailRow>
           <small>

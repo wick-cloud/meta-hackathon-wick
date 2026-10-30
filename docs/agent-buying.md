@@ -71,3 +71,21 @@ The full check completed with 774 passing tests across 57 files. All 68 selected
 With 14,000 closed grants, the sampled default agent page returned six rows including its pagination sentinel using 23 shared buffers; its selected-page allowance query returned one aggregate using seven buffers. The due-worker query returned one eligible grant using seven buffers and the partial due index. These are single local query-plan observations, not production benchmarks. Name substring search retains the owner-history scan limitation described above.
 
 No production configuration, deployment, immutable download, real provider qualification or paid model request was changed by this implementation.
+
+### Agent-style HTTP journey, October 30, 2026
+
+`tests/agent-buying-e2e.ts` runs the normal application, authentication, packaged SDK and PgBoss workers against a fresh loopback database named `broker_buying_e2e_test`. It forces fixture modes and creates disposable identities and $1 of pilot credit. Run it with `BUYING_E2E_DATABASE_URL=<that database URL> npx tsx tests/agent-buying-e2e.ts`; the database must be empty. No auction deadlines are rewritten and no worker function is invoked manually.
+
+The journey exposed a fixture-only sizing bug: the automatic buyer treated the 20-token minimum as enough for a non-empty request. Buying now reserves the existing 64 KiB API-body bound in fixture mode; fixture token counting is smaller than the serialized request. Agent call counts and supply drafts use the same conservative fixture bound. Real provider accounting contracts and gateway reservation rules are unchanged.
+
+The corrected run passed in 247 seconds:
+
+- Restricted agent key could read its balance; funding changes, internal Muse helpers and VM creation were denied.
+- The worker opened a 30-second auction for 65,536 fixture input tokens and 512 output tokens, with both Modal and Baseten fixture bids. Modal won at $0.1110.
+- The SDK completed a non-empty task, consuming 61 input and 50 output tokens, with no additional monetary charge. Replaying its operation key did not regenerate the answer.
+- The real minute scheduler purchased another pack after consumption. That refill finished 113 seconds after the first completion, demonstrating the possible gap with a zero-call refill trigger.
+- Pausing automatic buying held through a 65-second observation across the next worker cycle. Explicit agent purchases still followed the original grant permissions.
+- An over-limit purchase was rejected; a manual instant purchase succeeded. Key rotation rejected the old key and preserved the same budget history.
+- Three purchased packs charged $0.2270 in simulated credit, leaving $0.7730. Closing the grant prevented another completion and returned uncommitted funds.
+
+The fixture fix also passed all 774 repository tests, all 52 focused inference/database tests and the application/client builds. These are actual local HTTP/SDK/queue results with simulated Muse and inference providers, not live-model or Railway verification.

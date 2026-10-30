@@ -4,6 +4,7 @@ import { transaction } from '../marketplace/db.js';
 import { authority, assertRoute, clock, failure, runtime } from './data.js';
 import { OFFER_SELECT, packPrice } from './market.js';
 import type { InferenceProvider } from '../../shared/inference.js';
+import { FIXTURE_BUYING_INPUT_BOUND } from './buying-guard.js';
 
 /** Only this supplier's own published rates/allocation reach Muse. No customer prompts or rival policies. */
 export async function proposeTokenSupply(ctx: AppContext, actor: Actor) {
@@ -29,7 +30,7 @@ export async function proposeTokenSupply(ctx: AppContext, actor: Actor) {
     if (last && new Date(last).getTime() > now.getTime() - 60000)
       failure(429, 'muse_cooldown', 'Supply recommendations are limited to one per minute.');
     const route = runtime(ctx).routes.get(row.provider as InferenceProvider)!;
-    const inputTokens = route.mode === 'fixture' ? 20 : route.inputBound,
+    const inputTokens = route.mode === 'fixture' ? FIXTURE_BUYING_INPUT_BOUND : route.inputBound,
       outputTokens = Math.min(512, route.maximumOutputTokens);
     const packs = Math.min(
       8,

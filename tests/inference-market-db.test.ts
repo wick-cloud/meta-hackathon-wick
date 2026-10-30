@@ -7,6 +7,7 @@ import {
   listAgents,
   purchaseReceipt,
 } from '../src/server/inference/buying.js';
+import { FIXTURE_BUYING_INPUT_BOUND } from '../src/server/inference/buying-guard.js';
 import { proposeTokenSupply } from '../src/server/inference/supply.js';
 import { createMuseAdapter } from '../src/server/integrations/muse.js';
 import { randomUUID } from 'node:crypto';
@@ -299,6 +300,14 @@ describe.skipIf(!url)(
       const detail = await tokenOrderDetail(ctx, owner, orders[0].id);
       expect(detail.order.status).toBe('awarded');
       expect(detail.pack).not.toBeNull();
+      const agentKey = await agent(g.id);
+      const completion = await complete(ctx, agentKey.actor, {
+        ...call,
+        operationKey: randomUUID(),
+        max_tokens: 512,
+      });
+      expect(completion.choices[0].message.content).toBeTruthy();
+      expect(completion.usage.prompt_tokens).toBeLessThan(FIXTURE_BUYING_INPUT_BOUND);
       expect((await purchaseReceipt(ctx, owner, orders[0].id)).decision?.id).toBe(
         recommendation.id,
       );
@@ -344,7 +353,7 @@ describe.skipIf(!url)(
     });
     it('does not buy when allowance covers the trigger, or when an unresolved request exists', async () => {
       const g = await grant();
-      await buy(g.id);
+      await buy(g.id, { inputTokens: FIXTURE_BUYING_INPUT_BOUND, outputTokens: 1000 });
       await buyingPolicy(g.id, { refillAtCalls: 0 });
       expect((await evaluateBuying(ctx, owner, g.id)).status).toBe('blocked');
       expect((await buyingWorkspace(ctx, owner, g.id)).policy?.modelCalls).toBe(0);
@@ -508,7 +517,7 @@ describe.skipIf(!url)(
       const h = await grant();
       await buyingPolicy(h.id, { allowInstant: true, refillAtCalls: 8 });
       const instant = await evaluateBuying(ctx, owner, h.id);
-      await buy(h.id);
+      await buy(h.id, { inputTokens: FIXTURE_BUYING_INPUT_BOUND, outputTokens: 1000 });
       await expect(acceptBuying(ctx, owner, h.id, instant.id)).rejects.toMatchObject({
         code: 'purchase_not_needed',
       });
