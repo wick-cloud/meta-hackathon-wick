@@ -205,6 +205,20 @@ export async function settleRequest(
       code ?? null,
       result?.id ?? null,
     );
+    if (result?.platformOutputTokens)
+      await event(
+        db,
+        request.grant_id,
+        `platform-output:${request.id}`,
+        'platform_output_absorbed',
+        request.id,
+        undefined,
+        {
+          provider: pack.provider,
+          outputTokens: result.platformOutputTokens,
+          policy: 'modal-reasoning-one-token',
+        },
+      );
   });
 }
 export async function markUnknown(ctx: AppContext, id: string, error: InferenceUpstreamError) {

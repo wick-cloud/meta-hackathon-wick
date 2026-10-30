@@ -50,6 +50,8 @@ export interface AdapterResult {
   finishReason: string;
   inputTokens: number;
   outputTokens: number;
+  /** Provider diagnostic discrepancy paid by Wick, outside the agent's quota. */
+  platformOutputTokens?: 1;
 }
 export class InferenceUpstreamError extends Error {
   constructor(
@@ -127,6 +129,8 @@ const usageSchema = z.object({
     prompt_tokens: z.number().int().positive(),
     completion_tokens: z.number().int().nonnegative(),
     total_tokens: z.number().int().nonnegative(),
+    // Modal's serving stack can report this outside completion_tokens_details.
+    reasoning_tokens: z.number().int().nonnegative().optional(),
     completion_tokens_details: z
       .object({ reasoning_tokens: z.number().int().nonnegative().optional() })
       .optional(),
@@ -168,9 +172,19 @@ export async function dispatchReal(
     if (!parsed.success)
       throw new InferenceUpstreamError('missing_authoritative_usage', false, upstreamId);
     const data = parsed.data;
+    const reasoning = data.usage.reasoning_tokens;
+    const detailedReasoning = data.usage.completion_tokens_details?.reasoning_tokens;
+    // Modal reports one extra reasoning token on some truncated completions.
+    // Wick absorbs that single token; it never increases the buyer's usage.
+    const reasoningCount = detailedReasoning ?? reasoning ?? 0;
+    const platformOutputTokens =
+      route.provider === 'modal' && reasoningCount === data.usage.completion_tokens + 1 ? 1 : 0;
     if (
       data.usage.total_tokens !== data.usage.prompt_tokens + data.usage.completion_tokens ||
-      (data.usage.completion_tokens_details?.reasoning_tokens ?? 0) > data.usage.completion_tokens
+      reasoningCount > data.usage.completion_tokens + platformOutputTokens ||
+      (reasoning !== undefined &&
+        detailedReasoning !== undefined &&
+        reasoning !== detailedReasoning)
     )
       throw new InferenceUpstreamError('inconsistent_usage', false, data.id);
     return {
@@ -179,6 +193,7 @@ export async function dispatchReal(
       finishReason: data.choices[0].finish_reason,
       inputTokens: data.usage.prompt_tokens,
       outputTokens: data.usage.completion_tokens,
+      ...(platformOutputTokens ? { platformOutputTokens } : {}),
     };
   } catch (error) {
     if (error instanceof InferenceUpstreamError) throw error;

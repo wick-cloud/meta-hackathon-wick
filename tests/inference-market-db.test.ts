@@ -16,6 +16,7 @@ import type { Actor } from '../src/shared/types.js';
 import { INFERENCE_MODEL_ID } from '../src/shared/inference.js';
 import {
   createInferenceRuntime,
+  dispatchReal,
   fixtureInputTokens,
   InferenceUpstreamError,
 } from '../src/server/inference/runtime.js';
@@ -43,6 +44,7 @@ import {
   receipt,
   recoverRequest,
   resolveRequest,
+  settleRequest,
 } from '../src/server/inference/gateway.js';
 import { registerInference, maintainInference } from '../src/server/inference/index.js';
 import { transaction } from '../src/server/marketplace/db.js';
@@ -532,6 +534,137 @@ describe.skipIf(!url)(
         heldInputTokens: inputBound,
         heldOutputTokens: 64,
       });
+    });
+    it('records one platform-paid Modal token atomically without consuming extra agent quota', async () => {
+      const g = await createGrant(ctx, owner, {
+        operationKey: randomUUID(),
+        name: 'Modal platform-paid marker',
+        budgetCents: 1000,
+        allowedProviders: ['modal'],
+      });
+      const key = await agent(g.id),
+        pack = await buy(g.id);
+      const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            id: 'offline-modal-platform-receipt',
+            choices: [{ message: { content: '' }, finish_reason: 'length' }],
+            usage: {
+              prompt_tokens: 12,
+              completion_tokens: 8,
+              total_tokens: 20,
+              reasoning_tokens: 9,
+            },
+          }),
+        ),
+      );
+      ctx.inference!.dispatch = (route, input, id) =>
+        dispatchReal(
+          {
+            ...route,
+            apiKey: 'offline-modal-proxy-token',
+            nativeModel: 'offline-muse.modal.direct',
+          },
+          input,
+          id,
+          fetcher,
+        );
+      const result = await complete(ctx, key.actor, {
+        ...call,
+        max_tokens: 8,
+        operationKey: randomUUID(),
+      });
+      await settleRequest(ctx, result.id, {
+        id: 'offline-modal-platform-receipt',
+        content: '',
+        finishReason: 'length',
+        inputTokens: 12,
+        outputTokens: 8,
+        platformOutputTokens: 1,
+      });
+      const detail = await grantDetail(ctx, owner, g.id);
+      expect(detail.requests[0]).toMatchObject({
+        status: 'settled',
+        outputTokens: 8,
+        heldOutputTokens: 0,
+      });
+      expect(detail.packs[0]).toMatchObject({
+        consumedOutputTokens: 8,
+        availableOutputTokens: pack.outputTokens - 8,
+        heldOutputTokens: 0,
+      });
+      const events = await pool.query(
+        "SELECT details FROM broker_inference_events WHERE grant_id=$1 AND kind='platform_output_absorbed'",
+        [g.id],
+      );
+      expect(events.rows).toHaveLength(1);
+      expect(events.rows[0].details).toMatchObject({ provider: 'modal', outputTokens: 1 });
+      expect(fetcher).toHaveBeenCalledTimes(1);
+      expect(detail.grant.spentCents).toBe(pack.priceCents);
+    });
+    it('holds quota and quarantines Modal when reasoning exceeds the one-token platform allowance', async () => {
+      const g = await createGrant(ctx, owner, {
+        operationKey: randomUUID(),
+        name: 'Modal accounting regression',
+        budgetCents: 1000,
+        allowedProviders: ['modal'],
+      });
+      const key = await agent(g.id),
+        pack = await buy(g.id);
+      expect(pack.provider).toBe('modal');
+      // More than the observed one-token discrepancy must fail closed. No native call here.
+      const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            id: 'offline-modal-accounting-receipt',
+            choices: [{ message: { content: '' }, finish_reason: 'length' }],
+            usage: {
+              prompt_tokens: 161,
+              completion_tokens: 8,
+              total_tokens: 169,
+              reasoning_tokens: 10,
+            },
+          }),
+        ),
+      );
+      ctx.inference!.dispatch = (route, input, id) =>
+        dispatchReal(
+          {
+            ...route,
+            apiKey: 'offline-modal-proxy-token',
+            nativeModel: 'offline-muse.modal.direct',
+          },
+          input,
+          id,
+          fetcher,
+        );
+      const operationKey = randomUUID();
+      await expect(
+        complete(ctx, key.actor, { ...call, max_tokens: 8, operationKey }),
+      ).rejects.toMatchObject({ code: 'inference_outcome_unknown' });
+      const detail = await grantDetail(ctx, owner, g.id);
+      expect(detail.requests[0]).toMatchObject({
+        status: 'outcome_unknown',
+        failureCode: 'inconsistent_usage',
+        heldInputTokens: inputBound,
+        heldOutputTokens: 8,
+      });
+      expect(detail.packs[0]).toMatchObject({ heldInputTokens: inputBound, heldOutputTokens: 8 });
+      await initializeInference(ctx);
+      expect(
+        (
+          await pool.query(
+            "SELECT quarantined_at FROM broker_inference_routes WHERE provider='modal'",
+          )
+        ).rows[0].quarantined_at,
+      ).not.toBeNull();
+      expect(
+        (await quotes(ctx, owner, { grantId: g.id, inputTokens: 10000, outputTokens: 1000 })).items,
+      ).toHaveLength(0);
+      await expect(
+        complete(ctx, key.actor, { ...call, max_tokens: 8, operationKey }),
+      ).rejects.toMatchObject({ code: 'inference_pending' });
+      expect(fetcher).toHaveBeenCalledTimes(1);
     });
     it('rotates keys without resetting budget, cancels revoked pending orders, and isolates tenants', async () => {
       const g = await grant(),

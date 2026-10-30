@@ -376,6 +376,86 @@ describe('single-attempt provider requests and authoritative usage', () => {
     });
   });
 
+  it('uses Modal completion totals once when reasoning is reported at the top level', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+      response(
+        completion({
+          usage: {
+            prompt_tokens: 152,
+            completion_tokens: 187,
+            total_tokens: 339,
+            reasoning_tokens: 180,
+          },
+        }),
+      ),
+    );
+    expect(await dispatchReal(route('modal'), input, 'modal-reasoning', fetcher)).toMatchObject({
+      inputTokens: 152,
+      outputTokens: 187,
+    });
+  });
+
+  it.each([
+    { prompt_tokens: 161, completion_tokens: 8, total_tokens: 169, reasoning_tokens: 10 },
+    { prompt_tokens: 20, completion_tokens: 12, total_tokens: 32, reasoning_tokens: -1 },
+    { prompt_tokens: 20, completion_tokens: 12, total_tokens: 32, reasoning_tokens: 1.5 },
+    { prompt_tokens: 20, completion_tokens: 12, total_tokens: 32, reasoning_tokens: '8' },
+    {
+      prompt_tokens: 20,
+      completion_tokens: 12,
+      total_tokens: 32,
+      reasoning_tokens: 8,
+      completion_tokens_details: { reasoning_tokens: 7 },
+    },
+  ])('keeps contradictory or malformed top-level reasoning unresolved: %j', async (usage) => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(response(completion({ usage })));
+    await expect(
+      dispatchReal(route('modal'), input, 'modal-conflicting-reasoning', fetcher),
+    ).rejects.toMatchObject({ definite: false });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['top-level', 'nested', 'both'] as const)(
+    'absorbs exactly one extra Modal reasoning token reported %s without charging agent quota',
+    async (location) => {
+      const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+        response(
+          completion({
+            usage: {
+              prompt_tokens: 161,
+              completion_tokens: 8,
+              total_tokens: 169,
+              ...(location !== 'nested' ? { reasoning_tokens: 9 } : {}),
+              ...(location !== 'top-level'
+                ? { completion_tokens_details: { reasoning_tokens: 9 } }
+                : {}),
+            },
+          }),
+        ),
+      );
+      expect(
+        await dispatchReal(route('modal'), input, 'modal-platform-token', fetcher),
+      ).toMatchObject({ inputTokens: 161, outputTokens: 8, platformOutputTokens: 1 });
+    },
+  );
+  it('does not apply the Modal discrepancy allowance to Baseten', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+      response(
+        completion({
+          usage: {
+            prompt_tokens: 161,
+            completion_tokens: 8,
+            total_tokens: 169,
+            reasoning_tokens: 9,
+          },
+        }),
+      ),
+    );
+    await expect(
+      dispatchReal(route('baseten'), input, 'baseten-strict-usage', fetcher),
+    ).rejects.toMatchObject({ code: 'inconsistent_usage', definite: false });
+  });
+
   it.each([13, -1, 1.5, '10'])(
     'keeps contradictory or malformed reasoning count %s unresolved',
     async (reasoningTokens) => {
