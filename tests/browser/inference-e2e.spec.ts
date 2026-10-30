@@ -67,6 +67,7 @@ test('owner funds agent → saved 30-second token auction → prepaid inference 
     await expect(page.getByRole('heading', { name, exact: true })).toBeVisible();
     grantId = new URL(page.url()).pathname.split('/').at(-1)!;
     await picture(page, 'agent-real-postgres-desktop');
+    await page.getByRole('link', { name: 'Connection', exact: true }).click();
     await page.getByRole('button', { name: 'Create or replace API key', exact: true }).click();
     const keyResponse = page.waitForResponse(
       (r) =>
@@ -123,7 +124,7 @@ test('owner funds agent → saved 30-second token auction → prepaid inference 
     expect(completion.ok()).toBe(true);
     const result = await completion.json();
     expect(result.broker.mode).toBe('fixture');
-    await page.goto(`/agents/${grantId}`);
+    await page.goto(`/agents/${grantId}?tab=activity`);
     await expect(page.getByText(result.id.slice(0, 12), { exact: false })).toBeVisible();
     await picture(page, 'agent-consumed-real-postgres');
     await page.setViewportSize({ width: 390, height: 844 });
@@ -147,9 +148,9 @@ test('owner funds agent → saved 30-second token auction → prepaid inference 
         await supplier.page.request.get('/api/provider/inference/offering')
       ).json();
       if (offering.offering?.provider !== result.broker.provider) continue;
-      await supplier.page.goto('/provider/inference');
+      await supplier.page.goto('/provider/inference?tab=commitments');
       await expect(
-        supplier.page.getByRole('heading', { name: 'AI token supply', exact: true }),
+        supplier.page.getByRole('heading', { name: 'AI capacity', exact: true }),
       ).toBeVisible();
       await expect(
         supplier.page.getByRole('cell', { name: result.broker.packId.slice(0, 12), exact: false }),

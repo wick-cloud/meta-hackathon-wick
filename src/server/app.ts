@@ -6,6 +6,7 @@ import { resolve } from 'node:path';
 import { existsSync } from 'node:fs';
 import { ZodError } from 'zod';
 import type { Config } from './config.js';
+import { MAX_API_BODY_BYTES } from './http-limits.js';
 import { createPool, migrate } from './db.js';
 import { createAuth, createRequireActor, registerAuth, registerBrokerKeyAccess } from './auth.js';
 import { HttpError, type AppContext } from './context.js';
@@ -44,7 +45,7 @@ export async function buildApp(
         'token',
       ],
     },
-    bodyLimit: 64 * 1024,
+    bodyLimit: MAX_API_BODY_BYTES,
     trustProxy: config.nodeEnv === 'production',
     logController: new LogController({ disableRequestLogging: true }),
   });

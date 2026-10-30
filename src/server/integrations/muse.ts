@@ -547,6 +547,66 @@ export function createMuseAdapter(config: MuseConfig, options: MuseOptions = {})
 
   return {
     mode,
+    async selectTokenPurchase(input) {
+      if (
+        !Array.isArray(input.candidates) ||
+        input.candidates.length < 1 ||
+        input.candidates.length > 6
+      )
+        fail('Supply one to six server-priced token candidates.');
+      const ids = new Set<string>();
+      const candidates = input.candidates.map((c) => {
+        const id = string(c.id, 'Token candidate', 80);
+        if (ids.has(id) || !['auction', 'instant'].includes(c.mode))
+          fail('Invalid token candidate.');
+        ids.add(id);
+        return {
+          id,
+          mode: c.mode,
+          inputTokens: integer(c.inputTokens, 'Input quota', 1, 10_000_000),
+          outputTokens: integer(c.outputTokens, 'Output quota', 1, 1_000_000),
+          estimatedPriceCents: money(c.estimatedPriceCents, 'Candidate price', 0.01),
+          calls: integer(c.calls, 'Bounded calls', 1, 8),
+        };
+      });
+      if (mode === 'fixture')
+        return { candidateId: candidates[0]!.id, reason: 'refill', modelCalled: false, mode };
+      const value = object(
+        await complete(
+          'wick_token_procurement',
+          {
+            type: 'object',
+            additionalProperties: false,
+            required: ['candidateId', 'reason'],
+            properties: {
+              candidateId: { type: ['string', 'null'], enum: [...ids, null] },
+              reason: { type: 'string', enum: ['refill', 'small_pack', 'immediate_need', 'wait'] },
+            },
+          },
+          'Select one supplied token purchase or supply candidate, or null to wait. Prefer small packs that can be used before expiry; prefer an auction when existing allowance covers the next request. An instant candidate is permitted only when the server includes it. Never invent prices, quantities, deadlines, model identities or permissions. The server enforces budgets independently. Return a concise reason code, never reasoning text.',
+          {
+            kind: input.kind,
+            availableCalls: integer(input.availableCalls, 'Available calls', 0),
+            expiresInMinutes: integer(input.expiresInMinutes, 'Expiry minutes', 0, 10080),
+            candidates,
+          },
+          8000,
+        ),
+        'Muse token selection',
+      );
+      requireKeys(value, ['candidateId', 'reason'], 'Muse token selection');
+      if (
+        (value.candidateId !== null && !ids.has(String(value.candidateId))) ||
+        !['refill', 'small_pack', 'immediate_need', 'wait'].includes(String(value.reason))
+      )
+        fail('Muse selected an invalid token option.');
+      return {
+        candidateId: value.candidateId as string | null,
+        reason: value.reason as 'refill' | 'small_pack' | 'immediate_need' | 'wait',
+        modelCalled: true,
+        mode,
+      };
+    },
     async draftSchedule(input) {
       const description = descriptionInput(input.description);
       const catalog = catalogItems(input.catalog);

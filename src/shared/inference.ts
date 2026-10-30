@@ -49,6 +49,8 @@ export interface InferenceCatalog {
   routes: InferenceRoute[];
 }
 export interface TokenOfferingInput {
+  salesStartAt?: string | null;
+  salesEndAt?: string | null;
   operationKey: string;
   expectedRevision: number;
   active: boolean;

@@ -38,7 +38,17 @@ import {
   updateOffering,
 } from './market.js';
 import { complete, receipt, recoverRequest, resolveRequest } from './gateway.js';
+import { proposeTokenSupply } from './supply.js';
 import { issuePackKey, tokenPack } from './pack-access.js';
+import {
+  listAgents,
+  buyingWorkspace,
+  saveBuyingPolicy,
+  evaluateBuying,
+  acceptBuying,
+  purchaseReceipt,
+  maintainBuying,
+} from './buying.js';
 
 export async function registerInference(app: FastifyInstance, ctx: AppContext) {
   await initializeInference(ctx);
@@ -57,6 +67,23 @@ export async function registerInference(app: FastifyInstance, ctx: AppContext) {
       failure(403, 'owner_required', 'Only the owner can manage grant funding and agent keys.');
     return actor;
   }
+  app.get('/api/inference/agents', async (r) => listAgents(ctx, await owner(r), r.query));
+  app.get('/api/inference/grants/:id/buying', async (r) =>
+    buyingWorkspace(ctx, await owner(r), id(r)),
+  );
+  app.put('/api/inference/grants/:id/buying', async (r) =>
+    saveBuyingPolicy(ctx, await owner(r, true), id(r), r.body),
+  );
+  app.post('/api/inference/grants/:id/buying/evaluate', async (r) =>
+    evaluateBuying(ctx, await owner(r, true), id(r)),
+  );
+  app.post('/api/inference/grants/:id/buying/accept', async (r) => {
+    const body = z.object({ decisionId: z.uuid() }).strict().parse(r.body);
+    return acceptBuying(ctx, await owner(r, true), id(r), body.decisionId);
+  });
+  app.get('/api/token-orders/:id/purchase-receipt', async (r) =>
+    purchaseReceipt(ctx, await owner(r), id(r)),
+  );
   app.get('/api/inference/grants', async (r) => listGrants(ctx, await owner(r), r.query));
   app.post('/api/inference/grants', async (r) => createGrant(ctx, await owner(r, true), r.body));
   app.get('/api/inference/grants/:id', async (r) => grantDetail(ctx, await owner(r), id(r)));
@@ -123,6 +150,14 @@ export async function registerInference(app: FastifyInstance, ctx: AppContext) {
     };
   });
   app.post('/api/v1/chat/completions', async (r) => complete(ctx, await buyer(r, true), r.body));
+  app.post('/api/provider/inference/propose', async (r) => {
+    if (
+      r.headers.authorization !== undefined ||
+      r.headers.origin !== new URL(ctx.config.appUrl).origin
+    )
+      failure(403, 'owner_required', 'Use the signed-in provider workspace.');
+    return proposeTokenSupply(ctx, await ctx.requireActor(r, ['provider']));
+  });
   app.get('/api/provider/inference/offering', async (r) => ({
     offering: await providerOffering(ctx, await ctx.requireActor(r, ['provider'])),
     catalog: await catalog(ctx),
@@ -230,6 +265,10 @@ export async function maintainInference(ctx: AppContext) {
 }
 export async function startInferenceWorkers(ctx: AppContext) {
   const maintenance = 'broker-inference-maintenance';
+  const buying = 'broker-inference-buying';
+  await ctx.boss.createQueue(buying);
+  await ctx.boss.work(buying, { localConcurrency: 1 }, async () => maintainBuying(ctx));
+  await ctx.boss.schedule(buying, '* * * * *', {}, { tz: 'UTC' });
   await ctx.boss.createQueue(TOKEN_CLOSE_QUEUE);
   await ctx.boss.createQueue(maintenance);
   await ctx.boss.work<{ id: string }>(

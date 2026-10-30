@@ -1,0 +1,388 @@
+.buying-workspace {
+  display: grid;
+  gap: 20px;
+}
+.buying-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(260px, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+.buying-stack {
+  display: grid;
+  gap: 20px;
+  min-width: 0;
+}
+.buying-workspace .card,
+.buying-receipt {
+  min-width: 0;
+  padding: 22px;
+}
+.buying-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+.buying-section-heading h2 {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.buying-muse {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 550;
+}
+.buying-badge {
+  display: inline-flex;
+  padding: 3px 7px;
+  border-radius: 4px;
+  background: var(--surface-hover);
+  color: var(--soft);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.buying-recommendation {
+  background: linear-gradient(120deg, var(--accent-soft), var(--card) 65%);
+  border-color: var(--nav-active-line);
+}
+.buying-recommendation > h2 {
+  font-size: 21px;
+  font-weight: 550;
+  letter-spacing: -0.5px;
+  margin: 12px 0;
+}
+.buying-recommendation > p,
+.buying-receipt > p {
+  color: var(--soft);
+  font-size: 13px;
+  line-height: 1.7;
+}
+.buying-candidate {
+  margin: 20px 0;
+}
+.buying-actions {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  flex-wrap: wrap;
+  margin-top: 18px;
+}
+.buying-recommendation > small {
+  display: block;
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 17px;
+  line-height: 1.7;
+}
+.buying-note {
+  font-size: 12px !important;
+  color: var(--muted) !important;
+  line-height: 1.7;
+  margin-top: 16px;
+}
+.buying-allowance > small {
+  display: block;
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.7;
+}
+.buying-event {
+  display: grid;
+  grid-template-columns: 18px 1fr;
+  gap: 12px;
+  border-bottom: 1px solid var(--line);
+  padding: 15px 0;
+}
+.buying-event:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+.buying-event > span {
+  color: var(--accent);
+  padding-top: 3px;
+}
+.buying-event-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+}
+.buying-event-heading strong {
+  font-size: 12px;
+  font-weight: 550;
+  text-transform: capitalize;
+}
+.buying-event time {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.buying-event p {
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--muted);
+  margin-top: 5px;
+}
+.buying-event .text-link {
+  margin-top: 8px;
+  font-size: 12px;
+}
+.buying-form fieldset {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+.buying-form legend {
+  font-size: 13px;
+  font-weight: 550;
+  margin-bottom: 12px;
+}
+.buying-choices {
+  display: grid;
+  gap: 9px;
+  margin-bottom: 22px;
+}
+.buying-choice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 13px;
+}
+.buying-choice:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.buying-choice small,
+.buying-check small {
+  display: block;
+  font-size: 11px;
+  color: var(--soft);
+  margin-top: 4px;
+  line-height: 1.6;
+}
+.buying-choice input,
+.buying-check input {
+  margin-top: 4px;
+  accent-color: var(--accent);
+}
+.buying-form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+.buying-check {
+  display: flex;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--soft);
+  margin-top: 17px;
+  align-items: flex-start;
+}
+.buying-form-footer {
+  border-top: 1px solid var(--line);
+  padding-top: 18px;
+  margin-top: 23px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.buying-form-footer small {
+  font-size: 11px;
+  color: var(--muted);
+}
+.buying-warning {
+  padding: 12px;
+  background: var(--warning-soft);
+  color: var(--warning);
+  border-radius: 6px;
+  font-size: 12px;
+  margin: 14px 0;
+}
+.buying-rules {
+  padding-left: 18px;
+  font-size: 12px;
+  color: var(--soft);
+  line-height: 1.8;
+}
+.buying-rules li + li {
+  margin-top: 8px;
+}
+.buying-tabs {
+  display: flex;
+  gap: 24px;
+  border-bottom: 1px solid var(--line);
+  margin: 0 0 23px;
+}
+.buying-tabs a {
+  font-size: 13px;
+  color: var(--muted);
+  padding: 0 0 12px;
+  border-bottom: 2px solid transparent;
+}
+.buying-tabs a[aria-current='page'] {
+  border-color: var(--accent);
+  color: var(--ink);
+}
+.buying-receipt {
+  margin-top: 20px;
+}
+.agent-table-heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.agent-table-heading > svg {
+  color: var(--muted);
+}
+.agent-table td,
+.agent-table th {
+  white-space: nowrap;
+}
+.agent-table td small {
+  display: block;
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+.agent-table .money-column {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.agent-table-filters {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: center;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--line);
+}
+.agent-table-filters .field {
+  margin: 0;
+  max-width: 300px;
+}
+.agent-table-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 15px 20px;
+  border-top: 1px solid var(--line);
+  font-size: 12px;
+  color: var(--muted);
+}
+.agent-table-footer .button {
+  font-size: 12px;
+}
+.agent-table-shell {
+  padding: 0 !important;
+}
+.supply-allocation {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  margin-bottom: 20px;
+}
+.supply-allocation .card {
+  padding: 22px;
+}
+.supply-meter {
+  height: 8px;
+  background: var(--surface-hover);
+  border-radius: 4px;
+  overflow: hidden;
+  margin: 17px 0;
+}
+.supply-meter > span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+.supply-proposal {
+  padding: 20px;
+  margin: 20px 0;
+  background: var(--accent-soft);
+  border-radius: 8px;
+  border: 1px solid var(--nav-active-line);
+}
+.supply-proposal h3 {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+.supply-proposal p {
+  font-size: 12px;
+  color: var(--soft);
+  line-height: 1.7;
+}
+.supply-window {
+  padding-top: 20px;
+  margin-top: 20px;
+  border-top: 1px solid var(--line);
+}
+@media (max-width: 1050px) {
+  .buying-grid {
+    grid-template-columns: 1fr;
+  }
+  .buying-tabs {
+    gap: 18px;
+    flex-wrap: wrap;
+  }
+  .buying-event-heading {
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+}
+@media (max-width: 600px) {
+  .buying-form-grid,
+  .supply-allocation {
+    grid-template-columns: 1fr;
+  }
+  .buying-workspace .card,
+  .buying-receipt {
+    padding: 18px;
+  }
+  .agent-table-filters {
+    flex-wrap: wrap;
+  }
+  .agent-table-filters .field {
+    max-width: none;
+    flex: 1;
+    min-width: 140px;
+  }
+  .buying-tabs a {
+    font-size: 12px;
+  }
+  .buying-section-heading {
+    flex-wrap: wrap;
+  }
+  .buying-form input,
+  .buying-form select {
+    font-size: 16px;
+  }
+  .buying-event-heading time {
+    white-space: normal;
+  }
+}
+
+.buying-provider-summary {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  color: var(--muted);
+  font-size: 12px;
+  padding: 4px 0;
+}

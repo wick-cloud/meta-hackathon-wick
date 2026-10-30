@@ -101,19 +101,6 @@
 .inference-readiness-dot.ready {
   background: #70c8a2;
 }
-.inference-agent-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 16px;
-}
-.inference-agent-card {
-  display: block;
-  transition: border-color 0.15s;
-  min-width: 0;
-}
-.inference-agent-card:hover {
-  border-color: var(--accent);
-}
 .inference-section-heading {
   display: flex;
   justify-content: space-between;
@@ -514,9 +501,6 @@
   background: var(--accent-soft);
 }
 @media (max-width: 1200px) {
-  .inference-agent-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
   .inference-stats {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -533,7 +517,6 @@
   }
 }
 @media (max-width: 550px) {
-  .inference-agent-grid,
   .inference-pack-grid,
   .inference-form-grid,
   .inference-routes {

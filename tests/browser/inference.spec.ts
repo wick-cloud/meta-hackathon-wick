@@ -1,3 +1,4 @@
+import type { BuyingPolicy, BuyingDecision } from '../../src/shared/buying';
 import { expect, test, type Page } from '@playwright/test';
 import type {
   InferenceCatalog,
@@ -95,6 +96,8 @@ async function fixture(
     outstandingOutputTokens: 0,
     providerCommissionBps: 1500,
   };
+  let buyingPolicy: BuyingPolicy | null = null;
+  const buyingDecisions: BuyingDecision[] = [];
   await page.route('**/api/**', async (route) => {
     const request = route.request(),
       path = new URL(request.url()).pathname,
@@ -125,6 +128,76 @@ async function fixture(
           wickComputeCreditsSeparate: true,
         },
       });
+    if (path === '/api/inference/agents')
+      return route.fulfill({
+        json: {
+          items: grants.map((g) => ({
+            ...g,
+            buyingMode: buyingPolicy?.mode ?? null,
+            buyingPaused: buyingPolicy?.paused ?? false,
+            eligibleCalls: 0,
+            outputPerCall: 512,
+          })),
+        },
+      });
+    if (path === `/api/token-orders/${orderId}/purchase-receipt`)
+      return route.fulfill({
+        json: { decision: buyingDecisions.find((d) => d.orderId === orderId) ?? null },
+      });
+    if (path === `/api/inference/grants/${grantId}/buying`) {
+      if (method === 'PUT') {
+        const { operationKey, expectedRevision, ...values } = body;
+        buyingPolicy = {
+          ...values,
+          revision: expectedRevision + 1,
+          modelCalls: 0,
+          lastEvaluatedAt: null,
+          nextEvaluationAt: new Date(Date.now() - 1000).toISOString(),
+        };
+        return route.fulfill({ json: buyingPolicy });
+      }
+      return route.fulfill({
+        json: {
+          policy: buyingPolicy,
+          decisions: buyingDecisions,
+          allowance: {
+            availableInputTokens: 0,
+            availableOutputTokens: 0,
+            heldInputTokens: 0,
+            heldOutputTokens: 0,
+            eligibleCalls: 0,
+            outputPerCall: 512,
+            unresolvedRequests: 0,
+            pendingOrders: 0,
+          },
+        },
+      });
+    }
+    if (path === `/api/inference/grants/${grantId}/buying/evaluate`) {
+      const d: BuyingDecision = {
+        id: '66666666-6666-4666-8666-666666666666',
+        status: 'recommended',
+        reason: 'Fixture recommendation: one server-priced pack.',
+        mode: 'fixture',
+        modelCalled: false,
+        policyRevision: buyingPolicy!.revision,
+        candidate: {
+          id: 'auction-1',
+          mode: 'auction',
+          inputTokens: 1048576,
+          outputTokens: 512,
+          calls: 1,
+          maxTotalCents: 200,
+          estimatedPriceCents: 173.31,
+        },
+        baseline: null,
+        orderId: null,
+        createdAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 60000).toISOString(),
+      };
+      buyingDecisions.unshift(d);
+      return route.fulfill({ json: d });
+    }
     if (path === '/api/inference/models') return route.fulfill({ json: catalog });
     if (path === '/api/inference/grants' && method === 'GET')
       return route.fulfill({ json: { items: grants } });
@@ -193,28 +266,39 @@ async function fixture(
           ],
         },
       });
-    if (path === '/api/token-orders' && method === 'POST') {
+    if (
+      (path === '/api/token-orders' || path === `/api/inference/grants/${grantId}/buying/accept`) &&
+      method === 'POST'
+    ) {
+      const decision = path.endsWith('/accept')
+        ? buyingDecisions.find((d) => d.id === body.decisionId)
+        : undefined;
+      const purchase = decision?.candidate ?? body;
+      if (decision) {
+        decision.orderId = orderId;
+        decision.status = 'ordered';
+      }
       if (options.purchaseFailureOnce && writes.filter((write) => write.path === path).length === 1)
         return route.abort('failed');
       const order: TokenOrder = {
         id: orderId,
         grantId,
-        mode: body.mode,
+        mode: purchase.mode,
         sourceMode: 'fixture',
-        status: body.mode === 'instant' ? 'awarded' : 'open',
+        status: purchase.mode === 'instant' ? 'awarded' : 'open',
         modelId,
-        inputTokens: body.inputTokens,
-        outputTokens: body.outputTokens,
-        maxTotalCents: body.maxTotalCents,
-        priceCents: body.mode === 'instant' ? 250 : null,
-        provider: body.mode === 'instant' ? 'modal' : null,
+        inputTokens: purchase.inputTokens,
+        outputTokens: purchase.outputTokens,
+        maxTotalCents: purchase.maxTotalCents,
+        priceCents: purchase.mode === 'instant' ? 250 : null,
+        provider: purchase.mode === 'instant' ? 'modal' : null,
         closesAt: new Date(Date.now() + 30000).toISOString(),
-        expiresAt: future(),
+        expiresAt: grant.expiresAt,
         createdAt: new Date().toISOString(),
-        packId: body.mode === 'instant' ? packId : null,
+        packId: purchase.mode === 'instant' ? packId : null,
       };
       orders.push(order);
-      if (body.mode === 'instant')
+      if (purchase.mode === 'instant')
         packs.push({
           id: packId,
           orderId,
@@ -223,10 +307,10 @@ async function fixture(
           mode: 'fixture',
           modelId,
           status: 'active',
-          inputTokens: body.inputTokens,
-          outputTokens: body.outputTokens,
-          availableInputTokens: body.inputTokens,
-          availableOutputTokens: body.outputTokens,
+          inputTokens: purchase.inputTokens,
+          outputTokens: purchase.outputTokens,
+          availableInputTokens: purchase.inputTokens,
+          availableOutputTokens: purchase.outputTokens,
           heldInputTokens: 0,
           heldOutputTokens: 0,
           consumedInputTokens: 0,
@@ -235,7 +319,7 @@ async function fixture(
           retiredOutputTokens: 0,
           priceCents: 250,
           refundCents: 0,
-          expiresAt: future(),
+          expiresAt: grant.expiresAt,
           createdAt: new Date().toISOString(),
           retirementReason: null,
           revenueShare: {
@@ -285,6 +369,23 @@ async function fixture(
           })),
         },
       });
+    if (path === '/api/provider/inference/propose')
+      return route.fulfill({
+        json: {
+          mode: 'fixture',
+          modelCalled: false,
+          expectedRevision: offering.revision,
+          explanation: 'Review these rates. Nothing has been published.',
+          proposal: {
+            inputTokens: 1048576,
+            outputTokens: 512,
+            calls: 2,
+            estimatedPriceCents: 183.31,
+            inputRateMicrosPerMillion: 2500000,
+            outputRateMicrosPerMillion: 6000000,
+          },
+        },
+      });
     if (path === '/api/provider/inference/offering' && method === 'GET')
       return route.fulfill({
         json: { offering: options.configured === false ? null : offering, catalog },
@@ -320,8 +421,9 @@ test('owner creates a funded agent, saves a key once, adds funds and closes its 
     allowedProviders: ['modal', 'baseten'],
   });
   expect(f.writes[0]!.body.operationKey).toBeTruthy();
-  expect(Date.parse(f.writes[0]!.body.expiresAt) - Date.now()).toBeLessThanOrEqual(86400000);
-  expect(Date.parse(f.writes[0]!.body.expiresAt) - Date.now()).toBeGreaterThan(86300000);
+  expect(Date.parse(f.writes[0]!.body.expiresAt) - Date.now()).toBeLessThanOrEqual(7200000);
+  expect(Date.parse(f.writes[0]!.body.expiresAt) - Date.now()).toBeGreaterThan(7190000);
+  await page.getByRole('link', { name: 'Connection', exact: true }).click();
   await page.getByRole('button', { name: 'Create or replace API key', exact: true }).click();
   await expect(page.getByRole('dialog')).toContainText(
     'All previous keys for this agent will be revoked',
@@ -358,6 +460,7 @@ test('uncertain key creation never retries automatically or exposes a recoverabl
 }) => {
   const f = await fixture(page, { keyFailure: true });
   await page.goto(`/agents/${grantId}`);
+  await page.getByRole('link', { name: 'Connection', exact: true }).click();
   await page.getByRole('button', { name: 'Create or replace API key', exact: true }).click();
   await page.getByRole('button', { name: 'Issue replacement key' }).click();
   await expect(page.getByRole('alert')).toContainText('No automatic retry was made');
@@ -547,8 +650,10 @@ test('provider edits quoted rates and sees explicit commission without provision
 }) => {
   const f = await fixture(page, { role: 'provider' });
   await page.goto('/provider/inference');
-  await expect(page.getByRole('heading', { name: 'AI token supply', exact: true })).toBeVisible();
-  await expect(page.getByText('15% Broker commission on charged purchases')).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'AI capacity', exact: true })).toBeVisible();
+  await expect(
+    page.getByText('15% Broker commission on charged purchases', { exact: false }),
+  ).toBeVisible();
   await page.getByLabel('Input price · USD / million').fill('3.5');
   await page.getByRole('button', { name: 'Save token offering' }).click();
   await expect(
@@ -579,6 +684,7 @@ test('agent setup and purchase form fit a narrow viewport and preserve back navi
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/agents');
   await page.getByRole('link', { name: /Research assistant/ }).click();
+  await page.getByRole('link', { name: 'Connection', exact: true }).click();
   await page.getByText('JavaScript setup example', { exact: true }).click();
   await expect(page.locator('.inference-code-details pre')).toContainText('/api/v1');
   await expect(page.locator('.inference-code-details pre')).toContainText(
@@ -764,4 +870,86 @@ test('live token offers and the full purchase summary fit a phone', async ({ pag
     fullPage: true,
   });
   expect(f.writes).toHaveLength(0);
+});
+
+test('owner reviews buying policy before enabling, reviews a recommendation, and can pause buying', async ({
+  page,
+}) => {
+  const f = await fixture(page);
+  await page.goto(`/agents/${grantId}?tab=policy`);
+  await page.getByLabel('Automatic within limits', { exact: false }).check();
+  await page.getByRole('button', { name: 'Review changes', exact: true }).click();
+  expect(f.writes.filter((w) => w.path.endsWith('/buying'))).toHaveLength(0);
+  await expect(page.getByRole('dialog')).toContainText('Saving authorizes the buying worker');
+  await page.getByRole('button', { name: 'Save buying policy', exact: true }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(
+    page.getByText('The policy changed while you were editing.', { exact: false }),
+  ).toHaveCount(0);
+  expect(f.writes.find((w) => w.path.endsWith('/buying'))?.body.mode).toBe('automatic');
+  await page.getByRole('link', { name: 'Overview', exact: true }).click();
+  await page.getByRole('button', { name: 'Get Muse recommendation', exact: true }).click();
+  await page.getByRole('button', { name: 'Review purchase', exact: true }).click();
+  await expect(page.getByRole('dialog')).toContainText('1,048,576');
+  await expect(page.getByRole('dialog')).toContainText('$2.00');
+  expect(f.writes.filter((w) => w.path.endsWith('/accept'))).toHaveLength(0);
+  await page.getByRole('dialog').getByRole('button', { name: 'Cancel', exact: true }).click();
+  await page.getByRole('button', { name: 'Pause buying', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Resume buying', exact: true })).toBeVisible();
+  const saved = f.writes.filter((w) => w.path.endsWith('/buying')).at(-1)!.body;
+  expect(saved.paused).toBe(true);
+  expect(saved).not.toHaveProperty('modelCalls');
+  await page.screenshot({ path: test.info().outputPath('buying-overview.png'), fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});
+
+test('a reviewed Muse purchase opens its permanent countdown and receipt without duplicate submission', async ({
+  page,
+}) => {
+  const f = await fixture(page);
+  await page.goto(`/agents/${grantId}?tab=policy`);
+  await page.getByRole('button', { name: 'Review changes', exact: true }).click();
+  await page.getByRole('button', { name: 'Save buying policy', exact: true }).click();
+  await page.getByRole('link', { name: 'Overview', exact: true }).click();
+  await page.getByRole('button', { name: 'Get Muse recommendation', exact: true }).click();
+  await page.getByRole('button', { name: 'Review purchase', exact: true }).click();
+  await page.getByRole('button', { name: 'Start 30-second auction', exact: true }).click();
+  await expect(page).toHaveURL(`/token-orders/${orderId}`);
+  await expect(page.getByRole('heading', { name: 'Purchase receipt', exact: true })).toBeVisible();
+  await page.reload();
+  await expect(page.getByRole('heading', { name: 'Purchase receipt', exact: true })).toBeVisible();
+  expect(f.writes.filter((w) => w.path.endsWith('/accept'))).toHaveLength(1);
+  expect(f.writes.filter((w) => w.path.endsWith('/accept'))[0].body).toEqual({
+    decisionId: '66666666-6666-4666-8666-666666666666',
+  });
+});
+
+test('provider reviews Muse rates, publishes a selling window, and switches to commitments', async ({
+  page,
+}) => {
+  const f = await fixture(page, { role: 'provider' });
+  await page.goto('/provider/inference');
+  await page.getByRole('button', { name: 'Draft with Muse', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Fixture supply proposal' })).toBeVisible();
+  expect(f.writes.filter((w) => w.path.endsWith('/offering'))).toHaveLength(0);
+  await page.getByRole('button', { name: 'Apply rates to draft', exact: true }).click();
+  await expect(page.getByLabel('Input price · USD / million')).toHaveValue('2.5');
+  await page.getByLabel('Start accepting sales').fill('2026-11-01T00:00');
+  await page.getByLabel('Stop accepting sales').fill('2026-11-01T06:00');
+  await page.getByRole('button', { name: 'Save token offering', exact: true }).click();
+  const save = f.writes.find((w) => w.path.endsWith('/offering'))!;
+  expect(save.body.salesStartAt).toBeTruthy();
+  expect(Date.parse(save.body.salesEndAt) - Date.parse(save.body.salesStartAt)).toBe(6 * 3600000);
+  await page.getByRole('link', { name: 'Commitments', exact: true }).click();
+  await expect(page).toHaveURL('/provider/inference?tab=commitments');
+  await expect(
+    page.getByRole('heading', { name: 'Token commitments and earnings', exact: true }),
+  ).toBeVisible();
+  await expect(page.getByLabel('Input price · USD / million')).toHaveCount(0);
+  await page.getByRole('link', { name: 'Supply & pricing', exact: true }).click();
+  await page.evaluate(() => scrollTo(0, 0));
+  await page.screenshot({ path: test.info().outputPath('provider-supply.png'), fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });

@@ -244,6 +244,8 @@ export function offeringView(ctx: AppContext, row: Row): TokenOffering {
     revision: row.revision,
     active: row.active,
     autoBid: row.auto_bid,
+    salesStartAt: iso(row.sales_start_at),
+    salesEndAt: iso(row.sales_end_at),
     inputRateMicrosPerMillion: Number(row.input_rate),
     outputRateMicrosPerMillion: Number(row.output_rate),
     instantMarkupBps: row.instant_markup_bps,
