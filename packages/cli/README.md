@@ -30,3 +30,27 @@ Terminal access requires a TTY. Ctrl-] detaches, while Ctrl-C reaches the guest.
 Run `wick-broker --help` for buyer, agreement, billing, provider and Muse commands. Payload-bearing commands use `--file` (maximum 64 KiB); Muse commands also accept `--description`, `--strategy` or `--prompt`. List commands support bounded pagination with `--limit` and `--cursor`. `--json` keeps results on stdout and diagnostics off stdout.
 
 See the repository’s [developer access guide](https://github.com/wick-cloud/meta-hackathon-wick/blob/main/docs/developer-access.md) for examples and the public HTTP contract.
+
+## Token market and inference
+
+Use a browser-created grant key with `account:read`, `inference:read`, `tokens:buy` and `inference:use`. The grant owns the budget across key rotation; the CLI cannot fund or enlarge it.
+
+```sh
+wick-broker inference models --json
+wick-broker inference grant --json
+wick-broker inference quote --file token-amounts.json --json
+wick-broker tokens create --file token-order.json --operation-key tokens-001 --wait --json
+wick-broker tokens get <order-id> --json
+wick-broker tokens wait <order-id> --timeout 30 --json
+wick-broker inference packs --limit 20 --json
+wick-broker inference complete --file completion.json --operation-key completion-001 --json
+wick-broker inference receipt <request-id> --json
+```
+
+`token-amounts.json` contains positive `inputTokens` and `outputTokens`. `token-order.json` also contains `mode` (`auction` or `instant`), `maxTotalCents`, and an exact `quoteId` for instant purchase. `modelId` defaults to the server’s approved Meta contract. Read the catalog’s route qualification and fixture/real mode before placing an order.
+
+`completion.json` contains `model`, text-only `messages`, a positive `max_tokens` cap including reasoning, and optionally `stream: false`. Streaming, tools and images are not supported. Every completion consumes prepaid quota, is sent once, and requires its own stable operation key. A completed-key replay returns a receipt-only error; an uncertain outcome should be inspected through `inference receipt`, never retried with a new key. Refills require an explicit purchase and remain within the original grant budget. Ordinary unused pack quota is non-refundable.
+
+Completion JSON errors expose `inferenceRequestId` for `inference receipt`; `requestId` remains the HTTP correlation ID. If a transport timeout has no receipt ID, explicitly repeat the exact payload with its original `--operation-key` to recover that identifier without redispatching an existing invocation.
+
+Providers use `provider inference get`, `provider inference update --file offering.json --operation-key offering-001`, and `provider inference packs`. Updating supply requires its current `expectedRevision` and never rewrites accepted packs.

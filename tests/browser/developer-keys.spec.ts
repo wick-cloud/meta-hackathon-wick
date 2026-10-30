@@ -110,9 +110,9 @@ test('key setup gives copyable direct downloads and contains mobile overflow', a
   const install = await page.locator('.key-setup > pre').innerText();
   expect(install.split('\n')).toHaveLength(4);
   expect(install).not.toContain('\\n');
-  expect(install).toContain('/downloads/0.1.1/wick-cloud-broker-sdk-0.1.1.tgz');
-  expect(install).toContain('/downloads/0.1.1/wick-cloud-broker-cli-0.1.1.tgz');
-  expect(install).toContain('/downloads/0.1.1/wick-cloud-broker-mcp-0.1.1.tgz');
+  expect(install).toContain('/downloads/0.2.0/wick-cloud-broker-sdk-0.2.0.tgz');
+  expect(install).toContain('/downloads/0.2.0/wick-cloud-broker-cli-0.2.0.tgz');
+  expect(install).toContain('/downloads/0.2.0/wick-cloud-broker-mcp-0.2.0.tgz');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
     true,
   );

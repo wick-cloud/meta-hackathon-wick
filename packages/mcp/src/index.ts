@@ -14,7 +14,12 @@ export { TerminalSessions } from './terminals.js';
 interface Principal {
   id: string;
   role: string;
-  apiKey?: { id: string; scopes: string[]; limits: Record<string, number | undefined> };
+  apiKey?: {
+    id: string;
+    grantId?: string;
+    scopes: string[];
+    limits: Record<string, number | undefined>;
+  };
 }
 export interface BrokerTool {
   name: string;
@@ -31,6 +36,19 @@ function detailsLink(
 ): Record<string, string> {
   const value = data && typeof data === 'object' ? (data as Record<string, unknown>) : {};
   const resultId = typeof value.id === 'string' ? value.id : id;
+  if (operation.path.startsWith('/api/token-orders') && resultId)
+    return { ui: `${baseUrl}/token-orders/${encodeURIComponent(resultId)}` };
+  if (operation.path.startsWith('/api/provider/inference'))
+    return { ui: `${baseUrl}/provider/inference` };
+  if (operation.path.startsWith('/api/inference') || operation.path.startsWith('/api/v1/')) {
+    const grantId =
+      typeof value.grantId === 'string'
+        ? value.grantId
+        : operation.path === '/api/inference/grant'
+          ? resultId
+          : undefined;
+    return { ui: `${baseUrl}/agents${grantId ? `/${encodeURIComponent(grantId)}` : ''}` };
+  }
   if (operation.path.startsWith('/api/requests') && resultId)
     return { ui: `${baseUrl}/requests/${encodeURIComponent(resultId)}` };
   if (operation.path.startsWith('/api/agreements') && resultId)
@@ -45,6 +63,7 @@ function safeFailure(error: unknown) {
     code?: string;
     status?: number;
     requestId?: string;
+    inferenceRequestId?: string;
     operationKey?: string;
   };
   return {
@@ -53,6 +72,7 @@ function safeFailure(error: unknown) {
     code: value.code ?? 'tool_error',
     ...(value.status ? { status: value.status } : {}),
     ...(value.requestId ? { requestId: value.requestId } : {}),
+    ...(value.inferenceRequestId ? { inferenceRequestId: value.inferenceRequestId } : {}),
     ...(value.operationKey ? { operationKey: value.operationKey } : {}),
   };
 }
@@ -78,7 +98,7 @@ export function buildTools(
       name: operation.tool,
       description: operation.description,
       schema: operationSchema(operation),
-      readOnly: operation.method === 'GET',
+      readOnly: operation.method === 'GET' || operation.body === 'tokenQuote',
       run: async (input, signal) => {
         const parsed = operationSchema(operation).parse(input) as Record<string, unknown>;
         const id = typeof parsed.id === 'string' ? parsed.id : undefined;
@@ -95,6 +115,31 @@ export function buildTools(
           signal,
         });
         return { data, links: detailsLink(client.baseUrl, operation, data, id) };
+      },
+    });
+  }
+  if (principal.role === 'buyer' && scopes.has('inference:read')) {
+    const tokenWait = z
+      .object({
+        id: z.string().min(1).max(200),
+        timeoutSeconds: z.number().positive().max(30).optional(),
+      })
+      .strict();
+    tools.push({
+      name: 'token_order_wait',
+      description:
+        'Wait up to 30 seconds for an existing token auction. A pending result leaves its purchase hold unchanged and never creates another order.',
+      schema: tokenWait,
+      readOnly: true,
+      run: async (input, signal) => {
+        const parsed = tokenWait.parse(input);
+        return {
+          data: await client.inference.orders.wait(parsed.id, {
+            timeoutMs: (parsed.timeoutSeconds ?? 30) * 1000,
+            signal,
+          }),
+          links: { ui: `${client.baseUrl}/token-orders/${encodeURIComponent(parsed.id)}` },
+        };
       },
     });
   }
@@ -237,7 +282,7 @@ export async function createBrokerMcp(client: BrokerClient) {
     });
   const terminals = new TerminalSessions(client);
   const tools = buildTools(client, me.user as Principal, terminals);
-  const server = new McpServer({ name: 'wick-broker', version: '0.1.1' });
+  const server = new McpServer({ name: 'wick-broker', version: '0.2.0' });
   const outputSchema = z.object({ data: z.unknown(), links: z.record(z.string(), z.string()) });
   for (const tool of tools)
     server.registerTool(

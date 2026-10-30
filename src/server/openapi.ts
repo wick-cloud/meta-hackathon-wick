@@ -29,7 +29,7 @@ export function brokerOpenApi() {
       );
     if (route.path === '/api/orders')
       for (const [name, values] of Object.entries({
-        kind: ['all', 'auction', 'agreement'],
+        kind: ['all', 'auction', 'agreement', 'token'],
         status: ['all', 'active', 'history', 'attention'],
         created: ['all', '24h', '7d', '30d'],
       }))
@@ -102,7 +102,7 @@ export function brokerOpenApi() {
       title: 'Wick Broker API',
       version: '1.0.0',
       description:
-        'Buyer and provider access to the same Broker marketplace. Broker API keys (wbk_) are separate from Wick service credentials. All money is whole USD cents unless a field explicitly says micros. Operation limits are per operation, not aggregate spending budgets.',
+        'Buyer and provider access to the same Broker marketplace. Broker API keys (wbk_) are separate from Wick service credentials. All money is whole USD cents unless a field explicitly says micros. VM key limits are per operation; inference agent keys are bound to an aggregate funded grant. Inference supports buffered text only. Unknown usage retains token reservations and is never automatically resent.',
     },
     paths,
     components: {

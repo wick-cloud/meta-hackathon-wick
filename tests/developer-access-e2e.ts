@@ -17,6 +17,9 @@ import { migrate } from '../src/server/db.js';
 import { createWickAdapter } from '../src/server/integrations/wick.js';
 import { seedMarketplace } from '../src/server/marketplace/index.js';
 import type { Actor } from '../src/shared/types.js';
+import { applyCreditEntry } from '../src/server/agreements/credits.js';
+import { transaction } from '../src/server/marketplace/db.js';
+import type { InferenceGrant } from '../src/shared/inference.js';
 
 const databaseUrl =
   process.env.DEVELOPER_E2E_DATABASE_URL ??
@@ -59,6 +62,7 @@ const config = loadConfig({
   BETTER_AUTH_SECRET: randomBytes(32).toString('base64url'),
   WICK_MODE: 'fixture',
   MUSE_MODE: 'fixture',
+  INFERENCE_MARKET_MODE: 'fixture',
   LOG_LEVEL: 'silent',
 });
 const pool = new Pool({ connectionString: databaseUrl, max: 5 });
@@ -67,6 +71,7 @@ let buyerCookie = '',
   providerCookie = '';
 const ownedRequests = new Set<string>(),
   ownedVMs = new Set<string>(),
+  ownedGrants = new Set<string>(),
   issued: { cookie: string; keyId: string }[] = [];
 const peers: McpPeer[] = [];
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -485,6 +490,112 @@ async function main() {
       .rows[0].n,
     0,
   );
+  // Same app and database: each packaged client buys prepaid inference and uses quota.
+  await transaction(pool, (db) =>
+    applyCreditEntry(db, buyerId, {
+      operationKey: `fund-inference-e2e-${runId}`,
+      kind: 'grant',
+      balanceDeltaCents: 1000,
+      reservedDeltaCents: 0,
+      description: 'Disposable inference client test credit',
+    }),
+  );
+  const agentGrant = await browser<InferenceGrant>(buyerCookie, '/api/inference/grants', 'POST', {
+    operationKey: `agent-e2e-${runId}`,
+    name: 'Three-client inference task',
+    budgetCents: 1000,
+  });
+  ownedGrants.add(agentGrant.id);
+  const agentKey = await browser<{ key: { id: string }; token: string }>(
+    buyerCookie,
+    `/api/inference/grants/${agentGrant.id}/keys`,
+    'POST',
+    {},
+  );
+  secrets.add(agentKey.token);
+  issued.push({ cookie: buyerCookie, keyId: agentKey.key.id });
+  const agent = new BrokerClient({ baseUrl, apiKey: agentKey.token });
+  const tokenInput = { inputTokens: 10000, outputTokens: 2000 };
+  const inferenceInput = {
+    model: 'meta/muse-spark-open',
+    messages: [{ role: 'user' as const, content: 'Client fixture proof' }],
+    max_tokens: 64,
+  };
+  const auction = await agent.inference.orders.create(
+    { ...tokenInput, mode: 'auction', maxTotalCents: 100 },
+    { operationKey: `sdk-tokens-${runId}` },
+  );
+  const tokenResult = await agent.inference.orders.wait(auction.id, {
+    timeoutMs: 45000,
+    pollIntervalMs: 1000,
+  });
+  assert.equal(tokenResult.resource?.order.status, 'awarded');
+  const sdkCompletion = await agent.inference.complete(inferenceInput, {
+    operationKey: `sdk-completion-${runId}`,
+  });
+  assert.equal(sdkCompletion.broker.mode, 'fixture');
+  assert.equal((await agent.inference.receipt(sdkCompletion.id)).status, 'settled');
+  const cliQuote = await cli(
+    agentKey.token,
+    ['inference', 'quote', '--file', '-', '--json'],
+    tokenInput,
+  );
+  const cliOrder = await cli(
+    agentKey.token,
+    ['tokens', 'create', '--file', '-', '--operation-key', `cli-tokens-${runId}`, '--json'],
+    { ...tokenInput, mode: 'instant', quoteId: cliQuote.items[0].quoteId, maxTotalCents: 100 },
+  );
+  assert.equal(cliOrder.status, 'awarded');
+  const cliCompletion = await cli(
+    agentKey.token,
+    [
+      'inference',
+      'complete',
+      '--file',
+      '-',
+      '--operation-key',
+      `cli-completion-${runId}`,
+      '--json',
+    ],
+    inferenceInput,
+  );
+  assert.equal(cliCompletion.broker.mode, 'fixture');
+  const agentMcp = new McpPeer(agentKey.token);
+  peers.push(agentMcp);
+  await agentMcp.initialize();
+  const agentTools = (await agentMcp.call('tools/list')).result.tools.map(
+    (t: { name: string }) => t.name,
+  );
+  assert(agentTools.includes('inference_complete'));
+  assert(!agentTools.includes('terminal_open') && !agentTools.includes('auction_create'));
+  const mcpQuote = await agentMcp.tool('inference_quotes_get', { input: tokenInput });
+  const mcpOrder = await agentMcp.tool('token_order_create', {
+    operationKey: `mcp-tokens-${runId}`,
+    input: {
+      ...tokenInput,
+      mode: 'instant',
+      quoteId: mcpQuote.items[0].quoteId,
+      maxTotalCents: 100,
+    },
+  });
+  assert.equal(mcpOrder.status, 'awarded');
+  const mcpCompletion = await agentMcp.tool('inference_complete', {
+    operationKey: `mcp-completion-${runId}`,
+    input: inferenceInput,
+  });
+  assert.equal(mcpCompletion.broker.mode, 'fixture');
+  assert.equal(
+    (await agentMcp.tool('inference_receipt_get', { id: mcpCompletion.id })).status,
+    'settled',
+  );
+  assert((await buyer.orders.list({ kind: 'token' })).items.some((r) => r.id === auction.id));
+  await browser(buyerCookie, `/api/inference/grants/${agentGrant.id}/close`, 'POST', {
+    operationKey: `close-agent-${runId}`,
+  });
+  await assert.rejects(
+    () => agent.inference.complete(inferenceInput, { operationKey: `closed-agent-${runId}` }),
+    { status: 409 },
+  );
   assert.equal((await buyer.billing.invoices()).items.filter((i) => i.vmId === vm.id).length, 1);
   await buyer.vms.terminate(vm.id, { operationKey: `terminate-${runId}` });
   for (let i = 0; i < 45; i++) {
@@ -515,6 +626,10 @@ async function main() {
     nonbindingAgreementPreview: true,
     revocationVerified: true,
     cleanupConfirmed: true,
+    inferenceGrantIsolation: true,
+    inferenceThirtySecondAuction: true,
+    inferenceSdkCliMcpPurchasesAndCompletions: true,
+    inferenceClosureVerified: true,
     paidNativeAllocations: 0,
   };
 }
@@ -529,6 +644,10 @@ async function cleanup() {
       }
     }
     if (app && buyerCookie) {
+      for (const id of ownedGrants)
+        await browser(buyerCookie, `/api/inference/grants/${id}/close`, 'POST', {
+          operationKey: `cleanup-agent-${runId}-${id}`,
+        }).catch(() => {});
       // Recover a lost create response by the original owner/operation key, never by allocating a replacement.
       const receipt = (
         await pool.query(

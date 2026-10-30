@@ -14,6 +14,7 @@ export const brokerSecretDigest = digest;
 export function keySummary(row: Record<string, any>): BrokerKeySummary {
   return {
     id: row.id,
+    ...(row.grant_id ? { grantId: row.grant_id } : {}),
     name: row.name,
     prefix: row.prefix,
     scopes: row.scopes,
@@ -119,7 +120,7 @@ export async function registerDeveloperKeys(app: FastifyInstance, ctx: AppContex
     }
     const rows = (
       await ctx.pool.query(
-        'SELECT id,name,prefix,scopes,limits,created_at,created_at::text cursor_created_at,expires_at,last_used_at,revoked_at FROM broker_api_keys WHERE user_id=$1 AND ($2::timestamptz IS NULL OR(created_at,id)<($2,$3::uuid)) ORDER BY created_at DESC,id DESC LIMIT $4',
+        'SELECT id,name,prefix,scopes,limits,grant_id,created_at,created_at::text cursor_created_at,expires_at,last_used_at,revoked_at FROM broker_api_keys WHERE user_id=$1 AND ($2::timestamptz IS NULL OR(created_at,id)<($2,$3::uuid)) ORDER BY created_at DESC,id DESC LIMIT $4',
         [actor.id, cursor?.[0] ?? null, cursor?.[1] ?? null, limit + 1],
       )
     ).rows;

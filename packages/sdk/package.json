@@ -1,6 +1,6 @@
 {
   "name": "@wick-cloud/broker-sdk",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Typed customer access to Wick Broker orders, supply and terminals",
   "type": "module",
   "license": "UNLICENSED",

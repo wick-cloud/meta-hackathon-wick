@@ -12,8 +12,14 @@ import {
   RotateCcw,
   SquareTerminal,
   Wallet,
+  Sparkles,
 } from 'lucide-react';
-import type { OrderCreatedFilter, OrdersPage, OrderStatusFilter } from '../shared/orders';
+import type {
+  OrderCreatedFilter,
+  OrderListItem,
+  OrdersPage,
+  OrderStatusFilter,
+} from '../shared/orders';
 import { dateTime, money } from './api';
 import {
   EmptyState,
@@ -41,12 +47,16 @@ const shortTime = (value: string, timeZone?: string) =>
   });
 const shortDay = (value: string) =>
   new Date(value).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+const liveAuction = (item: OrderListItem) =>
+  item.kind === 'token'
+    ? item.tokenMode === 'auction' && item.status === 'open'
+    : item.kind === 'auction' && item.auctionStatus === 'open';
 
 export function Orders({ search }: { search: string }) {
   const navigate = useNavigate(),
     now = useNow(),
     query = new URLSearchParams(search);
-  const kind = choices(query.get('kind'), ['all', 'auction', 'agreement'] as const, 'all');
+  const kind = choices(query.get('kind'), ['all', 'auction', 'agreement', 'token'] as const, 'all');
   const status = choices<OrderStatusFilter>(
     query.get('status'),
     ['all', 'active', 'history', 'attention'],
@@ -68,7 +78,7 @@ export function Orders({ search }: { search: string }) {
     () => (list.data ? new Date(list.data.serverNow).getTime() - Date.now() : 0),
     [list.data?.serverNow],
   );
-  const live = items.some((item) => item.kind === 'auction' && item.auctionStatus === 'open');
+  const live = items.some(liveAuction);
   const changing =
     live ||
     items.some((item) =>
@@ -110,7 +120,7 @@ export function Orders({ search }: { search: string }) {
               </span>
             )}
           </div>
-          <p>Auctions and scheduled capacity, from request to completion.</p>
+          <p>VM auctions, scheduled capacity and AI tokens, from request to completion.</p>
         </div>
         <div className="orders-header-actions">
           <Link href="/credits" className="orders-wallet">
@@ -136,6 +146,7 @@ export function Orders({ search }: { search: string }) {
                 <option value="all">All types</option>
                 <option value="auction">Instant</option>
                 <option value="agreement">Scheduled</option>
+                <option value="token">AI tokens</option>
               </select>
             </label>
             <label className="field">
@@ -242,6 +253,8 @@ export function Orders({ search }: { search: string }) {
                           <span className={`orders-kind-icon ${item.kind}`} aria-hidden="true">
                             {item.kind === 'agreement' ? (
                               <Layers3 size={16} />
+                            ) : item.kind === 'token' ? (
+                              <Sparkles size={16} />
                             ) : (
                               <Radio size={16} />
                             )}
@@ -256,7 +269,11 @@ export function Orders({ search }: { search: string }) {
                             </Link>
                             <div className="orders-reference">
                               <span>
-                                {item.kind === 'agreement' ? '7-day agreement' : 'Instant auction'}
+                                {item.kind === 'agreement'
+                                  ? '7-day agreement'
+                                  : item.kind === 'token'
+                                    ? `AI tokens · ${item.tokenMode === 'instant' ? 'Instant' : 'Auction'}`
+                                    : 'Instant auction'}
                               </span>
                               {item.source?.kind === 'api_key' && (
                                 <span title={`Created through Broker API key ${item.source.keyId}`}>
@@ -267,6 +284,12 @@ export function Orders({ search }: { search: string }) {
                                 {item.reference}
                               </code>
                             </div>
+                            {item.kind === 'token' && (
+                              <div className="orders-created">
+                                {item.modelId} · {(item.inputTokens ?? 0).toLocaleString()} input /{' '}
+                                {(item.outputTokens ?? 0).toLocaleString()} output
+                              </div>
+                            )}
                             <time
                               className="orders-created"
                               dateTime={item.createdAt}
@@ -302,7 +325,9 @@ export function Orders({ search }: { search: string }) {
                                 <span>
                                   {item.bidCount} {item.bidCount === 1 ? 'bid' : 'bids'}
                                 </span>
-                                {item.vmStatus && <span>VM {item.vmStatus}</span>}
+                                {item.kind !== 'token' && item.vmStatus && (
+                                  <span>VM {item.vmStatus}</span>
+                                )}
                               </>
                             )}
                             {(item.status === 'ending' ||
@@ -339,7 +364,7 @@ export function Orders({ search }: { search: string }) {
                         )}
                       </td>
                       <td className="orders-timing-cell">
-                        {item.kind === 'auction' && item.auctionStatus === 'open' ? (
+                        {liveAuction(item) ? (
                           <>
                             <span className="orders-time-label">Auction closes in</span>
                             <strong className="market-live orders-countdown">
@@ -373,7 +398,9 @@ export function Orders({ search }: { search: string }) {
                               {item.expiresAt
                                 ? item.kind === 'agreement'
                                   ? 'Agreement expiry'
-                                  : 'Rental expiry'
+                                  : item.kind === 'token'
+                                    ? 'Pack expiry'
+                                    : 'Rental expiry'
                                 : 'Created'}
                             </span>
                             <time
@@ -394,13 +421,13 @@ export function Orders({ search }: { search: string }) {
                             View
                             <ArrowRight size={13} />
                           </Link>
-                          {item.vmUrl && (
+                          {item.kind !== 'token' && item.vmUrl && (
                             <Link href={item.vmUrl} className="text-link orders-secondary-action">
                               <SquareTerminal size={12} />
                               Environment
                             </Link>
                           )}
-                          {item.retryUrl && (
+                          {item.kind !== 'token' && item.retryUrl && (
                             <Link
                               href={item.retryUrl}
                               className="text-link orders-secondary-action"
@@ -425,7 +452,7 @@ export function Orders({ search }: { search: string }) {
               description={
                 filtered
                   ? 'No orders match these filters. Clear them to return to the full list.'
-                  : 'Your instant auctions and scheduled agreements will appear here.'
+                  : 'Your VM auctions, scheduled agreements and AI token orders will appear here.'
               }
             >
               {filtered ? (

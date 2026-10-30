@@ -1,4 +1,4 @@
-export type OrderKind = 'auction' | 'agreement';
+export type OrderKind = 'auction' | 'agreement' | 'token';
 export type OrderStatusFilter = 'all' | 'active' | 'history' | 'attention';
 export type OrderCreatedFilter = 'all' | '24h' | '7d' | '30d';
 
@@ -9,6 +9,11 @@ export interface OrderListItem {
   kind: OrderKind;
   reference: string;
   title: string;
+  modelId?: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  tokenMode?: 'auction' | 'instant';
+  grantId?: string;
   source?: { kind: 'api_key'; keyId: string };
   status: string;
   auctionStatus?: string;

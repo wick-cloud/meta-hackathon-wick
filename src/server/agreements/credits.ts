@@ -61,6 +61,7 @@ export async function applyCreditEntry(
     balanceDeltaCents: number;
     reservedDeltaCents: number;
     agreementId?: string;
+    grantId?: string;
     description: string;
     inputFingerprint?: string;
   },
@@ -77,6 +78,7 @@ export async function applyCreditEntry(
       input.reservedDeltaCents,
       input.agreementId ?? null,
       input.description,
+      ...(input.grantId ? [input.grantId] : []),
     ]);
   const prior = (
     await db.query(
@@ -110,7 +112,7 @@ export async function applyCreditEntry(
     [buyerId, balance, reserved],
   );
   await db.query(
-    'INSERT INTO broker_credit_ledger(buyer_id,agreement_id,operation_key,kind,amount_cents,reserved_delta_cents,description,input_fingerprint) VALUES($1,$2,$3,$4,$5,$6,$7,$8)',
+    'INSERT INTO broker_credit_ledger(buyer_id,agreement_id,operation_key,kind,amount_cents,reserved_delta_cents,description,input_fingerprint,grant_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)',
     [
       buyerId,
       input.agreementId ?? null,
@@ -120,6 +122,7 @@ export async function applyCreditEntry(
       input.reservedDeltaCents,
       input.description,
       digest,
+      input.grantId ?? null,
     ],
   );
   return { wallet: wallet({ balance_cents: balance, reserved_cents: reserved }), replayed: false };
@@ -148,6 +151,7 @@ export async function registerCreditRoutes(app: FastifyInstance, ctx: AppContext
           amountCents: Number(r.amount_cents),
           reservedDeltaCents: Number(r.reserved_delta_cents),
           ...(r.agreement_id ? { agreementId: r.agreement_id } : {}),
+          ...(r.grant_id ? { grantId: r.grant_id } : {}),
           operationKey: r.operation_key,
           createdAt: new Date(r.created_at).toISOString(),
           description: r.description,

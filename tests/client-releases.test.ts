@@ -7,7 +7,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it } from 'vitest';
 import { registerClientReleases } from '../src/server/client-releases.js';
 
-const versions = ['0.1.0', '0.1.1'];
+const versions = ['0.1.0', '0.1.1', '0.2.0'];
 const fileNames = (version: string) => [
   `wick-cloud-broker-sdk-${version}.tgz`,
   `wick-cloud-broker-cli-${version}.tgz`,

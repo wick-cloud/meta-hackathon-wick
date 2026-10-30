@@ -17,6 +17,9 @@ export const BROKER_SCOPES = [
   'provider:capacity:write',
   'provider:policy:write',
   'provider:offerings:write',
+  'inference:read',
+  'inference:use',
+  'tokens:buy',
 ] as const;
 export type BrokerScope = (typeof BROKER_SCOPES)[number];
 export interface BrokerKeyLimits {
@@ -26,11 +29,13 @@ export interface BrokerKeyLimits {
 }
 export interface BrokerKeyAuthority {
   id: string;
+  grantId?: string;
   scopes: BrokerScope[];
   limits: BrokerKeyLimits;
 }
 export interface BrokerKeySummary {
   id: string;
+  grantId?: string;
   name: string;
   prefix: string;
   scopes: BrokerScope[];
@@ -41,8 +46,14 @@ export interface BrokerKeySummary {
   revokedAt: string | null;
 }
 export const buyerScopes: readonly BrokerScope[] = BROKER_SCOPES.filter(
-  (s) => !s.startsWith('provider:'),
+  (s) => !s.startsWith('provider:') && !s.startsWith('inference:') && s !== 'tokens:buy',
 );
+export const agentScopes: readonly BrokerScope[] = [
+  'account:read',
+  'inference:read',
+  'inference:use',
+  'tokens:buy',
+];
 export const providerScopes: readonly BrokerScope[] = BROKER_SCOPES.filter(
   (s) => ['account:read', 'catalog:read', 'muse:propose'].includes(s) || s.startsWith('provider:'),
 );
@@ -66,6 +77,19 @@ const route = (
 ): BrokerPublicRoute => ({ method, path, scope, ...(mutation ? { mutation: true } : {}) });
 /** Explicit machine-access allowlist. Missing routes fail closed, including admin and auth. */
 export const BROKER_PUBLIC_ROUTES: readonly BrokerPublicRoute[] = [
+  route('GET', '/api/inference/models', 'inference:read'),
+  route('GET', '/api/inference/grant', 'inference:read'),
+  route('GET', '/api/inference/packs', 'inference:read'),
+  route('POST', '/api/inference/quotes', 'inference:read'),
+  route('POST', '/api/token-orders', 'tokens:buy', true),
+  route('GET', '/api/token-orders/:id', 'inference:read'),
+  route('POST', '/api/token-orders/:id/cancel', 'tokens:buy', true),
+  route('GET', '/api/inference/requests/:id', 'inference:read'),
+  route('GET', '/api/v1/models', 'inference:read'),
+  route('POST', '/api/v1/chat/completions', 'inference:use', true),
+  route('GET', '/api/provider/inference/offering', 'provider:read'),
+  route('PUT', '/api/provider/inference/offering', 'provider:offerings:write', true),
+  route('GET', '/api/provider/inference/packs', 'provider:read'),
   route('GET', '/api/me', 'account:read'),
   route('GET', '/api/catalog', 'catalog:read'),
   route('GET', '/api/orders', 'orders:read'),

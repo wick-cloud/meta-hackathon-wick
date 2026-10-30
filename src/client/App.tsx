@@ -19,6 +19,7 @@ import {
   Wallet,
   CalendarClock,
   KeyRound,
+  Bot,
 } from 'lucide-react';
 import {
   api,
@@ -37,6 +38,7 @@ import { AgreementComposer, AgreementDetail, Credits } from './agreements';
 import { ProviderScheduled } from './scheduled-provider';
 import { AdminCreditGrant } from './admin-credits';
 import { DeveloperKeys } from './developer-keys';
+import { Agents, AgentDetail, TokenComposer, TokenOrderPage, ProviderInference } from './inference';
 import {
   ProviderCapacity,
   ProviderPolicy,
@@ -50,6 +52,7 @@ import {
 const buyerNavigation = [
   { path: '/orders', label: 'Orders', icon: ListOrdered },
   { path: '/new', label: 'New order', icon: Plus },
+  { path: '/agents', label: 'Agents', icon: Bot },
   { path: '/alternatives', label: 'Alternatives', icon: Sparkles },
   { path: '/vms', label: 'My VMs', icon: LayoutGrid },
   { path: '/invoices', label: 'Invoices', icon: CircleDollarSign },
@@ -62,6 +65,7 @@ const providerNavigation = [
   { path: '/provider/requests', label: 'Requests', icon: Box },
   { path: '/provider/offerings', label: 'Offerings', icon: LayoutGrid },
   { path: '/provider/scheduled', label: 'Scheduled market', icon: CalendarClock },
+  { path: '/provider/inference', label: 'AI token supply', icon: Sparkles },
   { path: '/provider/earnings', label: 'Earnings', icon: CircleDollarSign },
   { path: '/provider/activity', label: 'Activity', icon: Activity },
   { path: '/keys', label: 'API keys', icon: KeyRound },
@@ -364,6 +368,13 @@ export default function App() {
   if (path === '/keys' && user.role !== 'admin') content = <DeveloperKeys key={user.id} />;
   else if (user.role === 'buyer') {
     if (path === '/orders') content = <Orders search={search} />;
+    else if (path === '/agents') content = <Agents key={user.id} />;
+    else if (path.startsWith('/agents/'))
+      content = <AgentDetail key={`${user.id}:${path}`} id={path.split('/')[2]!} />;
+    else if (path === '/token-orders/new')
+      content = <TokenComposer key={location} search={search} />;
+    else if (path.startsWith('/token-orders/'))
+      content = <TokenOrderPage key={path} id={path.split('/')[2]!} />;
     else if (path.startsWith('/orders/'))
       content = <AgreementDetail key={path} id={path.split('/')[2]!} />;
     else if (path === '/agreements/new') content = <AgreementComposer />;
@@ -381,12 +392,26 @@ export default function App() {
     else if (path.startsWith('/vms/')) content = <VMDetail id={path.split('/')[2]!} />;
     else if (path === '/vms') content = <MyVMs />;
     else if (path === '/invoices') content = <Invoices />;
-    else content = <NewEnvironment key={location} />;
+    else
+      content = (
+        <>
+          <Link href="/token-orders/new" className="inference-new-order-link">
+            <Sparkles size={20} />
+            <div>
+              <strong>Give your agent AI tokens</strong>
+              <span>Buy Meta model input and output token packs with a funded agent budget.</span>
+            </div>
+            <ArrowRight size={17} />
+          </Link>
+          <NewEnvironment key={location} />
+        </>
+      );
   } else if (user.role === 'provider') {
     if (path === '/provider/policy') content = <ProviderPolicy />;
     else if (path === '/provider/requests') content = <ProviderRequests />;
     else if (path === '/provider/offerings') content = <ProviderOfferings />;
     else if (path === '/provider/scheduled') content = <ProviderScheduled />;
+    else if (path === '/provider/inference') content = <ProviderInference />;
     else if (path === '/provider/earnings') content = <ProviderEarnings />;
     else if (path === '/provider/activity') content = <ProviderActivity />;
     else content = <ProviderCapacity />;
@@ -399,18 +424,24 @@ export default function App() {
     );
   const currentNav =
     navigation.find((item) => path === item.path || path.startsWith(item.path + '/'))?.label ||
-    (path === '/requests/review' || path === '/agreements/new'
+    (path === '/requests/review' || path === '/agreements/new' || path === '/token-orders/new'
       ? 'New order'
-      : path.startsWith('/requests/') || path.startsWith('/agreements/')
+      : path.startsWith('/requests/') ||
+          path.startsWith('/agreements/') ||
+          path.startsWith('/token-orders/')
         ? 'Orders'
         : navigation[0]?.label);
   const isNavActive = (to: string) =>
     path === to ||
     path.startsWith(to + '/') ||
-    (to === '/new' && (path === '/requests/review' || path === '/agreements/new')) ||
+    (to === '/new' &&
+      (path === '/requests/review' ||
+        path === '/agreements/new' ||
+        path === '/token-orders/new')) ||
     (to === '/orders' &&
       ((path.startsWith('/requests/') && path !== '/requests/review') ||
-        (path.startsWith('/agreements/') && path !== '/agreements/new')));
+        (path.startsWith('/agreements/') && path !== '/agreements/new') ||
+        (path.startsWith('/token-orders/') && path !== '/token-orders/new')));
   return (
     <NavigationContext.Provider value={navigate}>
       <SessionContext.Provider value={session}>
