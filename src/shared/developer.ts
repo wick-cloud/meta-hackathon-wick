@@ -30,12 +30,14 @@ export interface BrokerKeyLimits {
 export interface BrokerKeyAuthority {
   id: string;
   grantId?: string;
+  packId?: string;
   scopes: BrokerScope[];
   limits: BrokerKeyLimits;
 }
 export interface BrokerKeySummary {
   id: string;
   grantId?: string;
+  packId?: string;
   name: string;
   prefix: string;
   scopes: BrokerScope[];
@@ -54,6 +56,24 @@ export const agentScopes: readonly BrokerScope[] = [
   'inference:use',
   'tokens:buy',
 ];
+export const packScopes: readonly BrokerScope[] = [
+  'account:read',
+  'inference:read',
+  'inference:use',
+];
+/** Batch keys can redeem and inspect their batch, never manage or purchase other resources. */
+export function packKeyRoute(method: string, path: string | undefined) {
+  return [
+    'GET /api/me',
+    'GET /api/openapi.json',
+    'GET /api/inference/models',
+    'GET /api/inference/packs',
+    'GET /api/inference/packs/:id',
+    'GET /api/inference/requests/:id',
+    'GET /api/v1/models',
+    'POST /api/v1/chat/completions',
+  ].includes(`${method} ${path}`);
+}
 export const providerScopes: readonly BrokerScope[] = BROKER_SCOPES.filter(
   (s) => ['account:read', 'catalog:read', 'muse:propose'].includes(s) || s.startsWith('provider:'),
 );
@@ -80,6 +100,8 @@ export const BROKER_PUBLIC_ROUTES: readonly BrokerPublicRoute[] = [
   route('GET', '/api/inference/models', 'inference:read'),
   route('GET', '/api/inference/grant', 'inference:read'),
   route('GET', '/api/inference/packs', 'inference:read'),
+  route('GET', '/api/inference/packs/:id', 'inference:read'),
+  route('POST', '/api/inference/packs/:id/keys', 'tokens:buy', true),
   route('POST', '/api/inference/quotes', 'inference:read'),
   route('POST', '/api/token-orders', 'tokens:buy', true),
   route('GET', '/api/token-orders/:id', 'inference:read'),

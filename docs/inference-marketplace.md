@@ -87,3 +87,5 @@ Local qualification and real qualification are distinct. `tests/inference-adapte
 | VM provisioning, Git, PTY, copy, snapshots, pause/resume | Existing Wick adapters unchanged                             | Existing Wick adapters unchanged                                     |
 
 Provider sources: [Modal endpoint integrations](https://modal.com/docs/guide/endpoint-integrations), [Modal supported models and rates](https://modal.com/docs/guide/supported-models), [Baseten Muse launch](https://www.baseten.co/resources/changelog/muse-spark-open-and-nemotron-35-super-vl-available-on-baseten/), [Baseten reasoning](https://docs.baseten.co/inference/model-apis/reasoning), [Meta Muse settings](https://dev.meta.ai/docs/muse-spark-open/settings). The hackathon slug is pinned to the event's Baseten instructions, which override the general model-name examples.
+
+The buyer’s [Purchased tokens inventory](token-batches.md) lists remaining quota and live expiry for all purchased batches. Each batch can issue a restricted usage key for a task VM; grant funding and purchasing access remain separate.

@@ -30,7 +30,7 @@ describe('Broker public OpenAPI contract', () => {
     expect(new Set(operations.map((op) => op.operation.operationId)).size).toBe(operations.length);
     expect(
       Object.keys(document.paths).some(
-        (path) => path.includes('/admin') || path.includes('/keys') || path.includes('/auth'),
+        (path) => path.includes('/admin') || path.startsWith('/api/keys') || path.includes('/auth'),
       ),
     ).toBe(false);
   });

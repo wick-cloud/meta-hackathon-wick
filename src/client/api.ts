@@ -173,6 +173,7 @@ export class ApiError extends Error {
   constructor(
     message: string,
     public status: number,
+    public code?: string,
   ) {
     super(message);
     this.name = 'ApiError';
@@ -211,6 +212,7 @@ export async function api<T>(url: string, options: RequestInit = {}): Promise<T>
             data?.message ||
             `Request failed (${response.status}). Please try again.`,
       response.status,
+      typeof data?.code === 'string' ? data.code : undefined,
     );
   return data as T;
 }

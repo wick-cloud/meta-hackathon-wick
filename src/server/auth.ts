@@ -3,7 +3,7 @@ import { fromNodeHeaders } from 'better-auth/node';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { Pool } from 'pg';
 import { createHash, timingSafeEqual } from 'node:crypto';
-import { publicRoute } from '../shared/developer.js';
+import { packKeyRoute, publicRoute } from '../shared/developer.js';
 import type { Config } from './config.js';
 import type { Actor, Role } from '../shared/types.js';
 import { HttpError } from './context.js';
@@ -90,10 +90,14 @@ export function createRequireActor(auth: ReturnType<typeof createAuth>, pool: Po
         throw new HttpError(401, 'A valid Broker API key is required. Wick keys are not accepted.');
       const row = (
         await pool.query(
-          `SELECT k.id key_id,k.grant_id,k.secret_digest,k.scopes,k.limits,k.issued_role,k.issued_provider_id,k.last_used_at,
+          `SELECT k.id key_id,k.grant_id,k.pack_id,k.secret_digest,k.scopes,k.limits,k.issued_role,k.issued_provider_id,k.last_used_at,
         u.id,u.email,u.name,u.role,u."providerId",p.id::text actual_provider_id,
-        (k.revoked_at IS NULL AND k.expires_at>clock_timestamp()) active
+        (k.revoked_at IS NULL AND k.expires_at>clock_timestamp()
+          AND(k.parent_key_id IS NULL OR(parent.revoked_at IS NULL AND parent.expires_at>clock_timestamp()
+            AND parent.user_id=k.user_id AND parent.grant_id=k.grant_id AND parent.pack_id IS NULL
+            AND parent.issued_role=u.role AND parent.scopes ? 'tokens:buy'))) active
         FROM broker_api_keys k JOIN "user" u ON u.id=k.user_id
+        LEFT JOIN broker_api_keys parent ON parent.id=k.parent_key_id
         LEFT JOIN broker_providers p ON p.user_id=u.id WHERE k.id=$1`,
           [match[2]],
         )
@@ -116,6 +120,8 @@ export function createRequireActor(auth: ReturnType<typeof createAuth>, pool: Po
           'This Broker API key is invalid, expired, revoked or no longer matches its account.',
         );
       const route = publicRoute(request.method, request.routeOptions.url);
+      if (row.pack_id && !packKeyRoute(request.method, request.routeOptions.url))
+        throw new HttpError(403, 'This batch key permits only its purchased token quota.');
       const scope =
         route?.scope ??
         (request.method === 'GET' && request.routeOptions.url === '/api/openapi.json'
@@ -139,6 +145,7 @@ export function createRequireActor(auth: ReturnType<typeof createAuth>, pool: Po
           scopes: row.scopes,
           limits: row.limits,
           ...(row.grant_id ? { grantId: row.grant_id } : {}),
+          ...(row.pack_id ? { packId: row.pack_id } : {}),
         },
       };
       if (!row.last_used_at || Date.now() - new Date(row.last_used_at).getTime() >= 60000)

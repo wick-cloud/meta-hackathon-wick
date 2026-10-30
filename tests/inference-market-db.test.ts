@@ -52,6 +52,9 @@ import { applyCreditEntry, creditWalletView } from '../src/server/agreements/cre
 import { listOrders, ORDERS_QUERY, registerOrders } from '../src/server/orders.js';
 import { registerOpenApi } from '../src/server/openapi.js';
 import { BrokerClient } from '../packages/sdk/src/index.js';
+import { registerDeveloperKeys } from '../src/server/developer-keys.js';
+import { issuePackKey } from '../src/server/inference/pack-access.js';
+import { PACK_VIEW_COLUMNS } from '../src/server/inference/data.js';
 
 const url = process.env.TEST_DATABASE_URL;
 describe.skipIf(!url)(
@@ -183,6 +186,7 @@ describe.skipIf(!url)(
       registerBrokerKeyAccess(app, ctx.requireActor);
       await registerAuth(app, auth, config);
       await registerInference(app, ctx);
+      await registerDeveloperKeys(app, ctx);
       registerOrders(app, ctx);
       registerOpenApi(app);
       for (const path of ['/api/requests', '/api/muse/translate'])
@@ -229,6 +233,290 @@ describe.skipIf(!url)(
       }
     });
 
+    it('lists the owner’s purchased batches across grants with stable pages and retains agent scoping', async () => {
+      const first = await grant(100),
+        second = await grant(100);
+      const a = await buy(first.id),
+        b = await buy(second.id),
+        key = await agent(first.id);
+      const outsider = await createGrant(ctx, other, {
+        operationKey: randomUUID(),
+        name: 'Other agent',
+        budgetCents: 100,
+      });
+      const quantities = { inputTokens: 10000, outputTokens: 1000 };
+      const quote = (await quotes(ctx, other, { grantId: outsider.id, ...quantities })).items[0];
+      await createTokenOrder(ctx, other, {
+        grantId: outsider.id,
+        ...quantities,
+        mode: 'instant',
+        quoteId: quote.quoteId,
+        maxTotalCents: quote.priceCents,
+        operationKey: randomUUID(),
+      });
+      const one = await app.inject({ url: '/api/inference/packs?limit=1', headers: { cookie } });
+      expect(one.statusCode).toBe(200);
+      expect(one.json().items).toHaveLength(1);
+      const two = await app.inject({
+        url: `/api/inference/packs?limit=1&cursor=${encodeURIComponent(one.json().nextCursor)}`,
+        headers: { cookie },
+      });
+      expect(two.statusCode).toBe(200);
+      expect(two.json().nextCursor).toBeUndefined();
+      expect(new Set([one.json().items[0].id, two.json().items[0].id])).toEqual(
+        new Set([a.id, b.id]),
+      );
+      expect((await scopedPacks(ctx, key.actor, {})).items.map((p) => p.id)).toEqual([a.id]);
+      await closeGrant(ctx, owner, first.id, { operationKey: randomUUID() });
+      expect((await scopedPacks(ctx, owner, {})).items).toHaveLength(2);
+      expect(
+        (await app.inject({ url: '/api/inference/packs?limit=101', headers: { cookie } }))
+          .statusCode,
+      ).toBe(400);
+    });
+    it('binds each batch key to its own quota and history, without buying, funding or falling back to another batch', async () => {
+      const g = await grant(100),
+        parent = await agent(g.id),
+        a = await buy(g.id),
+        b = await buy(g.id);
+      const wallet = await creditWalletView(pool, owner.id);
+      const operationKey = randomUUID();
+      const purchasingClient = new BrokerClient({ baseUrl, apiKey: parent.token });
+      const issued = await purchasingClient.request<Awaited<ReturnType<typeof issuePackKey>>>(
+        'POST',
+        `/api/inference/packs/${a.id}/keys`,
+        { operationKey },
+      );
+      const childHeaders = { authorization: `Bearer ${issued.token}` };
+      expect(issued.key.packId).toBe(a.id);
+      expect(issued.connection.expiresAt).toBe(a.expiresAt);
+      expect(issued.connection.baseUrl).toBe(`${origin}/api/v1`);
+      expect(issued.key.scopes).not.toContain('tokens:buy');
+      const own = await app.inject({ url: '/api/inference/packs', headers: childHeaders });
+      expect(own.statusCode).toBe(200);
+      expect(own.json().items.map((p: any) => p.id)).toEqual([a.id]);
+      expect(
+        (await app.inject({ url: `/api/inference/packs/${b.id}`, headers: childHeaders }))
+          .statusCode,
+      ).toBe(404);
+      for (const path of ['/api/inference/grant', `/api/token-orders/${b.orderId}`])
+        expect((await app.inject({ url: path, headers: childHeaders })).statusCode).toBe(403);
+      for (const path of [
+        '/api/token-orders',
+        `/api/inference/packs/${b.id}/keys`,
+        '/api/requests',
+        '/api/inference/grants',
+      ])
+        expect(
+          (
+            await app.inject({
+              method: 'POST',
+              url: path,
+              headers: childHeaders,
+              payload: { operationKey: randomUUID() },
+            })
+          ).statusCode,
+        ).toBe(403);
+      await expect(issuePackKey(ctx, parent.actor, a.id, { operationKey })).rejects.toMatchObject({
+        code: 'secret_already_issued',
+      });
+      const callKey = randomUUID();
+      const completed = await app.inject({
+        method: 'POST',
+        url: '/api/v1/chat/completions',
+        headers: childHeaders,
+        payload: { ...call, operationKey: callKey },
+      });
+      expect(completed.statusCode).toBe(200);
+      expect(completed.json().broker.packId).toBe(a.id);
+      const rotation = await issuePackKey(ctx, owner, a.id, { operationKey: randomUUID() });
+      expect(
+        (await app.inject({ url: `/api/inference/packs/${a.id}`, headers: childHeaders }))
+          .statusCode,
+      ).toBe(401);
+      const headers = { authorization: `Bearer ${rotation.token}` };
+      expect(
+        (
+          await app.inject({ url: `/api/inference/requests/${completed.json().id}`, headers })
+        ).json().status,
+      ).toBe('settled');
+      const replay = await app.inject({
+        method: 'POST',
+        url: '/api/v1/chat/completions',
+        headers,
+        payload: { ...call, operationKey: callKey },
+      });
+      expect(replay.statusCode).toBe(409);
+      expect(replay.json().code).toBe('completed_without_result');
+      const otherKey = await issuePackKey(ctx, owner, b.id, { operationKey: randomUUID() });
+      const foreign = await app.inject({
+        method: 'POST',
+        url: '/api/v1/chat/completions',
+        headers: { authorization: `Bearer ${otherKey.token}` },
+        payload: { ...call, operationKey: callKey },
+      });
+      expect(foreign.statusCode).toBe(403);
+      expect(foreign.json().inferenceRequestId).toBeUndefined();
+      expect(
+        (
+          await app.inject({
+            url: `/api/inference/requests/${completed.json().id}`,
+            headers: { authorization: `Bearer ${otherKey.token}` },
+          })
+        ).statusCode,
+      ).toBe(404);
+      await transaction(pool, async (db) => {
+        await db.query('SELECT id FROM broker_inference_grants WHERE id=$1 FOR UPDATE', [g.id]);
+        await db.query('SELECT provider FROM broker_inference_routes ORDER BY provider FOR UPDATE');
+        const row = (
+          await db.query('SELECT * FROM broker_token_packs WHERE id=$1 FOR UPDATE', [a.id])
+        ).rows[0];
+        await retirePackLocked(db, row, 'quota_exhausted');
+      });
+      const denied = await app.inject({
+        method: 'POST',
+        url: '/api/v1/chat/completions',
+        headers,
+        payload: { ...call, operationKey: randomUUID() },
+      });
+      expect(denied.statusCode).toBe(409);
+      expect(denied.json().code).toBe('token_allowance_exceeded');
+      const detail = await grantDetail(ctx, owner, g.id);
+      expect(detail.packs.find((p) => p.id === b.id)).toMatchObject({
+        availableInputTokens: 10000,
+        availableOutputTokens: 1000,
+      });
+      expect(detail.requests).toHaveLength(1);
+      expect(await creditWalletView(pool, owner.id)).toEqual(wallet);
+      expect(
+        (
+          await pool.query('SELECT secret_digest FROM broker_api_keys WHERE id=$1', [
+            rotation.key.id,
+          ])
+        ).rows[0].secret_digest,
+      ).not.toBe(rotation.token);
+    });
+    it('revokes delegated batch access with its parent, rotates only one batch, and never reissues a secret on duplicate operations', async () => {
+      const g = await grant(),
+        parent = await agent(g.id),
+        a = await buy(g.id),
+        b = await buy(g.id);
+      const input = { operationKey: randomUUID() };
+      const results = await Promise.allSettled([
+        issuePackKey(ctx, parent.actor, a.id, input),
+        issuePackKey(ctx, parent.actor, a.id, input),
+      ]);
+      expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+      const issued = (
+        results.find((r) => r.status === 'fulfilled') as PromiseFulfilledResult<
+          Awaited<ReturnType<typeof issuePackKey>>
+        >
+      ).value;
+      const independent = await issuePackKey(ctx, owner, b.id, { operationKey: randomUUID() });
+      const revoke = await app.inject({
+        method: 'DELETE',
+        url: `/api/keys/${parent.key.id}`,
+        headers: { cookie, origin },
+      });
+      expect(revoke.statusCode).toBe(200);
+      expect(
+        (
+          await app.inject({
+            url: `/api/inference/packs/${a.id}`,
+            headers: { authorization: `Bearer ${issued.token}` },
+          })
+        ).statusCode,
+      ).toBe(401);
+      expect(
+        (
+          await app.inject({
+            url: `/api/inference/packs/${b.id}`,
+            headers: { authorization: `Bearer ${independent.token}` },
+          })
+        ).statusCode,
+      ).toBe(200);
+      expect(
+        (await pool.query('SELECT revoked_at FROM broker_api_keys WHERE id=$1', [issued.key.id]))
+          .rows[0].revoked_at,
+      ).not.toBeNull();
+      await pool.query(
+        "UPDATE broker_token_packs SET expires_at=clock_timestamp()-interval '1 second' WHERE id=$1",
+        [a.id],
+      );
+      await expect(
+        issuePackKey(ctx, owner, a.id, { operationKey: randomUUID() }),
+      ).rejects.toMatchObject({ code: 'pack_closed' });
+      const evidence = (
+        await pool.query("SELECT details FROM broker_inference_events WHERE kind='pack_key_issued'")
+      ).rows;
+      expect(JSON.stringify(evidence)).not.toContain(issued.token);
+    });
+    it('cannot overspend one batch through concurrent usage keys or spill into another purchased batch', async () => {
+      const g = await grant(),
+        a = await buy(g.id, { inputTokens: 10000, outputTokens: 64 }),
+        b = await buy(g.id);
+      const issued = await issuePackKey(ctx, owner, a.id, { operationKey: randomUUID() });
+      const headers = { authorization: `Bearer ${issued.token}` };
+      const results = await Promise.all(
+        [0, 1].map(() =>
+          app.inject({
+            method: 'POST',
+            url: '/api/v1/chat/completions',
+            headers,
+            payload: { ...call, operationKey: randomUUID() },
+          }),
+        ),
+      );
+      expect(results.filter((r) => r.statusCode === 200)).toHaveLength(1);
+      expect(results.filter((r) => r.statusCode === 409)).toHaveLength(1);
+      const detail = await grantDetail(ctx, owner, g.id);
+      expect(detail.requests).toHaveLength(1);
+      expect(detail.requests[0].packId).toBe(a.id);
+      expect(detail.packs.find((p) => p.id === b.id)).toMatchObject({
+        availableInputTokens: 10000,
+        availableOutputTokens: 1000,
+      });
+    });
+    it('indexes the owner’s visible page without scanning unrelated purchased-batch history', async () => {
+      const g = await grant(),
+        sample = await buy(g.id);
+      const outsider = await createGrant(ctx, other, {
+        operationKey: randomUUID(),
+        name: 'History fixture',
+        budgetCents: 100,
+      });
+      await pool.query(
+        `WITH orders AS(
+        INSERT INTO broker_token_orders(grant_id,buyer_id,operation_key,input_fingerprint,mode,source_mode,status,input_tokens,output_tokens,max_total_cents,price_cents,provider,closes_at,expires_at,created_at)
+        SELECT $1,$2,gen_random_uuid()::text,'synthetic-history','instant','fixture','awarded',10000,1000,$4,$4,$5,
+          clock_timestamp()-n*interval '1 minute',clock_timestamp()+interval '1 day',clock_timestamp()-n*interval '1 minute'
+          FROM generate_series(1,5000)n RETURNING id,created_at)
+        INSERT INTO broker_token_packs(order_id,grant_id,buyer_id,provider,provider_id,source_mode,route_fingerprint,snapshot,status,input_tokens,output_tokens,available_input,available_output,retired_input,retired_output,price_cents,expires_at,created_at)
+        SELECT o.id,$1,$2,p.provider,p.provider_id,'fixture',p.route_fingerprint,p.snapshot,'settled',10000,1000,0,0,10000,1000,p.price_cents,p.expires_at,o.created_at
+          FROM orders o CROSS JOIN broker_token_packs p WHERE p.id=$3`,
+        [outsider.id, other.id, sample.id, sample.priceCents, sample.provider],
+      );
+      await pool.query('ANALYZE broker_token_packs');
+      const explained = (
+        await pool.query(
+          `EXPLAIN(ANALYZE,BUFFERS,FORMAT JSON) SELECT ${PACK_VIEW_COLUMNS},created_at::text cursor_created_at
+        FROM broker_token_packs WHERE buyer_id=$1::text AND($5::uuid IS NULL OR grant_id=$5)
+        AND($2::timestamptz IS NULL OR(created_at,id)<($2,$3::uuid)) ORDER BY created_at DESC,id DESC LIMIT $4`,
+          [owner.id, null, null, 26, null],
+        )
+      ).rows[0]['QUERY PLAN'][0];
+      const nodes = (p: any): any[] => [p, ...(p.Plans ?? []).flatMap(nodes)];
+      expect(
+        nodes(explained.Plan).some((p) => p['Index Name'] === 'broker_token_packs_buyer_page'),
+      ).toBe(true);
+      expect(explained.Plan['Actual Rows']).toBe(1);
+      expect(
+        nodes(explained.Plan)
+          .filter((p) => p['Relation Name'] === 'broker_token_packs')
+          .every((p) => (p['Rows Removed by Filter'] ?? 0) === 0),
+      ).toBe(true);
+      expect((await scopedPacks(ctx, owner, {})).items.map((p) => p.id)).toEqual([sample.id]);
+    });
     it('settles concurrent sub-cent purchases without overspending or losing the 15% split', async () => {
       const g = await grant(0.03),
         key = await agent(g.id);

@@ -265,6 +265,27 @@ export const BROKER_API_SCHEMAS: Record<string, JsonSchema> = {
     revenueShare: ref('RevenueShare'),
   }),
   TokenPacksPage: page(ref('TokenPack')),
+  TokenPackKeyInput: object(
+    { operationKey, name: { type: 'string', minLength: 1, maxLength: 64 } },
+    ['operationKey'],
+  ),
+  TokenPackAccess: object({
+    token: string,
+    key: object({
+      id,
+      grantId: id,
+      packId: id,
+      name: string,
+      prefix: string,
+      scopes: arr(string),
+      limits: object({}),
+      createdAt: date,
+      expiresAt: date,
+      lastUsedAt: nullableDate,
+      revokedAt: nullableDate,
+    }),
+    connection: object({ packId: id, baseUrl: string, model: id, expiresAt: date }),
+  }),
   TokenOrderDetail: object({
     order: ref('TokenOrder'),
     bids: arr(ref('TokenBid')),
@@ -343,6 +364,7 @@ export const BROKER_API_SCHEMAS: Record<string, JsonSchema> = {
     {
       id,
       grantId: id,
+      packId: id,
       scopes: arr(string),
       limits: object(
         {
@@ -1210,6 +1232,17 @@ export const BROKER_OPERATION_SCHEMAS: Record<string, OperationSchema> = {
     summary: 'Read purchased input and output quota, including held tokens',
     output: 'TokenPacksPage',
     paginated: true,
+  },
+  'GET /api/inference/packs/:id': {
+    operationId: 'getTokenPack',
+    summary: 'Read purchased quota for an owned or key-bound batch',
+    output: 'TokenPack',
+  },
+  'POST /api/inference/packs/:id/keys': {
+    operationId: 'issueTokenPackKey',
+    summary: 'Issue a one-time batch-only usage key without buying more tokens',
+    input: 'TokenPackKeyInput',
+    output: 'TokenPackAccess',
   },
   'POST /api/inference/quotes': {
     operationId: 'quoteTokenPacks',

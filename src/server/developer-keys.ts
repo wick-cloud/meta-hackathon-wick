@@ -16,6 +16,7 @@ export function keySummary(row: Record<string, any>): BrokerKeySummary {
   return {
     id: row.id,
     ...(row.grant_id ? { grantId: row.grant_id } : {}),
+    ...(row.pack_id ? { packId: row.pack_id } : {}),
     name: row.name,
     prefix: row.prefix,
     scopes: row.scopes,
@@ -126,7 +127,10 @@ export async function registerDeveloperKeys(app: FastifyInstance, ctx: AppContex
     }
     const rows = (
       await ctx.pool.query(
-        'SELECT id,name,prefix,scopes,limits,grant_id,created_at,created_at::text cursor_created_at,expires_at,last_used_at,revoked_at FROM broker_api_keys WHERE user_id=$1 AND ($2::timestamptz IS NULL OR(created_at,id)<($2,$3::uuid)) ORDER BY created_at DESC,id DESC LIMIT $4',
+        `SELECT k.id,k.name,k.prefix,k.scopes,k.limits,k.grant_id,k.pack_id,k.created_at,k.created_at::text cursor_created_at,
+          LEAST(k.expires_at,parent.expires_at) expires_at,k.last_used_at,COALESCE(k.revoked_at,parent.revoked_at) revoked_at
+          FROM broker_api_keys k LEFT JOIN broker_api_keys parent ON parent.id=k.parent_key_id
+          WHERE k.user_id=$1 AND ($2::timestamptz IS NULL OR(k.created_at,k.id)<($2,$3::uuid)) ORDER BY k.created_at DESC,k.id DESC LIMIT $4`,
         [actor.id, cursor?.[0] ?? null, cursor?.[1] ?? null, limit + 1],
       )
     ).rows;
@@ -203,13 +207,26 @@ export async function registerDeveloperKeys(app: FastifyInstance, ctx: AppContex
       id = (request.params as { id: string }).id;
     if (!/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(id))
       throw new HttpError(404, 'Key not found.');
-    const row = (
-      await ctx.pool.query(
-        'UPDATE broker_api_keys SET revoked_at=COALESCE(revoked_at,clock_timestamp()) WHERE id=$1 AND user_id=$2 RETURNING id,name,prefix,scopes,limits,created_at,expires_at,last_used_at,revoked_at',
-        [id, actor.id],
-      )
-    ).rows[0];
-    if (!row) throw new HttpError(404, 'Key not found.');
-    return { key: keySummary(row) };
+    return transaction(ctx.pool, async (db) => {
+      const owner = (await db.query('SELECT role FROM "user" WHERE id=$1 FOR UPDATE', [actor.id]))
+        .rows[0];
+      if (owner?.role !== actor.role)
+        throw new HttpError(403, 'Your account permissions changed. Sign in again.');
+      const prior = (
+        await db.query('SELECT * FROM broker_api_keys WHERE id=$1 AND user_id=$2 FOR UPDATE', [
+          id,
+          actor.id,
+        ])
+      ).rows[0];
+      if (!prior) throw new HttpError(404, 'Key not found.');
+      const changed = (
+        await db.query(
+          `UPDATE broker_api_keys SET revoked_at=clock_timestamp() WHERE user_id=$2
+        AND(id=$1 OR parent_key_id=$1) AND revoked_at IS NULL RETURNING *`,
+          [id, actor.id],
+        )
+      ).rows;
+      return { key: keySummary(changed.find((r) => r.id === id) ?? prior) };
+    });
   });
 }

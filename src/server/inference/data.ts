@@ -57,9 +57,26 @@ export async function authority(db: PoolClient, actor: Actor, scope?: string): P
       new Date(key.expires_at) <= now ||
       key.issued_role !== owner.role ||
       (key.grant_id ?? undefined) !== actor.apiKey.grantId ||
+      (key.pack_id ?? undefined) !== actor.apiKey.packId ||
       (scope && !key.scopes.includes(scope))
     )
       failure(403, 'key_unavailable', 'The API key is revoked, expired, or lacks permission.');
+    if (key.parent_key_id) {
+      const parent = (
+        await db.query('SELECT * FROM broker_api_keys WHERE id=$1 FOR SHARE', [key.parent_key_id])
+      ).rows[0];
+      if (
+        !parent ||
+        parent.user_id !== actor.id ||
+        parent.pack_id ||
+        parent.grant_id !== key.grant_id ||
+        parent.revoked_at ||
+        new Date(parent.expires_at) <= now ||
+        parent.issued_role !== owner.role ||
+        !parent.scopes.includes('tokens:buy')
+      )
+        failure(403, 'key_unavailable', 'The batch key’s issuing agent key is no longer active.');
+    }
   }
 }
 export async function lockedGrant(
@@ -159,6 +176,10 @@ export const packView = (r: Row): TokenPack => ({
   retirementReason: r.retirement_reason,
   revenueShare: revenueShare(subtractCents(r.price_cents, r.refund_cents)),
 });
+/** Public inventory projection; do not load private accounting snapshots for table rows. */
+export const PACK_VIEW_COLUMNS = `id,order_id,grant_id,provider,source_mode,status,input_tokens,output_tokens,
+available_input,available_output,held_input,held_output,consumed_input,consumed_output,retired_input,retired_output,
+price_cents,refund_cents,expires_at,created_at,retirement_reason`;
 export const receiptView = (r: Row): InferenceReceipt => ({
   id: r.id,
   grantId: r.grant_id,
