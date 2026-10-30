@@ -81,12 +81,13 @@ function detail() {
     activations: [],
   };
 }
-type Handler = (path: string, method: string, body: any) => unknown;
+type Handler = (path: string, method: string, body: any, url: URL) => unknown;
 async function fixture(page: Page, role: 'buyer' | 'provider' | 'admin', handler: Handler) {
   const writes: { path: string; body: any }[] = [];
   await page.route('**/api/**', async (route) => {
     const req = route.request(),
-      path = new URL(req.url()).pathname,
+      url = new URL(req.url()),
+      path = url.pathname,
       method = req.method();
     const body = req.postDataJSON();
     // Schedule preview is an authenticated read-only calculation, not an order mutation.
@@ -117,7 +118,7 @@ async function fixture(page: Page, role: 'buyer' | 'provider' | 'admin', handler
         activity: [],
       },
     };
-    let response = handler(path, method, body) ?? common[path];
+    let response = handler(path, method, body, url) ?? common[path];
     if (response === undefined && path === '/api/agreements/preview' && method === 'POST') {
       try {
         const quote = agreementEstimate(body);
@@ -211,6 +212,69 @@ test('Orders preserves server order across identical source IDs and URL filters;
   await expect(page).toHaveURL(/\/orders$/);
   await page.getByRole('link', { name: 'Scheduled first', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Seven-day fixture fleet' })).toBeVisible();
+  expect(writes).toHaveLength(0);
+});
+
+test('Archive keeps completed order links and billing available across filters, pagination and Back', async ({
+  page,
+}) => {
+  const reads: URL[] = [];
+  const row = {
+    id,
+    key: `auction:${id}`,
+    kind: 'auction',
+    reference: 'AU-1111',
+    title: 'Completed rental',
+    status: 'completed',
+    auctionStatus: 'ready',
+    vmStatus: 'terminated',
+    cleanupPending: false,
+    createdAt: iso(-60000),
+    closesAt: iso(-30000),
+    expiresAt: iso(-1000),
+    requestedQuantity: 1,
+    approvedQuantity: 1,
+    runningQuantity: 0,
+    bidCount: 2,
+    amount: { label: 'accepted', amountCents: 173.31 },
+    detailUrl: `/requests/${id}`,
+    vmUrl: `/vms/${id}`,
+  };
+  const writes = await fixture(page, 'buyer', (path, _method, _body, url) => {
+    if (path !== '/api/orders') return;
+    reads.push(url);
+    return {
+      serverNow: iso(0),
+      nextCursor: url.searchParams.has('cursor') ? undefined : 'older-archive',
+      items: url.searchParams.get('status') === 'history' ? [row] : [],
+    };
+  });
+  await page.goto('/orders?kind=auction&cursor=old');
+  await page.getByRole('button', { name: 'Archive', exact: true }).click();
+  await expect(page).toHaveURL(/status=history/);
+  expect(new URL(page.url()).searchParams.get('kind')).toBe('auction');
+  expect(new URL(page.url()).searchParams.has('cursor')).toBe(false);
+  await expect(page.getByRole('table')).toContainText('$1.7331');
+  await expect(page.getByRole('link', { name: 'Completed rental', exact: true })).toHaveAttribute(
+    'href',
+    `/requests/${id}`,
+  );
+  await expect(page.getByRole('link', { name: 'Environment', exact: true })).toHaveAttribute(
+    'href',
+    `/vms/${id}`,
+  );
+  await page.getByRole('button', { name: 'Older orders' }).click();
+  await expect(page).toHaveURL(/cursor=older-archive/);
+  await page.reload();
+  await expect(page.getByRole('button', { name: 'Archive', exact: true })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+  await page.getByRole('button', { name: 'Active', exact: true }).click();
+  await expect(page.getByRole('table')).toHaveCount(0);
+  await page.goBack();
+  await expect(page.getByRole('link', { name: 'Completed rental', exact: true })).toBeVisible();
+  expect(reads.at(-1)?.searchParams.get('status')).toBe('history');
   expect(writes).toHaveLength(0);
 });
 

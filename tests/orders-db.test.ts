@@ -129,6 +129,19 @@ describe.skipIf(!databaseUrl)('persistent Orders history (real PostgreSQL)', () 
       amountCents: 10,
     });
   });
+  it('keeps pending cleanup and credit release active while completed records remain in Archive', async () => {
+    const held = await request('failed', { vm: 'failed' });
+    const completed = await request('ready', { vm: 'expired', cleaned: true });
+    const unmatched = await request('no_offers');
+    const pendingCredit = await agreement();
+    await pool.query("UPDATE broker_agreements SET status='expired' WHERE id=$1", [pendingCredit]);
+    const active = await listOrders(ctx, buyer, { status: 'active' });
+    const archive = await listOrders(ctx, buyer, { status: 'history' });
+    expect(new Set(active.items.map((r) => r.id))).toEqual(new Set([held, pendingCredit]));
+    expect(new Set(archive.items.map((r) => r.id))).toEqual(new Set([completed, unmatched]));
+    expect(new Set((await listOrders(ctx, buyer, {})).items.map((r) => r.id)).size).toBe(4);
+  });
+
   it('merges agreements and auctions without duplicating manual activation child requests', async () => {
     const agreementId = await agreement();
     await pool.query(

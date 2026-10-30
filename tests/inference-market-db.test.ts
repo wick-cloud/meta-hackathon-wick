@@ -54,7 +54,7 @@ import { registerOpenApi } from '../src/server/openapi.js';
 import { BrokerClient } from '../packages/sdk/src/index.js';
 import { registerDeveloperKeys } from '../src/server/developer-keys.js';
 import { issuePackKey } from '../src/server/inference/pack-access.js';
-import { PACK_VIEW_COLUMNS } from '../src/server/inference/data.js';
+import { PACK_ACTIVE_PREDICATE, PACK_VIEW_COLUMNS } from '../src/server/inference/data.js';
 
 const url = process.env.TEST_DATABASE_URL;
 describe.skipIf(!url)(
@@ -274,6 +274,86 @@ describe.skipIf(!url)(
           .statusCode,
       ).toBe(400);
     });
+    it('archives only settled batches, filters before pagination, and retains owner and agent scope', async () => {
+      const g = await grant(),
+        a = await buy(g.id),
+        b = await buy(g.id),
+        c = await buy(g.id),
+        d = await buy(g.id),
+        key = await agent(g.id);
+      await pool.query(
+        `UPDATE broker_token_packs SET status='settled',available_input=0,available_output=0,retired_input=input_tokens,retired_output=output_tokens,retirement_reason='expired',expires_at=clock_timestamp()-interval '1 second' WHERE id=ANY($1::uuid[])`,
+        [[b.id, d.id]],
+      );
+      await pool.query(
+        `UPDATE broker_token_packs SET status='retiring',available_input=0,available_output=0,held_input=100,held_output=10,retired_input=input_tokens-100,retired_output=output_tokens-10,retirement_reason='expired',expires_at=clock_timestamp()-interval '1 second' WHERE id=$1`,
+        [c.id],
+      );
+      const wallet = await creditWalletView(pool, owner.id);
+      const active = await scopedPacks(ctx, owner, { view: 'active' });
+      expect(new Set(active.items.map((p) => p.id))).toEqual(new Set([a.id, c.id]));
+      const first = await scopedPacks(ctx, owner, { view: 'archive', limit: 1 });
+      expect(first.items).toHaveLength(1);
+      const second = await scopedPacks(ctx, owner, {
+        view: 'archive',
+        limit: 1,
+        cursor: first.nextCursor,
+      });
+      expect(new Set([...first.items, ...second.items].map((p) => p.id))).toEqual(
+        new Set([b.id, d.id]),
+      );
+      expect(second.nextCursor).toBeUndefined();
+      expect(
+        (await scopedPacks(ctx, key.actor, { view: 'active' })).items.map((p) => p.id),
+      ).toEqual(active.items.map((p) => p.id));
+      expect((await scopedPacks(ctx, other, { view: 'archive' })).items).toEqual([]);
+      expect(await creditWalletView(pool, owner.id)).toEqual(wallet);
+      expect(
+        (await app.inject({ url: '/api/inference/packs?view=deleted', headers: { cookie } }))
+          .statusCode,
+      ).toBe(400);
+      expect((await scopedPacks(ctx, owner, {})).items).toHaveLength(4);
+    });
+
+    it('bounds active inventory independently of a large settled archive', async () => {
+      const g = await grant(),
+        sample = await buy(g.id);
+      await pool.query(
+        `WITH orders AS(
+        INSERT INTO broker_token_orders(grant_id,buyer_id,operation_key,input_fingerprint,mode,source_mode,status,input_tokens,output_tokens,max_total_cents,price_cents,provider,closes_at,expires_at,created_at)
+        SELECT $1,$2,gen_random_uuid()::text,'archive-fixture','instant','fixture','awarded',10000,1000,$4,$4,$5,
+          clock_timestamp()-n*interval '1 minute',clock_timestamp()+interval '1 day',clock_timestamp()-n*interval '1 minute'
+          FROM generate_series(1,5000)n RETURNING id,created_at)
+        INSERT INTO broker_token_packs(order_id,grant_id,buyer_id,provider,provider_id,source_mode,route_fingerprint,snapshot,status,input_tokens,output_tokens,available_input,available_output,retired_input,retired_output,price_cents,expires_at,created_at)
+        SELECT o.id,$1,$2,p.provider,p.provider_id,'fixture',p.route_fingerprint,p.snapshot,'settled',10000,1000,0,0,10000,1000,p.price_cents,p.expires_at,o.created_at
+          FROM orders o CROSS JOIN broker_token_packs p WHERE p.id=$3`,
+        [g.id, owner.id, sample.id, sample.priceCents, sample.provider],
+      );
+      await pool.query('ANALYZE broker_token_packs');
+      const plan = (
+        await pool.query(
+          `EXPLAIN(ANALYZE,BUFFERS,FORMAT JSON) SELECT ${PACK_VIEW_COLUMNS} FROM broker_token_packs WHERE buyer_id=$1 AND ${PACK_ACTIVE_PREDICATE} ORDER BY created_at DESC,id DESC LIMIT 26`,
+          [owner.id],
+        )
+      ).rows[0]['QUERY PLAN'][0];
+      const nodes = (p: any): any[] => [p, ...(p.Plans ?? []).flatMap(nodes)];
+      expect(
+        nodes(plan.Plan).some((p) => p['Index Name'] === 'broker_token_packs_buyer_active_page'),
+      ).toBe(true);
+      expect(plan.Plan['Actual Rows']).toBe(1);
+      expect(
+        nodes(plan.Plan)
+          .filter((p) => p['Relation Name'] === 'broker_token_packs')
+          .every((p) => (p['Rows Removed by Filter'] ?? 0) === 0),
+      ).toBe(true);
+      expect((await scopedPacks(ctx, owner, { view: 'active' })).items.map((p) => p.id)).toEqual([
+        sample.id,
+      ]);
+      expect((await scopedPacks(ctx, owner, { view: 'archive', limit: 25 })).items).toHaveLength(
+        25,
+      );
+    });
+
     it('binds each batch key to its own quota and history, without buying, funding or falling back to another batch', async () => {
       const g = await grant(100),
         parent = await agent(g.id),

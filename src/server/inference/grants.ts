@@ -24,6 +24,7 @@ import {
   orderView,
   packView,
   PACK_VIEW_COLUMNS,
+  PACK_ACTIVE_PREDICATE,
   receiptView,
   runtime,
 } from './data.js';
@@ -285,6 +286,15 @@ export async function grantDetail(ctx: AppContext, actor: Actor, id: string) {
 }
 export async function scopedPacks(ctx: AppContext, actor: Actor, query: unknown, provider = false) {
   const p = pagination(query);
+  const view = (query as Record<string, unknown> | undefined)?.view ?? 'all';
+  if (!['all', 'active', 'archive'].includes(view as string))
+    failure(400, 'invalid_view', 'Use all, active or archive for token packs.');
+  const lifecycle =
+    view === 'active'
+      ? `AND ${PACK_ACTIVE_PREDICATE}`
+      : view === 'archive'
+        ? `AND NOT ${PACK_ACTIVE_PREDICATE}`
+        : '';
   return transaction(ctx.pool, async (db) => {
     await authority(db, actor, provider ? 'provider:read' : 'inference:read');
     let key: string, predicate: string;
@@ -307,7 +317,7 @@ export async function scopedPacks(ctx: AppContext, actor: Actor, query: unknown,
     }
     const rows: Row[] = (
       await db.query(
-        `SELECT ${PACK_VIEW_COLUMNS},created_at::text cursor_created_at FROM broker_token_packs WHERE ${predicate} AND($5::uuid IS NULL OR grant_id=$5)
+        `SELECT ${PACK_VIEW_COLUMNS},created_at::text cursor_created_at FROM broker_token_packs WHERE ${predicate} ${lifecycle} AND($5::uuid IS NULL OR grant_id=$5)
       AND ($2::timestamptz IS NULL OR(created_at,id)<($2,$3::uuid)) ORDER BY created_at DESC,id DESC LIMIT $4`,
         [
           key,

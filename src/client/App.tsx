@@ -32,7 +32,8 @@ import {
   type Session,
 } from './api';
 import { ErrorBox, Link, NavigationContext, SessionContext, Spinner } from './components';
-import { NewEnvironment, RequestReview, AuctionPage, MyVMs, VMDetail, Invoices } from './buyer';
+import { NewEnvironment, RequestReview, AuctionPage, VMDetail, Invoices } from './buyer';
+import { MyVMs } from './vm-inventory';
 import { AlternativeComposer, AlternativeDetail, AlternativeList } from './negotiation';
 import { Orders } from './orders';
 import { AgreementComposer, AgreementDetail, Credits } from './agreements';
@@ -55,7 +56,7 @@ import {
 type NavigationItem = { path: string; label: string; icon: typeof Box; group?: string };
 const buyerNavigation: NavigationItem[] = [
   { path: '/orders', label: 'Orders', icon: ListOrdered, group: 'WORKSPACE' },
-  { path: '/vms', label: 'Virtual machines', icon: LayoutGrid, group: 'WORKSPACE' },
+  { path: '/vms', label: 'Virtual machines', icon: Server, group: 'WORKSPACE' },
   { path: '/tokens', label: 'Purchased tokens', icon: Sparkles, group: 'WORKSPACE' },
   { path: '/new/vm', label: 'Launch a VM', icon: Server, group: 'COMPUTE & AI' },
   { path: '/token-orders/new', label: 'Buy AI tokens', icon: Sparkles, group: 'COMPUTE & AI' },
@@ -396,7 +397,7 @@ export default function App() {
       content = <AlternativeDetail key={path} id={path.split('/')[2]!} />;
     else if (path.startsWith('/requests/')) content = <AuctionPage id={path.split('/')[2]!} />;
     else if (path.startsWith('/vms/')) content = <VMDetail id={path.split('/')[2]!} />;
-    else if (path === '/vms') content = <MyVMs />;
+    else if (path === '/vms') content = <MyVMs search={search} />;
     else if (path === '/invoices') content = <Invoices />;
     else if (path === '/new/vm' || (path === '/new' && new URLSearchParams(search).has('copy')))
       content = <NewEnvironment key={location} />;

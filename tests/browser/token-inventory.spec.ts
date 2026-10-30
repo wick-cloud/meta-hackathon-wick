@@ -72,17 +72,26 @@ async function fixture(
           catalog: [],
         },
       });
-    if (path === '/api/inference/packs')
+    if (path === '/api/inference/packs') {
+      const view = url.searchParams.get('view') ?? 'all';
+      const active = (p: TokenPack) =>
+        p.status !== 'settled' || p.heldInputTokens > 0 || p.heldOutputTokens > 0;
+      const items = [first, second].filter(
+        (p) => view === 'all' || (view === 'archive' ? !active(p) : active(p)),
+      );
       return route.fulfill({
         json: {
           items: options.paged
             ? url.searchParams.has('cursor')
-              ? [second]
-              : [first]
-            : [first, second],
-          ...(options.paged && !url.searchParams.has('cursor') ? { nextCursor: 'older' } : {}),
+              ? items.slice(1)
+              : items.slice(0, 1)
+            : items,
+          ...(options.paged && items.length > 1 && !url.searchParams.has('cursor')
+            ? { nextCursor: 'older' }
+            : {}),
         },
       });
+    }
     if (path === `/api/inference/packs/${a}` || path === `/api/inference/packs/${b}`)
       return route.fulfill({ json: path.endsWith(a) ? first : second });
     if (path === `/api/inference/packs/${a}/keys`) {
@@ -233,6 +242,52 @@ test('an uncertain key response does not retry or rotate until the owner explici
   await expect(page.getByLabel('New batch API key')).toHaveValue(secret);
   expect(f.writes).toHaveLength(2);
   expect(f.writes[0].body.operationKey).not.toBe(f.writes[1].body.operationKey);
+});
+
+test('Archive preserves closed batch receipts and pagination while unresolved quota remains active', async ({
+  page,
+}) => {
+  const f = await fixture(page, { paged: true });
+  for (const p of [f.first, f.second]) {
+    Object.assign(p, {
+      status: 'settled',
+      heldInputTokens: 0,
+      heldOutputTokens: 0,
+      availableInputTokens: 0,
+      availableOutputTokens: 0,
+      retirementReason: 'expired',
+      expiresAt: new Date(+now - 1000).toISOString(),
+      refundCents: 0.12,
+    });
+  }
+  await page.goto('/tokens?cursor=older');
+  await page.getByRole('button', { name: 'Archive', exact: true }).click();
+  await expect(page).toHaveURL(/view=archive/);
+  expect(new URL(page.url()).searchParams.has('cursor')).toBe(false);
+  await expect(page.getByRole('row').filter({ hasText: '#11111111' })).toContainText('$1.7331');
+  await expect(page.getByRole('row').filter({ hasText: '#11111111' })).toContainText(
+    '$0.0012 refunded',
+  );
+  await expect(page.getByRole('link', { name: 'View purchase' })).toHaveAttribute(
+    'href',
+    `/token-orders/${a}`,
+  );
+  await page.getByRole('link', { name: 'Older purchases' }).click();
+  await expect(page).toHaveURL(/view=archive.*cursor=older/);
+  await page.reload();
+  await expect(page.getByRole('row').filter({ hasText: '#22222222' })).toBeVisible();
+  await page.getByRole('link', { name: 'Newest purchases' }).click();
+  await expect(page).toHaveURL(/view=archive$/);
+  Object.assign(f.first, { status: 'retiring', heldInputTokens: 100, heldOutputTokens: 64 });
+  await page.getByRole('button', { name: 'Active', exact: true }).click();
+  await expect(page.getByRole('row').filter({ hasText: '#11111111' })).toContainText(
+    'Usage pending',
+  );
+  await expect(page.getByRole('row').filter({ hasText: '#11111111' })).toContainText('100 pending');
+  await expect(page.getByRole('row').filter({ hasText: '#22222222' })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Archive', exact: true }).click();
+  await expect(page.getByRole('row').filter({ hasText: '#22222222' })).toBeVisible();
+  expect(f.writes).toHaveLength(0);
 });
 
 test('the inventory scrolls within its table on mobile and connection links remain keyboard accessible', async ({

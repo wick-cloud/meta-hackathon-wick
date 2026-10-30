@@ -1,4 +1,5 @@
 import { moneyCents } from './data.js';
+import { registerVmInventory } from './inventory.js';
 import { clientOperationKey, recordKeyAction, withOperation } from '../operations.js';
 import type { FastifyInstance } from 'fastify';
 import type { Pool } from 'pg';
@@ -46,6 +47,7 @@ export {
 export { markReady, confirmCleanup } from './lifecycle.js';
 
 export async function registerMarketplace(app: FastifyInstance, ctx: AppContext) {
+  registerVmInventory(app, ctx);
   const proposalCalls = new Map<string, { count: number; resetsAt: number }>();
   app.post('/api/requests', async (request) =>
     createRequest(ctx, await ctx.requireActor(request, ['buyer']), {
