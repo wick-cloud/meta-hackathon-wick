@@ -21,6 +21,7 @@ import {
   verifyPublicRepository,
   baseRefSchema,
   codingAction,
+  parseCodingResponse,
 } from './contracts.js';
 import { guestStep } from './guest.js';
 
@@ -646,12 +647,7 @@ export async function processCodingJob(ctx: AppContext, id: string) {
             id,
             token,
           );
-          let action: unknown;
-          try {
-            action = JSON.parse(result.choices[0]!.message.content);
-          } catch {
-            action = null;
-          }
+          const action = parseCodingResponse(result.choices[0]!.message.content);
           await appendResult(
             ctx,
             job,
