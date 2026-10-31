@@ -44,6 +44,7 @@ import { Agents, AgentDetail, TokenComposer, TokenOrderPage, ProviderInference }
 import { PurchaseChooser } from './purchases';
 import { TokenInventory } from './token-inventory';
 import { CodingStudio, CodingJobPage } from './coding';
+import { Studio, StudioTaskPage } from './studio';
 import {
   ProviderCapacity,
   ProviderPolicy,
@@ -374,7 +375,10 @@ export default function App() {
   if (path === '/keys' && user.role !== 'admin') content = <DeveloperKeys key={user.id} />;
   else if (user.role === 'buyer') {
     if (path === '/orders') content = <Orders search={search} />;
-    else if (path === '/studio') content = <CodingStudio key={user.id} search={search} />;
+    else if (path === '/studio') content = <Studio key={user.id} search={search} />;
+    else if (path === '/studio/legacy') content = <CodingStudio key={user.id} search={search} />;
+    else if (path.startsWith('/studio/tasks/'))
+      content = <StudioTaskPage key={path} id={path.split('/')[3]!} />;
     else if (path.startsWith('/studio/jobs/'))
       content = <CodingJobPage key={path} id={path.split('/')[3]!} />;
     else if (path === '/agents') content = <Agents key={user.id} search={search} />;

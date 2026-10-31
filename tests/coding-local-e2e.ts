@@ -15,6 +15,7 @@ import { transaction } from '../src/server/db.js';
 import { applyCreditEntry } from '../src/server/agreements/credits.js';
 import { seedMarketplace } from '../src/server/marketplace/index.js';
 import { guestStep } from '../src/server/coding/guest.js';
+import type { StudioDetail, StudioTask } from '../src/shared/studio.js';
 import type { Actor } from '../src/shared/types.js';
 import type { CodingDetail, CodingJob } from '../src/shared/coding.js';
 
@@ -121,13 +122,22 @@ try {
   ];
   const nextDecision = new Map<string, number>(),
     nativeActions: string[] = [];
+  const studioEnvironments = new Set<string>();
   let environmentId = '',
     loseTestResponse = true;
   const built = await buildApp(config, {
     wrapWick: (wick) => ({
       ...wick,
+      async create(input, key) {
+        const result = await wick.create(input, key);
+        studioEnvironments.add(result.environment.id);
+        return result;
+      },
       async runCommand(id, input) {
-        assert.equal(id, environmentId, 'Command must target the selected local VM.');
+        assert.ok(
+          id === environmentId || studioEnvironments.has(id),
+          'Command must target an owned local test VM.',
+        );
         const payload = JSON.parse(
           inflateSync(
             Buffer.from(input.command.match(/'([A-Za-z0-9+/=]+)'$/)![1]!, 'base64'),
@@ -147,10 +157,25 @@ try {
       async dispatch(_route, input, requestId) {
         const row = (
           await built.ctx.pool.query(
-            'SELECT source_job_id FROM broker_inference_requests WHERE id=$1',
+            'SELECT source_job_id,source_task_id FROM broker_inference_requests WHERE id=$1',
             [requestId],
           )
         ).rows[0];
+        if (row.source_task_id) {
+          const plan = JSON.parse(input.messages[1]!.content);
+          return {
+            id: 'fixture-' + requestId,
+            content: JSON.stringify({
+              catalogId: plan.candidates[0].id,
+              testCommand: plan.ownerTestCommand || 'python3 -m unittest discover -s broker_tests',
+              explanation:
+                'Meta fixture chose the smallest reviewed Linux configuration for the public Python task.',
+            }),
+            finishReason: 'stop',
+            inputTokens: fixtureInputTokens(input),
+            outputTokens: 100,
+          };
+        }
         const index = nextDecision.get(row.source_job_id) ?? 0;
         nextDecision.set(row.source_job_id, index + 1);
         return {
@@ -466,6 +491,98 @@ try {
     await docker(['exec', container, 'mv', '/usr/bin/bwrap.local-test-disabled', '/usr/bin/bwrap']);
   }
   checks.push('missing sandbox fails before repository clone');
+  if (process.env.CODING_LOCAL_STUDIO === '1') {
+    // Only this disposable test container is changed. Exercise fresh-VM setup,
+    // rather than claiming bootstrap from an image with the package preinstalled.
+    await docker(['exec', container, 'apt-get', 'remove', '-y', '-qq', 'bubblewrap']);
+    await docker(['exec', container, 'test', '!', '-e', '/usr/bin/bwrap']);
+    const started = Date.now();
+    const createdTask = await app.inject({
+      method: 'POST',
+      url: '/api/studio/tasks',
+      headers,
+      payload: {
+        operationKey: randomUUID(),
+        repositoryUrl: payload.repositoryUrl,
+        goal: payload.goal,
+        testCommand: payload.testCommand,
+        budgetCents: 1000,
+        durationMinutes: 30,
+        allowInstant: true,
+      },
+    });
+    assert.equal(createdTask.statusCode, 200, createdTask.body);
+    const task = createdTask.json<StudioTask>();
+    console.log('Started automatic Studio task', task.id);
+    const phases: Record<string, number> = {};
+    let studio: StudioDetail | undefined;
+    for (let i = 0; i < 240; i++) {
+      const reply: { statusCode: number; body: string; json: () => unknown } = await app.inject({
+        method: 'GET',
+        url: '/api/studio/tasks/' + task.id,
+        headers,
+      });
+      assert.equal(reply.statusCode, 200, reply.body);
+      const current: StudioDetail = reply.json() as StudioDetail;
+      studio = current;
+      if (phases[current.task.status] === undefined) {
+        phases[current.task.status] = Date.now() - started;
+        console.log('Studio phase:', current.task.status);
+      }
+      if (
+        ['completed', 'failed', 'stopped', 'needs_attention', 'needs_budget'].includes(
+          current.task.status,
+        )
+      )
+        break;
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+    assert(studio, 'The automatic task must have a saved detail record.');
+    assert.equal(studio?.task.status, 'completed', JSON.stringify(studio));
+    assert(studio.task.executionStartedAt);
+    assert(studio.task.verifiedAt);
+    assert(studio.task.completedAt);
+    assert(studio.vm?.cleanupConfirmedAt);
+    assert.equal(studio.task.reservedCents, 0);
+    assert.equal(studio.task.availableCents, 0);
+    assert(studio.task.spentCents <= studio.task.budgetCents);
+    assert(studio.task.returnedCents > 0);
+    assert.equal(studio.tests?.exitCode, 0);
+    assert.match(studio.tests?.output ?? '', /Ran 6 tests/);
+    const exported = await app.inject({
+      method: 'GET',
+      url: '/api/studio/tasks/' + task.id + '/patch',
+      headers,
+    });
+    assert.equal(exported.statusCode, 200);
+    assert.match(exported.body, /broker_average/);
+    assert(studio.modelActivity.every((r) => r.status === 'settled'));
+    await docker(['exec', container, 'bwrap', '--version']);
+    checks.push('task-owned Debian guest installs its missing sandbox package before cloning');
+    report.studio = {
+      taskId: task.id,
+      status: studio.task.status,
+      phaseElapsedMs: phases,
+      modelMode: 'fixture',
+      guestMode: 'actual local Linux',
+      computeChargedCents: studio.task.computeChargedCents,
+      modelChargedCents: studio.task.modelChargedCents,
+      returnedCents: studio.task.returnedCents,
+      modelReceipts: studio.modelActivity.length,
+      testOutput: studio.tests?.output,
+      patchExport: 'passed',
+      vmCleanup: 'fixture acknowledgement; actual container removed at test teardown',
+    };
+    checks.push(
+      'automatic Studio task reserves one budget and purchases model allowance and compute through real 30-second fixture auctions',
+    );
+    checks.push(
+      'Meta fixture plan drives actual Linux edits and six passing tests without selecting a VM or grant',
+    );
+    checks.push(
+      'automatic verification, retained patch, task VM cleanup and unspent funding release',
+    );
+  }
   report.repositoryUrl = job.repositoryUrl;
   report.commitSha = job.commitSha;
   report.jobId = job.id;
@@ -475,8 +592,16 @@ try {
   console.log(JSON.stringify(report, null, 2));
   if (process.env.CODING_LOCAL_PREVIEW === '1') {
     await app.listen({ host: '127.0.0.1', port: 3188 });
-    console.log('Local preview: http://localhost:3188/studio/jobs/' + job.id);
-    await new Promise<void>((resolve) => process.once('SIGINT', () => resolve()));
+    console.log(
+      'Local preview: http://localhost:3188/' +
+        (report.studio
+          ? 'studio/tasks/' + (report.studio as { taskId: string }).taskId
+          : 'studio/jobs/' + job.id),
+    );
+    await new Promise<void>((resolve) => {
+      process.once('SIGINT', () => resolve());
+      process.once('SIGTERM', () => resolve());
+    });
   }
 } finally {
   if (app) await app.close();

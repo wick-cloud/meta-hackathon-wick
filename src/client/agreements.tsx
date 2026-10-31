@@ -1298,7 +1298,8 @@ export function Credits() {
         <p>
           Use wallet credit to fund an agent budget or reserve scheduled VM capacity. Your agent
           spends its budget on prepaid token packs; inference then consumes those tokens. This pilot
-          uses administrator-funded credit, separate from Wick compute credits.
+          uses administrator-funded credit. Studio task budgets cover compute and model purchases;
+          standalone VM rentals keep their existing billing.
         </p>
       </div>
       <section className="card market-panel">

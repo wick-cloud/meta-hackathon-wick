@@ -77,3 +77,37 @@ another model call; a Postgres regression also covers a zero-exit overflow.
 The intentional child-cleanup test emits Python's expected ResourceWarning for
 an unreaped subprocess inside the test. A separate process inspection verifies
 that no marked child remains after the namespace exits.
+
+## Automatic Studio task verification — 2026-10-31
+
+The task-budget extension uses the same public SDK command transport and all
+four route contracts above. E2B, Daytona, Modal and Blaxel each retain their
+existing allocation, terminal, Git, file/copy, snapshot, pause/resume and native
+lifecycle owners. No provider-specific implementation, capability flag or
+private Wick source changed. Native automatic-task setup remains unverified
+for all four providers and every size; fixture contracts are not native proof.
+
+`npm run test:studio-local` passed 17 checks in the isolated Linux environment
+above. It deliberately removed bubblewrap from its own disposable container
+before starting a task through the authenticated owner HTTP API. The fresh-VM
+bootstrap installed the missing fixed OS package, verified namespaces, cloned
+the pinned public repository, and ran the actual edits and six tests. Both
+model and compute fixture auctions observed their full 30-second deadlines.
+The result retained a patch, confirmed fixture VM cleanup, returned unspent
+funding, and removed the actual container and database at teardown. Its task
+spent $1.6120 from $10.0000 and returned $8.3880, with six settled fixture model
+receipts and no pending budget holds. These amounts are fixture accounting,
+not real provider charges.
+
+A separate browser-started task used only the task, public repository and a
+$5.0000 budget, without selecting a VM, grant or model quantities. It completed
+the same Linux work and returned $3.3880. Desktop inspection verified the
+budget breakdown, activity, test receipts and cleanup state. Small-screen CSS
+was reviewed; no runtime device-viewport verification is claimed.
+
+The complete disposable-Postgres suite passed 821 tests across 63 files,
+including 18 Studio tests for funding, operation replay, isolation, leases,
+unknown usage, stop/deadline, replenishment, verified completion and bounded
+10,000-row task history. Type checking and production builds also passed.
+Live Meta responses, native VM images and larger provider output-accounting
+contracts require separate qualification before enabling real automatic tasks.

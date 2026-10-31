@@ -23,6 +23,7 @@ export async function guestStep(
   const script = await readFile(resolve('scripts/coding-guest.py'), 'utf8');
   const input = {
     jobId: job.id,
+    allowBootstrap: Boolean(job.studio_task_id),
     sequence,
     action,
     repositoryUrl: job.repository_url,

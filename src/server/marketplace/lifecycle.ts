@@ -164,6 +164,20 @@ async function requestCleanup(ctx: AppContext, vmId: string, reason: string, exp
 export async function provisionVm(ctx: AppContext, vmId: string) {
   const vm = await claim(ctx, vmId, 'provision');
   if (!vm) return;
+  if (vm.quote_snapshot.studioTaskId) {
+    const allowed = (
+      await ctx.pool.query(
+        `SELECT 1 FROM broker_studio_tasks WHERE id=$1 AND NOT stop_requested AND outcome IS NULL AND deadline_at>clock_timestamp()`,
+        [vm.quote_snapshot.studioTaskId],
+      )
+    ).rowCount;
+    if (!allowed) {
+      if (vm.poll_attempts === 1 && !vm.environment_id)
+        await confirmCleanup(ctx, vmId, 'Task stopped before VM admission.', true);
+      else await requestCleanup(ctx, vmId, 'Task stopped; reconciling its original allocation.');
+      return;
+    }
+  }
   const admissionDeadline = vm.create_input.hardEndAt ?? vm.quote_snapshot.admissionDeadlineAt;
   if (!vm.environment_id && admissionDeadline && Date.parse(admissionDeadline) <= Date.now()) {
     if (vm.poll_attempts === 1)

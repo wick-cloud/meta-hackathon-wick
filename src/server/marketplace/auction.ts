@@ -1,4 +1,5 @@
 import { moneyCents } from './data.js';
+import { studioAuthority, type StudioSource } from '../coding/studio-budget.js';
 import { MIN_ORDER_PRICE_CENTS } from '../../shared/money.js';
 import { randomUUID } from 'node:crypto';
 import { clientOperationKey, enforceKeyLimit, withOperation } from '../operations.js';
@@ -42,6 +43,7 @@ export async function createRequest(
   actor: Actor,
   body: Row,
   priorRequestId?: string,
+  studio?: StudioSource,
 ) {
   if (!body || typeof body !== 'object' || Array.isArray(body))
     throw new HttpError(400, 'A request body is required.');
@@ -87,6 +89,7 @@ export async function createRequest(
         requirements: { cpu, memoryGb, ...(gpu ? { gpu } : {}) },
         priorRequestId: priorRequestId ?? null,
         mode: ctx.wick.mode,
+        ...(studio ? { studioTaskId: studio.id } : {}),
       },
       async () => {
         if (priorRequestId) {
@@ -219,9 +222,26 @@ export async function createRequest(
               'No approved configuration satisfies the reviewed requirements.',
             );
         }
+        if (studio) {
+          const task = await studioAuthority(db, studio, actor);
+          if (task.vm_request_id) {
+            const prior = (
+              await db.query('SELECT * FROM broker_requests WHERE id=$1 AND buyer_id=$2', [
+                task.vm_request_id,
+                actor.id,
+              ])
+            ).rows[0];
+            if (prior) return requestView(prior);
+          }
+          if (Number(task.compute_reserved_cents) < maxPriceCents)
+            throw new HttpError(
+              409,
+              'Compute must be reserved from the task budget before auction admission.',
+            );
+        }
         const r = await db.query(
-          `INSERT INTO broker_requests(buyer_id,description,catalog_id,catalog_snapshot,region,duration_minutes,max_price_cents,requirements,prior_request_id,source_api_key_id)
-      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+          `INSERT INTO broker_requests(buyer_id,description,catalog_id,catalog_snapshot,region,duration_minutes,max_price_cents,requirements,prior_request_id,source_api_key_id,studio_task_id)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
           [
             actor.id,
             description,
@@ -236,9 +256,15 @@ export async function createRequest(
             { cpu, memoryGb, ...(gpu ? { gpu } : {}) },
             priorRequestId || null,
             actor.apiKey?.id ?? null,
+            studio?.id ?? null,
           ],
         );
         const request = r.rows[0];
+        if (studio)
+          await db.query('UPDATE broker_studio_tasks SET vm_request_id=$2 WHERE id=$1', [
+            studio.id,
+            request.id,
+          ]);
         if (priorRequestId) {
           await db.query('UPDATE broker_requests SET resolution_request_id=$2 WHERE id=$1', [
             priorRequestId,
@@ -629,6 +655,17 @@ export async function awardHeldBid(ctx: AppContext, db: PoolClient, request: Row
   if (ctx.wick.mode === 'real') assertManagedCustomerRoute(catalog);
   if (!(await globalAdmissionAvailable(ctx, db, request)))
     throw new HttpError(409, 'The concurrent VM limit is reached.');
+  if (request.studio_task_id) {
+    const allowed = (
+      await db.query(
+        `SELECT 1 FROM broker_studio_tasks t JOIN broker_inference_grants g ON g.id=t.grant_id
+      WHERE t.id=$1 AND NOT t.stop_requested AND t.outcome IS NULL AND t.deadline_at>clock_timestamp()
+      AND t.compute_reserved_cents >= $2 AND g.status='active' AND g.expires_at>clock_timestamp()`,
+        [request.studio_task_id, winner.total_price_cents],
+      )
+    ).rowCount;
+    if (!allowed) throw new HttpError(409, 'Studio no longer authorizes this compute award.');
+  }
   const requestId = request.id;
   await db.query(
     "UPDATE broker_bids SET status=CASE WHEN id=$2 THEN 'won' ELSE 'lost' END WHERE request_id=$1",
@@ -677,6 +714,9 @@ export async function awardHeldBid(ctx: AppContext, db: PoolClient, request: Row
       catalog,
       {
         totalPriceCents: winner.total_price_cents,
+        ...(request.studio_task_id
+          ? { billingSource: 'studio_task', studioTaskId: request.studio_task_id }
+          : {}),
         currency: 'USD',
         feeCents: 0,
         ...(winner.offering_snapshot.revenueShare
@@ -784,4 +824,32 @@ export async function proposeBid(ctx: AppContext, actor: Actor, requestId: strin
       throw new HttpError(422, 'Muse proposal violates the fixed-price policy or request budget.');
   }
   return { ...proposal, offeringId: match.offering.id as string, mode: ctx.muse.mode };
+}
+
+export async function cancelRequest(ctx: AppContext, actor: Actor, id: string, key?: string) {
+  key = clientOperationKey(key, Boolean(actor.apiKey));
+  return transaction(ctx.pool, async (db) =>
+    withOperation(db, actor, 'orders.cancel', key, { id }, async () => {
+      const row = (
+        await db.query('SELECT * FROM broker_requests WHERE id=$1 AND buyer_id=$2 FOR UPDATE', [
+          id,
+          actor.id,
+        ])
+      ).rows[0];
+      if (!row) throw new HttpError(404, 'Request not found.');
+      if (row.status === 'cancelled') return { cancelled: true };
+      if (row.status !== 'open')
+        throw new HttpError(
+          409,
+          'The auction has ended. Manage termination from the VM detail page.',
+        );
+      await db.query("UPDATE broker_requests SET status='cancelled' WHERE id=$1", [id]);
+      await db.query("UPDATE broker_bids SET status='cancelled' WHERE request_id=$1", [id]);
+      await db.query(
+        "UPDATE broker_holds SET released_at=now(),release_reason='Buyer cancelled auction' WHERE bid_id IN(SELECT id FROM broker_bids WHERE request_id=$1) AND released_at IS NULL",
+        [id],
+      );
+      return { cancelled: true };
+    }),
+  );
 }

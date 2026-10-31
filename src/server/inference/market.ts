@@ -1,4 +1,5 @@
 import { moneyAmount } from './data.js';
+import { studioGrantOpen, studioAuthority, type StudioSource } from '../coding/studio-budget.js';
 import { admitBuyingDecision } from './buying-guard.js';
 import { centsFromUnits, moneyUnits, MIN_ORDER_PRICE_CENTS } from '../../shared/money.js';
 import { createHmac, timingSafeEqual } from 'node:crypto';
@@ -333,6 +334,7 @@ export async function createTokenOrder(
   actor: Actor,
   raw: unknown,
   buying?: { decisionId: string; automatic: boolean },
+  studio?: StudioSource,
 ) {
   const input = createOrderSchema.parse(raw),
     grantId = grantIdFor(actor, input.grantId),
@@ -340,6 +342,9 @@ export async function createTokenOrder(
   return transaction(ctx.pool, async (db) => {
     await authority(db, actor, 'tokens:buy');
     const grant = await lockedGrant(db, actor, grantId);
+    if (studio) await studioAuthority(db, studio, actor);
+    if (!(await studioGrantOpen(db, grantId)))
+      failure(409, 'task_stopped', 'This Studio task no longer authorizes purchases.');
     const prior = (
       await db.query(
         `SELECT o.*,p.id pack_id FROM broker_token_orders o LEFT JOIN broker_token_packs p ON p.order_id=o.id WHERE o.grant_id=$1 AND o.operation_key=$2`,
@@ -353,6 +358,11 @@ export async function createTokenOrder(
           'operation_conflict',
           'This operation key belongs to a different token purchase.',
         );
+      if (studio)
+        await db.query('UPDATE broker_studio_tasks SET model_order_id=$2 WHERE id=$1', [
+          studio.id,
+          prior.id,
+        ]);
       return orderView(prior);
     }
     const now = await clock(db);
@@ -499,6 +509,11 @@ export async function createTokenOrder(
         ],
       )
     ).rows[0];
+    if (studio)
+      await db.query('UPDATE broker_studio_tasks SET model_order_id=$2 WHERE id=$1', [
+        studio.id,
+        order.id,
+      ]);
     if (buying)
       await db.query(
         "UPDATE broker_inference_buying_decisions SET status='ordered',order_id=$2 WHERE id=$1",
@@ -578,6 +593,7 @@ export async function closeTokenAuction(ctx: AppContext, id: string) {
     if (new Date(order.closes_at) > now) return;
     if (
       owner?.role !== 'buyer' ||
+      !(await studioGrantOpen(db, grant.id)) ||
       grant.status !== 'active' ||
       new Date(grant.expires_at) <= now ||
       (meta.source_key_id &&
@@ -825,7 +841,7 @@ export async function closeGrantLocked(db: PoolClient, grant: Row, reason: strin
   ).rowCount;
   await db.query(
     'UPDATE broker_inference_grants SET available_cents=0,returned_cents=returned_cents+$2,status=$3 WHERE id=$1',
-    [grant.id, amount, held ? 'closing' : 'closed'],
+    [grant.id, amount, held || Number(state.held_cents) > 0 ? 'closing' : 'closed'],
   );
 }
 export async function providerOffering(ctx: AppContext, actor: Actor) {

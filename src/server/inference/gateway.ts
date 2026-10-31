@@ -25,6 +25,7 @@ import {
 } from './data.js';
 import { fixtureInputTokens, InferenceUpstreamError, type AdapterResult } from './runtime.js';
 import { retirePackLocked } from './market.js';
+import { studioAuthority } from '../coding/studio-budget.js';
 
 function inferenceFailure(code: string, id: string, message: string): never {
   try {
@@ -153,7 +154,7 @@ async function settleLocked(
     await retirePackLocked(db, updated, 'quota_exhausted');
   await db.query(
     `UPDATE broker_inference_grants g SET status='closed' WHERE g.id=$1 AND g.status='closing'
-    AND NOT EXISTS(SELECT 1 FROM broker_inference_requests WHERE grant_id=g.id AND status NOT IN('settled','rejected'))`,
+    AND held_cents=0 AND NOT EXISTS(SELECT 1 FROM broker_inference_requests WHERE grant_id=g.id AND status NOT IN('settled','rejected'))`,
     [request.grant_id],
   );
 }
@@ -271,7 +272,36 @@ export async function completeCodingJob(
     ])
   ).rows[0];
   if (!job) failure(404, 'not_found', 'Coding job not found.');
-  return completeInternal(ctx, actor, raw, { id: jobId, grantId: job.grant_id, leaseToken });
+  return completeInternal(ctx, actor, raw, {
+    kind: 'coding',
+    id: jobId,
+    grantId: job.grant_id,
+    leaseToken,
+  });
+}
+/** Studio planning uses the same prepaid gateway, before a VM exists. */
+export async function completeStudioTask(
+  ctx: AppContext,
+  actor: Actor,
+  raw: unknown,
+  taskId: string,
+  leaseToken: string,
+) {
+  if (actor.apiKey || actor.role !== 'buyer')
+    failure(403, 'owner_required', 'Studio requires owner authority.');
+  const task = (
+    await ctx.pool.query('SELECT grant_id FROM broker_studio_tasks WHERE id=$1 AND buyer_id=$2', [
+      taskId,
+      actor.id,
+    ])
+  ).rows[0];
+  if (!task) failure(404, 'not_found', 'Task not found.');
+  return completeInternal(ctx, actor, raw, {
+    kind: 'studio',
+    id: taskId,
+    grantId: task.grant_id,
+    leaseToken,
+  });
 }
 async function codingAuthority(
   db: PoolClient,
@@ -283,6 +313,7 @@ async function codingAuthority(
       `SELECT j.id FROM broker_coding_jobs j JOIN broker_vms v ON v.id=j.vm_id
     WHERE j.id=$1 AND j.buyer_id=$2 AND j.lease_token=$3 AND j.lease_until>clock_timestamp()
     AND j.status='running' AND j.requested_action IS NULL AND j.deadline_at>clock_timestamp()
+    AND (j.studio_task_id IS NULL OR EXISTS(SELECT 1 FROM broker_studio_tasks t WHERE t.id=j.studio_task_id AND NOT t.stop_requested AND t.outcome IS NULL AND t.deadline_at>clock_timestamp()))
     AND v.status='running' AND v.expires_at>clock_timestamp() AND v.environment_id=j.environment_id
     FOR SHARE OF j,v`,
       [source.id, actor.id, source.leaseToken],
@@ -299,7 +330,7 @@ async function completeInternal(
   ctx: AppContext,
   actor: Actor,
   raw: unknown,
-  source?: { id: string; grantId: string; leaseToken: string },
+  source?: { kind: 'coding' | 'studio'; id: string; grantId: string; leaseToken: string },
 ): Promise<InferenceCompletion> {
   const { operationKey, ...input } = completionSchema.parse(raw),
     grantId = source?.grantId ?? requireGrantKey(actor),
@@ -308,7 +339,10 @@ async function completeInternal(
   const reservation = await transaction(ctx.pool, async (db) => {
     await authority(db, actor, 'inference:use');
     const grant = await lockedGrant(db, actor, grantId);
-    if (source) await codingAuthority(db, source, actor);
+    if (source) {
+      if (source.kind === 'studio') await studioAuthority(db, source, actor);
+      else await codingAuthority(db, source, actor);
+    }
     const prior = (
       await db.query(
         'SELECT * FROM broker_inference_requests WHERE grant_id=$1 AND operation_key=$2',
@@ -397,8 +431,8 @@ async function completeInternal(
       );
       const request = (
         await db.query(
-          `INSERT INTO broker_inference_requests(grant_id,pack_id,buyer_id,source_key_id,provider,source_mode,operation_key,input_fingerprint,reserved_input,reserved_output,deadline_at,source_job_id)
-        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,clock_timestamp()+interval '120 seconds',$11) RETURNING *`,
+          `INSERT INTO broker_inference_requests(grant_id,pack_id,buyer_id,source_key_id,provider,source_mode,operation_key,input_fingerprint,reserved_input,reserved_output,deadline_at,source_job_id,source_task_id)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,clock_timestamp()+interval '120 seconds',$11,$12) RETURNING *`,
           [
             grantId,
             pack.id,
@@ -410,7 +444,8 @@ async function completeInternal(
             fingerprint,
             inputBound,
             input.max_tokens,
-            source?.id ?? null,
+            source?.kind === 'coding' ? source.id : null,
+            source?.kind === 'studio' ? source.id : null,
           ],
         )
       ).rows[0];
@@ -431,7 +466,10 @@ async function completeInternal(
     await transaction(ctx.pool, async (db) => {
       await authority(db, actor, 'inference:use');
       const grant = await lockedGrant(db, actor, grantId, true);
-      if (source) await codingAuthority(db, source, actor);
+      if (source) {
+        if (source.kind === 'studio') await studioAuthority(db, source, actor);
+        else await codingAuthority(db, source, actor);
+      }
       activeMode(ctx, grant);
       const route = (
         await db.query('SELECT * FROM broker_inference_routes WHERE provider=$1 FOR UPDATE', [
