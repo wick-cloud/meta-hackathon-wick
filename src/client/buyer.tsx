@@ -1153,7 +1153,9 @@ export function VMDetail({ id }: { id: string }) {
           </p>
         </section>
       )}
-      {vm.failureReason && <ErrorBox error={vm.failureReason} />}
+      {vm.failureReason && (!vm.cleanupConfirmedAt || !vm.readyAt) && (
+        <ErrorBox error={vm.failureReason} />
+      )}
       <Suspense
         fallback={
           <div className="card">
