@@ -67,6 +67,19 @@
   color: #efa8a8;
   background: #291a1c;
 }
+.coding-status.success {
+  background: #17271d;
+  color: #a1d8b4;
+}
+.coding-status.error {
+  background: #291a1c;
+  color: #efa8a8;
+}
+.coding-status.warning,
+.coding-status.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
 .coding-page .field {
   margin-bottom: 17px;
 }
@@ -173,7 +186,7 @@
 }
 .coding-workspace {
   display: grid;
-  grid-template-columns: 230px minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: 19px;
   align-items: start;
 }
@@ -224,10 +237,24 @@
   color: var(--muted);
   font-size: 10px;
 }
-.coding-timeline .completed .coding-dot {
+.coding-timeline .success .coding-dot {
   background: #17271d;
   color: #a1d8b4;
   border-color: transparent;
+}
+.coding-timeline .error .coding-dot {
+  color: #efa8a8;
+  border-color: #754043;
+}
+.coding-timeline .warning .coding-dot {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.coding-timeline .error small {
+  color: #efa8a8;
+}
+.coding-timeline .warning small {
+  color: var(--accent);
 }
 .coding-path {
   font-size: 11px;
@@ -269,20 +296,14 @@
   max-height: 600px;
   overflow: auto;
 }
-.coding-test-result,
-.coding-model-result {
+.coding-test-result {
   padding: 18px 0;
   border-bottom: 1px solid var(--line);
 }
-.coding-test-result h3,
-.coding-model-result h3 {
+.coding-test-result h3 {
   font-size: 13px;
   font-weight: 500;
   margin: 8px 0;
-}
-.coding-model-result code {
-  font-size: 11px;
-  overflow-wrap: anywhere;
 }
 .coding-footer {
   display: flex;
@@ -300,12 +321,103 @@
 .coding-page .page-heading p {
   overflow-wrap: anywhere;
 }
+.coding-execution {
+  max-width: 1100px;
+}
+.coding-brief {
+  margin: -8px 0 22px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.coding-brief p,
+.coding-disclosure p {
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+.coding-brief summary,
+.coding-disclosure summary,
+.coding-history-details > summary {
+  cursor: pointer;
+}
+.coding-outcome {
+  display: flex;
+  gap: 13px;
+  padding: 20px;
+  margin-bottom: 22px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--card);
+}
+.coding-outcome h2 {
+  margin: 0 0 6px;
+  font-size: 16px;
+}
+.coding-outcome p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.7;
+}
+.coding-outcome-icon {
+  padding-top: 2px;
+  flex-shrink: 0;
+}
+.coding-outcome.success .coding-outcome-icon {
+  color: #a1d8b4;
+}
+.coding-outcome.error {
+  border-color: #754043;
+}
+.coding-outcome.error .coding-outcome-icon {
+  color: #efa8a8;
+}
+.coding-outcome.warning {
+  border-color: var(--accent);
+}
+.coding-outcome.warning .coding-outcome-icon {
+  color: var(--accent);
+}
+.coding-disclosure {
+  margin: 20px 0 0;
+  padding-top: 17px;
+  border-top: 1px solid var(--line);
+  font-size: 12px;
+}
+.coding-receipt {
+  padding: 14px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+}
+.coding-receipt summary {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.coding-receipt code {
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.coding-test-command {
+  display: block;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+}
+.coding-history-details > summary {
+  font-size: 13px;
+  font-weight: 500;
+}
+.coding-history-details .coding-timeline {
+  margin-bottom: 0;
+}
+.coding-history-details .coding-timeline li:last-child {
+  padding-bottom: 0;
+}
 @media (max-width: 1000px) {
   .coding-compose {
     grid-template-columns: minmax(0, 1fr);
-  }
-  .coding-workspace {
-    grid-template-columns: 190px minmax(0, 1fr);
   }
   .coding-panel {
     padding: 19px;
@@ -314,17 +426,6 @@
 @media (max-width: 720px) {
   .coding-workspace {
     grid-template-columns: minmax(0, 1fr);
-  }
-  .coding-timeline {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 14px;
-  }
-  .coding-timeline li {
-    padding: 0;
-  }
-  .coding-timeline li:before {
-    display: none;
   }
   .coding-fields {
     grid-template-columns: minmax(0, 1fr);

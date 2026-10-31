@@ -357,6 +357,43 @@ describe.skipIf(!url)('durable coding jobs (disposable PostgreSQL; no live provi
     expect(detail.job.testsPassed).toBe(false);
     expect(detail.job.modelCalls).toBe(0);
   });
+  it('loads one owned lifecycle and at most 64 steps with unrelated coding history present', async () => {
+    await buy();
+    const job = await createCodingJob(ctx, owner, input(), verify);
+    await processCodingJob(ctx, job.id);
+    await pool.query(
+      `INSERT INTO broker_coding_jobs(buyer_id,vm_id,grant_id,environment_id,operation_key,input_fingerprint,repository_url,commit_sha,base_ref,goal,test_command,source_mode,status,deadline_at)
+      SELECT buyer_id,vm_id,grant_id,environment_id,'history-'||g,input_fingerprint,repository_url,commit_sha,base_ref,goal,test_command,source_mode,'ready',deadline_at
+      FROM broker_coding_jobs CROSS JOIN generate_series(1,1000) g WHERE id=$1`,
+      [job.id],
+    );
+    const { seal } = await import('../src/server/coding/service.js');
+    await pool.query(
+      `INSERT INTO broker_coding_steps(job_id,sequence,kind,status,payload_cipher,action)
+      SELECT $1,g,'command','completed',$2,'read' FROM generate_series(64,163) g`,
+      [job.id, seal(ctx, { action: 'read' })],
+    );
+    await pool.query('ANALYZE broker_coding_jobs');
+    const spy = vi.spyOn(pool, 'query');
+    const detail = await codingDetail(ctx, owner, job.id);
+    const calls = [...spy.mock.calls];
+    spy.mockRestore();
+    expect(calls).toHaveLength(2);
+    expect(detail.steps).toHaveLength(64);
+    expect(detail.parentTask).toBeNull();
+    expect(detail.vm?.status).toBe('running');
+    const explained = (
+      await pool.query('EXPLAIN(ANALYZE,BUFFERS,FORMAT JSON) ' + String(calls[0]![0]), [
+        job.id,
+        owner.id,
+      ])
+    ).rows[0]['QUERY PLAN'];
+    expect(explained[0].Plan['Actual Rows']).toBe(1);
+    expect(JSON.stringify(explained)).toContain('broker_coding_jobs_pkey');
+    if (process.env.CODING_QUERY_EVIDENCE === '1')
+      console.log('Coding detail plan', JSON.stringify(explained));
+    await expect(codingDetail(ctx, other, job.id)).rejects.toThrow('not found');
+  });
   it('pauses for allowance, resumes after purchase, and never extends the deadline', async () => {
     const job = await createCodingJob(ctx, owner, input(), verify);
     await processCodingJob(ctx, job.id);

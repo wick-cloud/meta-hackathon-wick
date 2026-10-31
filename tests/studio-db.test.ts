@@ -28,7 +28,7 @@ import {
   listStudioTasks,
   studioPatch,
 } from '../src/server/coding/studio.js';
-import { processCodingJob } from '../src/server/coding/service.js';
+import { processCodingJob, codingDetail } from '../src/server/coding/service.js';
 import { reserveStudioCompute } from '../src/server/coding/studio-budget.js';
 
 const url = process.env.TEST_DATABASE_URL;
@@ -323,6 +323,12 @@ describe.skipIf(!url)('Studio task budget and lifecycle (disposable Postgres)', 
     await cleaned(task.id, vm.id);
     const detail = await studioDetail(ctx, owner, task.id);
     expect(detail.task.status).toBe('completed');
+    const execution = await codingDetail(ctx, owner, t.coding_job_id);
+    expect(execution.parentTask).toMatchObject({ id: task.id, status: 'completed' });
+    expect(execution.parentTask?.completedAt).toBeTruthy();
+    expect(execution.vm).toMatchObject({ status: 'terminated' });
+    expect(execution.vm?.cleanupConfirmedAt).toBeTruthy();
+    await expect(codingDetail(ctx, other, t.coding_job_id)).rejects.toThrow('not found');
     expect(detail.task.executionStartedAt).toBeTruthy();
     expect(detail.tests?.exitCode).toBe(0);
     expect(await studioPatch(ctx, owner, task.id)).toContain('diff --git');
