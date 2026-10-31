@@ -125,8 +125,21 @@ test('buyer manually reviews an immutable request, receives a VM and one demo in
     await page.goto('/invoices');
     await expect(page.getByText('No payment due', { exact: false }).first()).toBeVisible();
   } finally {
-    if (vmId) await page.request.post(`/api/vms/${vmId}/terminate`);
-    else await page.request.post(`/api/requests/${requestId}/cancel`);
+    if (vmId) {
+      await page.request.post(`/api/vms/${vmId}/terminate`);
+      await expect
+        .poll(
+          async () =>
+            (await (await page.request.get(`/api/vms/${vmId}`)).json()).cleanupConfirmedAt,
+          { timeout: 30000, intervals: [500, 1000, 2000] },
+        )
+        .toBeTruthy();
+      await page.goto(`/vms/${vmId}`);
+      await expect(page.getByText('Terminated', { exact: true })).toBeVisible();
+      await expect(
+        page.getByText('Waiting for Wick to confirm environment cleanup.', { exact: true }),
+      ).toHaveCount(0);
+    } else await page.request.post(`/api/requests/${requestId}/cancel`);
   }
 });
 
