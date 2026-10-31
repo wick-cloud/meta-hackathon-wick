@@ -43,5 +43,37 @@ Local evidence:
   adapters, from form/review through tests, patch and Meta receipts. This is
   fixture execution, not live provider/model evidence.
 
-No native resources or provider cleanup receipts exist for this implementation.
-Production deployment and live diagnostics remain separate actions.
+No Wick provider resources were allocated and no provider cleanup receipt is
+claimed. Local Linux test resources are recorded separately below. Production
+deployment and live provider diagnostics remain separate actions.
+
+## Local Linux verification — 2026-10-31
+
+`npm run test:coding-local` passed with actual Linux commands in an isolated
+Colima VM (aarch64, 2 CPUs/2 GiB, no host mounts or forwarded SSH agent). The
+test container was privileged for nested namespaces and limited to one CPU,
+768 MB/128 processes. Versions: Linux 6.8.0-117-generic, Python 3.12.16,
+Git 2.39.5, bubblewrap 0.8.0. The fixture image pins its official Python base
+digest. This is local Linux proof, not Wick API/provider/profile qualification.
+
+The real anonymous repository was `https://github.com/pypa/sampleproject`, pinned
+at `621e4974ca25ce531773def586ba3ed8e736b3fc`. The real app, auth, Postgres and
+PgBoss worker produced two new files, six passing Linux tests and an HTTP patch.
+Meta decisions, token counts and pilot money were explicit fixtures; no paid
+inference or Wick provider VM was used.
+
+Thirteen checks passed: anonymous pinned cloning; real edits/tests; private
+workspace/environment/network isolation; baseline failure then success; lost
+response reconciliation; same-step replay prevention; no surviving child
+process; patch export and creation idempotency; absolute cutoff; stop marker;
+16 KB output truncation; rejection of a fast 72 MB write; and missing-bubblewrap
+rejection before clone. Test containers/databases were removed after the run.
+
+The first overflow probe exposed a real bug: a quick writer could exit zero
+between periodic scans. The executor now performs a bounded final scan after
+cleanup and marks policy violations explicitly. The worker pauses them before
+another model call; a Postgres regression also covers a zero-exit overflow.
+
+The intentional child-cleanup test emits Python's expected ResourceWarning for
+an unreaped subprocess inside the test. A separate process inspection verifies
+that no marked child remains after the namespace exits.

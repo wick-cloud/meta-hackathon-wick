@@ -399,10 +399,18 @@ async function appendResult(
     if (payload.action === 'test')
       tests = result.result?.exitCode === 0 && !result.result?.interrupted;
     if (payload.action === 'diff') {
-      status = result.result?.truncated || result.result?.exitCode !== 0 ? 'paused' : 'ready';
+      status =
+        result.result?.truncated || result.result?.exitCode !== 0 || result.result?.interrupted
+          ? 'paused'
+          : 'ready';
       if (status === 'paused')
         reason =
           'The patch exceeds the export bound or could not be read. Inspect the VM terminal.';
+    }
+    if (result.result?.limitExceeded === 'workspace') {
+      status = 'paused';
+      reason =
+        'The job clone exceeded 64 MB or 4,000 entries. Inspect and clean it before resuming.';
     }
   }
   if (!next && (status === 'running' || status === 'paused')) next = { action: 'model' };

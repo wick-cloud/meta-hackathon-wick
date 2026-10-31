@@ -27,7 +27,8 @@
     "pretest": "npm run build:packages",
     "test:developer-e2e": "npm run build:packages && tsx tests/developer-access-e2e.ts",
     "inference:readiness": "tsx scripts/inference-readiness.ts",
-    "test:inference-live": "npm run build:packages && tsx tests/inference-live-e2e.ts"
+    "test:inference-live": "npm run build:packages && tsx tests/inference-live-e2e.ts",
+    "test:coding-local": "tsx tests/coding-local-e2e.ts"
   },
   "dependencies": {
     "@fastify/middie": "^9.0.3",

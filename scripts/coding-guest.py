@@ -56,10 +56,37 @@ def sandbox(command):
     return args
 
 
+def workspace_exceeded():
+    """Bound directory enumeration itself, including very large single directories."""
+    pending, entries, total = [repo], 0, 0
+    while pending:
+        directory = pending.pop()
+        try:
+            with os.scandir(directory) as children:
+                for child in children:
+                    entries += 1
+                    if entries > 4000:
+                        return True
+                    try:
+                        if child.is_dir(follow_symlinks=False):
+                            pending.append(child.path)
+                        else:
+                            total += child.stat(follow_symlinks=False).st_size
+                    except FileNotFoundError:
+                        continue
+                    if total > 64 * 1024**2:
+                        return True
+        except FileNotFoundError:
+            continue
+    return False
+
+
 def execute(args, cwd=None, seconds=90):
     remaining = min(seconds, data["deadline"] - time.time())
     if remaining <= 0 or (job / "stop").exists():
         raise ValueError("Job stopped or deadline reached")
+    if workspace_exceeded():
+        raise ValueError("Workspace exceeds 64 MB or 4,000 entries; clean the job clone before resuming")
     def limits():
         resource.setrlimit(resource.RLIMIT_CPU, (90, 90))
         resource.setrlimit(resource.RLIMIT_AS, (2 * 1024**3, 2 * 1024**3))
@@ -73,6 +100,7 @@ def execute(args, cwd=None, seconds=90):
     output = bytearray()
     truncated = False
     ended = False
+    oversized = False
     until = time.monotonic() + remaining
     next_size_check = 0
     try:
@@ -82,17 +110,8 @@ def execute(args, cwd=None, seconds=90):
                 break
             # Bound even a hostile clone/build that keeps writing its workspace.
             if time.monotonic() > next_size_check:
-                total, entries = 0, 0
-                for directory, dirs, files in os.walk(repo, followlinks=False):
-                    entries += len(dirs) + len(files)
-                    for filename in files:
-                        try:
-                            total += os.lstat(os.path.join(directory, filename)).st_size
-                        except FileNotFoundError:
-                            pass
-                    if total > 64 * 1024**2 or entries > 4000:
-                        ended = True
-                        break
+                oversized = workspace_exceeded()
+                ended = ended or oversized
                 next_size_check = time.monotonic() + 0.5
                 if ended:
                     break
@@ -105,7 +124,10 @@ def execute(args, cwd=None, seconds=90):
                     output.extend(chunk[:spare])
                     truncated = truncated or len(chunk) > spare
         if ended:
-            os.killpg(process.pid, signal.SIGKILL)
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
         try:
             code = process.wait(timeout=2)
         except subprocess.TimeoutExpired:
@@ -116,8 +138,12 @@ def execute(args, cwd=None, seconds=90):
             os.killpg(process.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
+        # Fast writers can finish between periodic scans. Validate after cleanup too.
+        oversized = oversized or workspace_exceeded()
+        ended = ended or oversized
         return {"output": output.decode("utf-8", "replace"), "exitCode": code,
-                "truncated": truncated, "interrupted": ended}
+                "truncated": truncated, "interrupted": ended,
+                **({"limitExceeded": "workspace"} if oversized else {})}
     finally:
         try:
             os.killpg(process.pid, signal.SIGKILL)
@@ -193,7 +219,7 @@ def main():
             for args in [git("init", "."), git("fetch", "--depth=1", data["repositoryUrl"], data["commitSha"]),
                          git("checkout", "-b", "muse/" + data["jobId"], "FETCH_HEAD")]:
                 result = execute(args, cwd=repo)
-                if result["exitCode"] != 0:
+                if result["exitCode"] != 0 or result["interrupted"]:
                     raise ValueError("Anonymous bounded clone failed")
             (repo / ".git" / "info" / "exclude").write_text("__pycache__/\n.pytest_cache/\n*.py[co]\nnode_modules/\n.venv/\n")
             files = execute(git("ls-files"), cwd=repo)["output"].splitlines()[:150]

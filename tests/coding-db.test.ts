@@ -53,7 +53,8 @@ describe.skipIf(!url)('durable coding jobs (disposable PostgreSQL; no live provi
   let actions: unknown[],
     loseCommand = false,
     loseModel = false,
-    testExit = 0;
+    testExit = 0,
+    workspaceOverflow = false;
   const input = () => ({
     operationKey: randomUUID(),
     repositoryUrl: 'https://github.com/example/average',
@@ -199,7 +200,8 @@ describe.skipIf(!url)('durable coding jobs (disposable PostgreSQL; no live provi
                     ? {
                         exitCode: testExit,
                         output: testExit ? '1 failed' : '2 passed',
-                        interrupted: false,
+                        interrupted: workspaceOverflow,
+                        ...(workspaceOverflow ? { limitExceeded: 'workspace' } : {}),
                       }
                     : data.action.action === 'diff'
                       ? {
@@ -225,6 +227,7 @@ describe.skipIf(!url)('durable coding jobs (disposable PostgreSQL; no live provi
     loseCommand = false;
     loseModel = false;
     testExit = 0;
+    workspaceOverflow = false;
     actions = [
       { action: 'read', path: 'average.py' },
       {
@@ -343,6 +346,16 @@ describe.skipIf(!url)('durable coding jobs (disposable PostgreSQL; no live provi
     const row = (await pool.query('SELECT count(*) FROM broker_coding_jobs WHERE vm_id=$1', [vmId]))
       .rows[0];
     expect(Number(row.count)).toBe(1);
+  });
+  it('pauses a command that exits zero after exceeding the workspace bound without spending model quota', async () => {
+    workspaceOverflow = true;
+    const job = await createCodingJob(ctx, owner, input(), verify);
+    await processCodingJob(ctx, job.id);
+    const detail = await codingDetail(ctx, owner, job.id);
+    expect(detail.job.status).toBe('paused');
+    expect(detail.job.blockedReason).toContain('64 MB');
+    expect(detail.job.testsPassed).toBe(false);
+    expect(detail.job.modelCalls).toBe(0);
   });
   it('pauses for allowance, resumes after purchase, and never extends the deadline', async () => {
     const job = await createCodingJob(ctx, owner, input(), verify);

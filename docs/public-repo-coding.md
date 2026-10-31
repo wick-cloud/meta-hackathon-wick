@@ -38,8 +38,11 @@ Post-test Git operations run inside the same boundary because tests can alter
 repository-local Git configuration.
 
 Commands have a 90-second maximum, shortened by the job deadline. Output is
-capped at 16 KB. Workspace growth is limited to 64 MB/4,000 entries using a
-bounded scan. Per-process CPU/address-space/file-size/process/descriptor limits
+capped at 16 KB. A bounded scan monitors the 64 MB/4,000-entry workspace policy
+and checks again after command cleanup, including fast writers that exit zero
+between scans. A limit violation pauses the job without accepting passing tests
+or spending another model call. The polling policy can observe overshoot; it is
+not a filesystem quota. Per-process CPU/address-space/file-size/process/descriptor limits
 supplement the existing VM resource ceiling; they are not an independent cgroup
 CPU or aggregate memory reservation. Process groups are killed on completion
 and interruption. Bubblewrap parent-death and PID isolation prevent retained
@@ -104,9 +107,31 @@ Run `TEST_DATABASE_URL=<disposable Postgres> npm test`, `npm run typecheck`, and
 explicit synthetic guest/model adapters. Browser fixture checks cover the real
 app/auth/Postgres/PgBoss flow, not native VM or live Meta execution.
 
-The development host is macOS and its Docker daemon is unavailable. Native
-Linux bubblewrap execution, live model coding at the 512-token cap, native
-provider timeouts, process cleanup and each provider/profile remain unverified.
-Missing native evidence does not enable a weaker path. Larger coding tasks need
-separate output/accounting qualification. See the
-[provider coverage record](verification/public-repo-coding-coverage.md).
+The opt-in local Linux runner uses a real public GitHub clone and the production
+guest helper through a local Docker command adapter, with actual file edits and sandboxed test execution. Model
+decisions and money stay fixtures. It exercises the real app/auth/Postgres/PgBoss
+workflow, lost-response reconciliation, replay prevention, process cleanup,
+deadline/stop enforcement, output bounds, fast workspace overflow and missing
+sandbox rejection. Docker is a local testing dependency, not a customer-VM
+requirement.
+
+To reproduce on an explicitly chosen disposable local Docker context:
+
+```sh
+docker --context YOUR_LOCAL_CONTEXT build -f tests/fixtures/coding-linux.Dockerfile -t wick-broker-coding-local:bookworm .
+CODING_TEST_DOCKER_CONTEXT=YOUR_LOCAL_CONTEXT TEST_DATABASE_URL=postgresql://localhost:5432/postgres npm run test:coding-local
+```
+
+The runner requires a loopback Postgres server and a Unix-socket Docker context.
+It creates and removes its own database/container. The container is privileged
+to allow nested namespaces, so use a separate local Linux VM without host home
+mounts; it is bounded to one CPU, 768 MB and 128 processes. The tested Colima
+profile used `--activate=false --mount none --ssh-agent=false --ssh-config=false`
+and did not change the user's Docker context. The report distinguishes actual
+Linux execution from fixture inference. Set `CODING_LOCAL_REPORT` to save its
+JSON evidence; `CODING_LOCAL_PREVIEW=1` keeps the app open for a browser check.
+
+Native Wick provider command/timeouts/profile behavior and real Muse coding at
+the 512-token cap remain unverified. The local Docker transport does not certify
+E2B, Daytona, Modal or Blaxel. Larger coding tasks still need separate accounting
+qualification. See the [coverage record](verification/public-repo-coding-coverage.md).
