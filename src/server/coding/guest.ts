@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { deflateSync } from 'node:zlib';
 import { z } from 'zod';
 import type { AppContext } from '../context.js';
 import { HttpError } from '../context.js';
@@ -29,7 +30,16 @@ export async function guestStep(
     testCommand: job.test_command,
     deadline: new Date(job.deadline_at).getTime() / 1000,
   };
-  const command = `env -i PATH=/usr/local/bin:/usr/bin:/bin python3 -I -c 'import base64;exec(base64.b64decode("${Buffer.from(script).toString('base64')}"))' '${Buffer.from(JSON.stringify(input)).toString('base64')}'`;
+  // Wick accepts at most 16,000 command characters. Compress both the executor
+  // and its input so ordinary file actions also fit the native API envelope.
+  const encodedScript = deflateSync(Buffer.from(script)).toString('base64');
+  const encodedInput = deflateSync(Buffer.from(JSON.stringify(input))).toString('base64');
+  const command = `env -i PATH=/usr/local/bin:/usr/bin:/bin python3 -I -c 'import base64,zlib,sys;sys.argv[1]=base64.b64encode(zlib.decompress(base64.b64decode(sys.argv[1]))).decode();exec(zlib.decompress(base64.b64decode("${encodedScript}")))' '${encodedInput}'`;
+  if (command.length > 16000)
+    return {
+      state: 'failed' as const,
+      error: 'Coding action exceeds Wick’s 16,000-character command limit.',
+    };
   const result = await ctx.wick.runCommand(job.environment_id, { command });
   if (result.exitCode === 127)
     return {

@@ -449,7 +449,7 @@ function realAdapter(config: WickConfig): WickAdapter {
   return {
     mode: 'real',
     async runCommand(id, input) {
-      if (input.command.length > 180000)
+      if (input.command.length > 16000)
         throw new WickApiError('Coding command exceeds the request limit');
       const result = await invoke(() =>
         sdk.environments.runCommand({ path: { id }, body: input, timeoutMs: 110000 }),
