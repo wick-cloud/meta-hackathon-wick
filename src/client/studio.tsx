@@ -16,6 +16,7 @@ import {
   ExternalLink,
 } from 'lucide-react';
 import type { StudioTask, StudioDetail, StudioStatus } from '../shared/studio';
+import type { StudioUsage } from '../shared/studio-usage';
 import { usdToCents } from '../shared/money';
 import { money, post, dateTime, DEFAULT_PRICE_USD } from './api';
 import {
@@ -522,6 +523,84 @@ function Journey({ task, secured }: { task: StudioTask; secured: boolean }) {
     </ol>
   );
 }
+function UsageEstimate({ usage }: { usage: StudioUsage }) {
+  const f = usage.forecast,
+    count = (n: number) => n.toLocaleString('en-US');
+  const percent = (used: number, bought: number) =>
+    bought ? `${((used / bought) * 100).toFixed(1)}%` : '—';
+  return (
+    <section className="studio-card studio-usage" aria-label="Model usage estimate">
+      <div className="studio-section-head">
+        <h2>Model usage</h2>
+        <span className="studio-tag">90% target</span>
+      </div>
+      <p>
+        {f.basis === 'learned'
+          ? `Learned from ${f.trainingSamples} completed tasks in your account.`
+          : 'Initial estimate · learning from completed tasks.'}{' '}
+        Includes model reasoning.
+      </p>
+      <div className="studio-usage-grid" role="table" aria-label="Token forecast and usage">
+        <div role="row">
+          <span role="columnheader">Tokens</span>
+          <span role="columnheader">Input</span>
+          <span role="columnheader">Output</span>
+        </div>
+        <div role="row">
+          <span role="rowheader">Expected task</span>
+          <strong role="cell">{count(f.expectedInput)}</strong>
+          <strong role="cell">{count(f.expectedOutput)}</strong>
+        </div>
+        <div role="row">
+          <span role="rowheader">Used so far</span>
+          <strong role="cell">{count(usage.settledInput)}</strong>
+          <strong role="cell">{count(usage.settledOutput)}</strong>
+        </div>
+        <div role="row">
+          <span role="rowheader">Purchased</span>
+          <span role="cell">{count(usage.purchasedInput)}</span>
+          <span role="cell">{count(usage.purchasedOutput)}</span>
+        </div>
+        <div role="row">
+          <span role="rowheader">Utilization</span>
+          <span role="cell">{percent(usage.settledInput, usage.purchasedInput)}</span>
+          <span role="cell">{percent(usage.settledOutput, usage.purchasedOutput)}</span>
+        </div>
+      </div>
+      {usage.unresolvedCalls > 0 && (
+        <p role="status">
+          {usage.unresolvedCalls} model {usage.unresolvedCalls === 1 ? 'call has' : 'calls have'}{' '}
+          unresolved usage. Totals include settled usage only.
+        </p>
+      )}
+      {usage.reservationLimited && (
+        <p className="studio-usage-floor">
+          Provider reservation requirements increase the allowance above the forecast. The 90%
+          target cannot be reached while those requirements dominate.
+        </p>
+      )}
+      <details>
+        <summary>How this purchase was sized</summary>
+        <p>
+          Allowance {usage.purchaseRound + 1}: {count(usage.purchaseInput)} input /{' '}
+          {count(usage.purchaseOutput)} output tokens. It includes room for a final call and targets
+          90% utilization where provider requirements permit. This is a forecast, not a token limit
+          or a spending guarantee.
+        </p>
+        <p>
+          Per-call reservation: {count(usage.inputReservationFloor)} input /{' '}
+          {count(usage.outputReservationFloor)} output tokens. Additional purchases must fit your
+          remaining task budget.
+        </p>
+        <p>
+          {f.validation
+            ? `Held-out check: ${f.validation.samples} tasks; input error ${(f.validation.inputError * 100).toFixed(1)}%, output error ${(f.validation.outputError * 100).toFixed(1)}%.`
+            : 'Not enough completed tasks for a held-out accuracy measurement yet.'}
+        </p>
+      </details>
+    </section>
+  );
+}
 export function StudioTaskPage({ id }: { id: string }) {
   const [poll, setPoll] = useState(2000),
     detail = useResource<StudioDetail>('/api/studio/tasks/' + id, poll),
@@ -839,6 +918,7 @@ export function StudioTaskPage({ id }: { id: string }) {
           </section>
         </div>
         <aside className="studio-task-aside">
+          {data.usage && <UsageEstimate usage={data.usage} />}
           <section className="studio-card">
             <div className="studio-section-head">
               <h2>Task journey</h2>

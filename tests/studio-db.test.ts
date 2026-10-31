@@ -30,6 +30,18 @@ import {
 } from '../src/server/coding/studio.js';
 import { processCodingJob, codingDetail } from '../src/server/coding/service.js';
 import { reserveStudioCompute } from '../src/server/coding/studio-budget.js';
+import {
+  forecastUsage,
+  usageFeatures,
+  sizeUsagePurchase,
+  USAGE_ESTIMATOR_VERSION,
+} from '../src/server/coding/usage-estimator.js';
+import {
+  TRAINING_SELECT,
+  ensureUsageEstimate,
+  recordUsageSample,
+  taskUsage,
+} from '../src/server/coding/usage-data.js';
 
 const url = process.env.TEST_DATABASE_URL;
 describe.skipIf(!url)('Studio task budget and lifecycle (disposable Postgres)', () => {
@@ -349,10 +361,28 @@ describe.skipIf(!url)('Studio task budget and lifecycle (disposable Postgres)', 
         .rows[0].n,
     ).toBe(1);
     expect(modelCalls).toBe(5);
+    const sample = (
+      await pool.query('SELECT * FROM broker_studio_usage_samples WHERE task_id=$1', [task.id])
+    ).rows[0];
+    expect(sample.model_calls).toBe(5);
+    expect(sample.features.goalBytes).toBe(Buffer.byteLength(input().goal));
+    expect(detail.usage?.settledOutput).toBe(400);
+    expect(detail.usage?.forecast.basis).toBe('cold_start');
+    expect(Number(sample.output_tokens)).toBe(400);
+    expect(detail.usage?.purchasedInput).toBeLessThan(195072);
+    expect(JSON.stringify(sample)).not.toContain('average.py');
     expect(detail.events.some((e) => e.kind === 'verification')).toBe(true);
     await tick(task.id);
     await processCodingJob(ctx, t.coding_job_id);
     expect(modelCalls).toBe(5);
+    expect(
+      (
+        await pool.query(
+          'SELECT count(*)::int n FROM broker_studio_usage_samples WHERE task_id=$1',
+          [task.id],
+        )
+      ).rows[0].n,
+    ).toBe(1);
   });
   it('atomically reserves the budget and serializes duplicate creation operations', async () => {
     const body = input();
@@ -438,6 +468,9 @@ describe.skipIf(!url)('Studio task budget and lifecycle (disposable Postgres)', 
     expect(detail.task.computeChargedCents).toBe(0);
     expect(detail.task.reservedCents).toBe(0);
     expect(detail.task.spentCents).toBeGreaterThan(0);
+    expect(
+      (await pool.query('SELECT count(*)::int n FROM broker_studio_usage_samples')).rows[0].n,
+    ).toBe(0);
     expect((await pool.query('SELECT count(*)::int n FROM broker_vms')).rows[0].n).toBe(0);
     await expect(
       transaction(pool, async (db) =>
@@ -489,6 +522,9 @@ describe.skipIf(!url)('Studio task budget and lifecycle (disposable Postgres)', 
       await pool.query('SELECT held_output FROM broker_token_packs WHERE grant_id=$1', [t.grant_id])
     ).rows[0];
     expect(Number(held.held_output)).toBeGreaterThan(0);
+    expect(
+      (await pool.query('SELECT count(*)::int n FROM broker_studio_usage_samples')).rows[0].n,
+    ).toBe(0);
   });
   it('refuses a route unsuitable for coding before reserving funds or making purchases', async () => {
     for (const route of ctx.inference!.routes.values()) route.maximumOutputTokens = 512;
@@ -547,7 +583,11 @@ describe.skipIf(!url)('Studio task budget and lifecycle (disposable Postgres)', 
   });
   it('replenishes model allowance after owner funding without buying another VM or extending the deadline', async () => {
     const routes = (await pool.query(OFFER_SELECT)).rows;
-    const pack = Math.min(...routes.map((r) => packPrice(r, 195072, 16384).priceCents));
+    const forecast = forecastUsage(usageFeatures(input().goal, await repo()), []);
+    const sized = sizeUsagePurchase(forecast, { input: 0, output: 0, calls: 0 }, 64000, 4096, 0);
+    const pack = Math.min(
+      ...routes.map((r) => packPrice(r, sized.inputTokens, sized.outputTokens).priceCents),
+    );
     const task = await create({ budgetCents: addCents(pack, 12.51) }),
       { task: t, vm } = await ready(task.id);
     const deadline = task.deadlineAt;
@@ -627,6 +667,111 @@ describe.skipIf(!url)('Studio task budget and lifecycle (disposable Postgres)', 
     expect(JSON.stringify(explained)).toContain('broker_studio_owner_page');
     expect(JSON.stringify(explained)).toContain('broker_inference_grants_pkey');
     expect(explained[0].Plan['Actual Rows']).toBe(6);
+    // Training reads only the latest 200 numeric observations for this owner and contract.
+    await pool.query(
+      `INSERT INTO broker_studio_usage_samples(task_id,buyer_id,source_mode,model_output,estimator_version,features,input_tokens,output_tokens,model_calls,completed_at)
+      SELECT id,buyer_id,source_mode,model_output,$2,$3::jsonb,12000,3000,7,created_at FROM broker_studio_tasks WHERE buyer_id=$1`,
+      [
+        owner.id,
+        USAGE_ESTIMATOR_VERSION,
+        JSON.stringify(usageFeatures(input().goal, await repo())),
+      ],
+    );
+    await pool.query('ANALYZE broker_studio_usage_samples');
+    const args = [owner.id, 'fixture', 4096, USAGE_ESTIMATOR_VERSION, 200];
+    const training = await pool.query(TRAINING_SELECT, args);
+    expect(training.rows).toHaveLength(200);
+    expect(JSON.stringify(training.rows).length).toBeLessThan(50000);
+    expect((await pool.query(TRAINING_SELECT, [other.id, ...args.slice(1)])).rows).toHaveLength(0);
+    expect(
+      (await pool.query(TRAINING_SELECT, [owner.id, 'real', ...args.slice(2)])).rows,
+    ).toHaveLength(0);
+    expect(
+      (await pool.query(TRAINING_SELECT, [owner.id, 'fixture', 2048, USAGE_ESTIMATOR_VERSION, 200]))
+        .rows,
+    ).toHaveLength(0);
+    const plan = (await pool.query('EXPLAIN(ANALYZE,BUFFERS,FORMAT JSON) ' + TRAINING_SELECT, args))
+      .rows[0]['QUERY PLAN'];
+    expect(JSON.stringify(plan)).toContain('broker_studio_usage_training');
+    expect(plan[0].Plan['Actual Rows']).toBe(200);
+    expect(JSON.stringify(plan)).not.toContain('Seq Scan');
+    const task = await create(),
+      state = await tick(task.id);
+    const summary = await studioDetail(ctx, owner, task.id);
+    expect(summary.usage?.forecast.basis).toBe('learned');
+    expect(summary.usage?.forecast.trainingSamples).toBe(200);
+    expect(summary.usage?.forecast.validation?.samples).toBe(40);
+    expect(state.status).toBe('model_auction');
+  });
+  it('freezes each estimate for purchase replay even when the model or route minimum changes', async () => {
+    const task = await create(),
+      state = await tick(task.id);
+    const original = (
+      await pool.query('SELECT * FROM broker_studio_usage_estimates WHERE task_id=$1', [task.id])
+    ).rows[0];
+    const replay = await ensureUsageEstimate(
+      ctx,
+      {
+        ...state,
+        usage_features: usageFeatures('Refactor all services and migrate every database.'),
+      },
+      1048576,
+    );
+    expect(replay).toEqual(original);
+    await tick(task.id);
+    expect(
+      (
+        await pool.query(
+          'SELECT count(*)::int n FROM broker_studio_usage_estimates WHERE task_id=$1',
+          [task.id],
+        )
+      ).rows[0].n,
+    ).toBe(1);
+    expect(
+      (
+        await pool.query('SELECT count(*)::int n FROM broker_token_orders WHERE grant_id=$1', [
+          state.grant_id,
+        ])
+      ).rows[0].n,
+    ).toBe(1);
+    await transaction(pool, (db) => recordUsageSample(db, { ...state, outcome: 'failed' }));
+    expect(
+      (await pool.query('SELECT count(*)::int n FROM broker_studio_usage_samples')).rows[0].n,
+    ).toBe(0);
+  });
+  it('does not replace unsettled usage with a new forecast or paid allowance', async () => {
+    const task = await create();
+    let t = await tick(task.id);
+    await pool.query(
+      "UPDATE broker_token_orders SET closes_at=clock_timestamp()-interval '1 second' WHERE id=$1",
+      [t.model_order_id],
+    );
+    await closeTokenAuction(ctx, t.model_order_id);
+    modelLost = true;
+    t = await tick(task.id);
+    expect((await taskUsage(pool, t)).unresolved).toBe(1);
+    await transaction(pool, (db) => recordUsageSample(db, { ...t, outcome: 'completed' }));
+    expect(
+      (await pool.query('SELECT count(*)::int n FROM broker_studio_usage_samples')).rows[0].n,
+    ).toBe(0);
+    await expect(ensureUsageEstimate(ctx, { ...t, purchase_round: 1 }, 64000)).rejects.toThrow(
+      'reconciliation',
+    );
+    expect(
+      (
+        await pool.query(
+          'SELECT count(*)::int n FROM broker_studio_usage_estimates WHERE task_id=$1',
+          [task.id],
+        )
+      ).rows[0].n,
+    ).toBe(1);
+    expect(
+      (
+        await pool.query('SELECT count(*)::int n FROM broker_token_orders WHERE grant_id=$1', [
+          t.grant_id,
+        ])
+      ).rows[0].n,
+    ).toBe(1);
   });
   it('can fund a task that starts below the minimum resource price without exposing per-purchase controls', async () => {
     const task = await create({ budgetCents: 1 });

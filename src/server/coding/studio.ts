@@ -30,6 +30,8 @@ import {
 } from '../inference/market.js';
 import { completeStudioTask } from '../inference/gateway.js';
 import { boundedJson } from '../inference/runtime.js';
+import { usageFeatures } from './usage-estimator.js';
+import { ensureUsageEstimate, recordUsageSample, studioUsage } from './usage-data.js';
 import { createRequest, cancelRequest } from '../marketplace/auction.js';
 import { terminateVm } from '../marketplace/lifecycle.js';
 import { createCodingJob, controlCoding, wakeCoding, seal, open, ownerOnly } from './service.js';
@@ -378,6 +380,7 @@ export async function studioDetail(
   const vm = results[1].rows[0],
     auction = results[2].rows[0];
   return {
+    usage: await studioUsage(ctx.pool, t),
     modelActivity: results[5].rows.map((r) => ({
       id: r.id,
       provider: r.provider,
@@ -553,8 +556,9 @@ async function buyModelAllowance(ctx: AppContext, t: Row, actor: Actor, instant 
   const bound = Math.max(
     ...routes.map((r) => (r.source_mode === 'fixture' ? 64000 : Number(r.input_bound))),
   );
-  const inputTokens = Math.min(10_000_000, bound + 131072),
-    outputTokens = t.model_output * 4;
+  const estimate = await ensureUsageEstimate(ctx, t, bound),
+    inputTokens = estimate.input_tokens,
+    outputTokens = estimate.output_tokens;
   const g = (
     await ctx.pool.query(
       'SELECT available_cents,max_purchase_cents FROM broker_inference_grants WHERE id=$1',
@@ -676,10 +680,25 @@ async function cleanup(ctx: AppContext, t: Row, actor: Actor) {
     );
     return;
   }
-  await ctx.pool.query(
-    `UPDATE broker_studio_tasks SET status=outcome,completed_at=clock_timestamp(),lease_token=NULL,lease_until=NULL WHERE id=$1 AND lease_token=$2`,
-    [t.id, t.lease_token],
-  );
+  await transaction(ctx.pool, async (db) => {
+    // The observation's owner FK takes a key-share lock. Acquire it before the
+    // task, consistent with owner -> grant -> task control operations. Cleanup
+    // must still finish after role revocation, so this does not reauthorize work.
+    await db.query('SELECT id FROM "user" WHERE id=$1 FOR KEY SHARE', [t.buyer_id]);
+    const current = (
+      await db.query(
+        `SELECT id,buyer_id,grant_id,source_mode,model_output,usage_features,coding_job_id,outcome
+         FROM broker_studio_tasks WHERE id=$1 AND lease_token=$2 FOR UPDATE`,
+        [t.id, t.lease_token],
+      )
+    ).rows[0];
+    if (!current) return;
+    await recordUsageSample(db, current);
+    await db.query(
+      `UPDATE broker_studio_tasks SET status=outcome,completed_at=clock_timestamp(),lease_token=NULL,lease_until=NULL WHERE id=$1 AND lease_token=$2`,
+      [t.id, t.lease_token],
+    );
+  });
   await studioEvent(
     ctx,
     t.id,
@@ -751,9 +770,10 @@ export async function processStudioTask(
           continue;
         }
         const context = await repoContext(t);
+        t.usage_features = usageFeatures(t.goal, context);
         await ctx.pool.query(
-          'UPDATE broker_studio_tasks SET plan_input_cipher=$3 WHERE id=$1 AND lease_token=$2',
-          [id, token, seal(ctx, { candidates, context })],
+          'UPDATE broker_studio_tasks SET plan_input_cipher=$3,usage_features=$4 WHERE id=$1 AND lease_token=$2',
+          [id, token, seal(ctx, { candidates, context }), JSON.stringify(t.usage_features)],
         );
         await reserveStudioCompute(
           ctx,

@@ -3,6 +3,34 @@
   margin: 0 auto;
   min-width: 0;
 }
+.studio-usage-grid > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.studio-usage-grid [role='columnheader'],
+.studio-usage-grid [role='rowheader'] {
+  color: var(--muted);
+}
+.studio-usage-grid > div > :not(:first-child) {
+  text-align: right;
+}
+.studio-usage details {
+  margin-top: 14px;
+}
+.studio-usage summary {
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+}
+.studio-usage .studio-usage-floor {
+  border-left: 2px solid var(--accent);
+  padding-left: 12px;
+}
 .studio-meta {
   display: inline-flex;
   align-items: center;
