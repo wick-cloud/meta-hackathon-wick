@@ -2,7 +2,9 @@ import { useEffect, useRef, useState, type FormEvent } from 'react';
 import {
   ArrowLeft,
   ArrowRight,
+  AlertTriangle,
   Check,
+  X,
   Code2,
   Download,
   FileDiff,
@@ -32,6 +34,7 @@ import {
   useResource,
 } from './components';
 import { TableViewport } from './table';
+import { baselineTest, codingPolling, jobState, stepState, testResult } from './coding-state';
 import './coding.css';
 
 const labels: Record<string, string> = {
@@ -476,18 +479,48 @@ const actionLabel = (step: CodingStep) =>
     model: 'Meta chooses the next action',
     expired: 'Artifact expired',
   })[step.action] || step.action;
+function TestRun({ step, current = true }: { step: CodingStep; current?: boolean }) {
+  const result = testResult(step),
+    state = stepState(step);
+  const stale = result?.exitCode === 0 && !current && state.tone === 'success';
+  return (
+    <section className="coding-test-result">
+      <div className="coding-title">
+        <h3>{baselineTest(step) ? 'Before changes' : 'After changes'}</h3>
+        <span className={'coding-status ' + (stale ? 'warning' : state.tone)}>
+          {stale ? 'Fresh verification needed' : state.label}
+        </span>
+      </div>
+      {state.message && <p className="coding-note">{state.message}</p>}
+      {stale && (
+        <p className="coding-note">This passing run does not verify the latest file state.</p>
+      )}
+      <p className="coding-note">
+        Step {step.sequence + 1} · Exit {result?.exitCode ?? 'unavailable'}
+      </p>
+      <pre className="coding-code">
+        {result?.output || String(step.result?.error || 'No command output was retained.')}
+      </pre>
+      {result?.truncated && (
+        <p className="coding-note">Output was truncated at the retained limit.</p>
+      )}
+    </section>
+  );
+}
 export function CodingJobPage({ id }: { id: string }) {
   const [poll, setPoll] = useState(3000);
   const detail = useResource<CodingDetail>('/api/coding/jobs/' + id, poll),
     [tab, setTab] = useState<'changes' | 'tests' | 'meta'>('changes'),
     [busy, setBusy] = useState(false),
     [error, setError] = useState('');
-  const now = useNow();
-  const job = detail.data?.job,
-    steps = detail.data?.steps ?? [];
+  const now = useNow(
+      !detail.data || !finished(detail.data.job) || detail.data.vm?.status === 'running',
+    ),
+    data = detail.data,
+    job = data?.job;
   useEffect(() => {
-    setPoll(job && finished(job) ? 0 : 3000);
-  }, [job?.status]);
+    setPoll(codingPolling(data));
+  }, [data]);
   async function control(action: string) {
     setBusy(true);
     setError('');
@@ -495,100 +528,145 @@ export function CodingJobPage({ id }: { id: string }) {
       await post('/api/coding/jobs/' + id + '/' + action, {});
       detail.reload();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not update the task.');
+      setError(e instanceof Error ? e.message : 'Could not update execution.');
     } finally {
       setBusy(false);
     }
   }
-  if (!job)
+  if (!job || !data)
     return (
       <div className="coding-page">
-        <ErrorBox error={detail.error} />
-        {detail.loading && <Spinner label="Loading coding job" />}
+        <Link className="back-link" href="/studio">
+          <ArrowLeft size={15} />
+          Back to Studio
+        </Link>
+        {detail.loading ? (
+          <Spinner label="Loading execution details" />
+        ) : (
+          <section className="coding-panel">
+            <h2>Could not load execution details</h2>
+            <p className="coding-note">
+              Check your access and connection, then reload this saved job. Reloading does not start
+              new work.
+            </p>
+            <ErrorBox error={detail.error} />
+            <button className="button secondary" onClick={detail.reload}>
+              Reload details
+            </button>
+          </section>
+        )}
       </div>
     );
-  const diffs = steps.filter((s) => s.action === 'diff' && s.result),
+  const steps = data.steps,
+    parent = data.parentTask,
+    vm = data.vm,
+    state = jobState(data, now),
+    taskLink = parent ? '/studio/tasks/' + parent.id : '/studio/legacy',
     tests = steps.filter((s) => s.action === 'test' && s.result),
+    latestTest = tests.at(-1),
     models = steps.filter((s) => s.kind === 'model'),
-    patch = diffs.at(-1)?.result?.result as { output?: string; truncated?: boolean } | undefined;
+    patch = steps.findLast((s) => s.action === 'diff' && s.result)?.result?.result as
+      { output?: string; truncated?: boolean } | undefined,
+    canConnect = vm?.status === 'running' && !!vm.expiresAt && Date.parse(vm.expiresAt) > now,
+    closed = finished(job),
+    showCountdown = !closed && job.status !== 'uncertain' && Date.parse(job.deadlineAt) > now,
+    shortGoal =
+      job.goal.match(/^.{1,110}?[.!?](?:\s|$)/)?.[0].trim() ||
+      (job.goal.length > 110 ? job.goal.slice(0, 107) + '…' : job.goal),
+    settled = models.filter((s) => s.receipt?.status === 'settled').length;
   return (
-    <div className="coding-page">
-      <Link className="back-link" href="/studio">
+    <div className="coding-page coding-execution">
+      <Link className="back-link" href={taskLink}>
         <ArrowLeft size={15} />
-        Back to coding jobs
+        {parent ? 'Back to Studio task' : 'Back to coding jobs'}
       </Link>
       <PageHeader
-        eyebrow={'CJ-' + job.id.slice(0, 8)}
-        title={job.goal}
+        eyebrow={'EXECUTION · ' + job.id.slice(0, 8)}
+        title={shortGoal}
         description={
           job.repositoryUrl.replace('https://github.com/', '') + ' · ' + job.commitSha.slice(0, 8)
         }
       >
         <Meta />
       </PageHeader>
+      <details className="coding-brief">
+        <summary>Task brief</summary>
+        <p>{job.goal}</p>
+      </details>
       <div className="coding-jobbar">
         <Link href={'/vms/' + job.vmId}>
           <Server size={15} />
-          Wick VM
+          {vm?.cleanupConfirmedAt
+            ? 'VM cleanup confirmed'
+            : canConnect
+              ? 'VM running'
+              : 'VM details'}
         </Link>
         <span>
-          Deadline <strong>{remaining(job.deadlineAt, now)}</strong>
+          {showCountdown ? 'Time remaining' : 'Original deadline'}{' '}
+          <strong>
+            {showCountdown ? remaining(job.deadlineAt, now) : dateTime(job.deadlineAt)}
+          </strong>
         </span>
         <span>
           Meta calls <strong>{job.modelCalls}</strong>
         </span>
-        <JobStatus job={job} />
+        <span className={'coding-status ' + state.tone}>{state.label}</span>
         {job.mode === 'fixture' && (
           <span className="coding-status">Fixture job · no live execution</span>
         )}
       </div>
-      <ErrorBox error={detail.error || error} />
-      {job.blockedReason && (
-        <div className="coding-notice" role="status">
-          {job.blockedReason}
-        </div>
+      {(detail.error || error) && (
+        <section className="coding-notice error" role="alert">
+          <strong>
+            {error ? 'Could not update execution' : 'Could not refresh execution details'}
+          </strong>
+          <p>
+            {error
+              ? 'Check the saved execution status before trying the action again.'
+              : 'The saved result may be out of date. Reloading only reads the existing job.'}
+          </p>
+          <ErrorBox error={detail.error || error} />
+          <button className="button secondary" onClick={detail.reload}>
+            Reload details
+          </button>
+        </section>
       )}
-      {job.requestedAction && (
-        <p className="coding-note">
-          {job.requestedAction === 'pause'
-            ? 'Pause requested; waiting for the current step.'
-            : 'Stop requested; waiting for process cleanup acknowledgment.'}
-        </p>
-      )}
-      {job.status === 'ready' && (
-        <div className="coding-notice">
-          <strong>Ready for your review.</strong> The patch is in the job clone and tests passed
-          after the last edit.
+      <section
+        className={'coding-outcome ' + state.tone}
+        role={state.tone === 'error' ? 'alert' : 'status'}
+      >
+        <div className="coding-outcome-icon">
+          {state.tone === 'success' ? (
+            <Check size={19} />
+          ) : state.tone === 'error' || state.tone === 'warning' ? (
+            <AlertTriangle size={19} />
+          ) : (
+            <Code2 size={19} />
+          )}
         </div>
-      )}
-      {detail.data?.artifactsExpired && (
-        <div className="coding-notice">
-          The 24-hour artifact retention has ended. Job metadata and inference receipts remain
-          available.
+        <div>
+          <h2>{state.label}</h2>
+          <p>{state.message}</p>
+          {job.status === 'uncertain' && (
+            <p>Usage reservations stay held until the original outcome is reconciled.</p>
+          )}
+          {job.requestedAction && !closed && (
+            <p>
+              {job.requestedAction === 'pause'
+                ? 'Pause requested; waiting for the current step.'
+                : 'Stop requested; waiting for process cleanup confirmation.'}
+            </p>
+          )}
         </div>
+      </section>
+      {job.blockedReason && !state.message?.includes(job.blockedReason) && !closed && (
+        <details className="coding-disclosure">
+          <summary>Failure details</summary>
+          <p>{job.blockedReason}</p>
+        </details>
       )}
       <div className="coding-workspace">
-        <section className="coding-panel">
-          <h2>Activity</h2>
-          <ol className="coding-timeline">
-            {steps.map((step) => (
-              <li key={step.id} className={step.status}>
-                <span className="coding-dot">
-                  {step.status === 'completed' ? <Check size={12} /> : step.sequence + 1}
-                </span>
-                <div>
-                  {actionLabel(step)}
-                  <small>
-                    {step.kind === 'model' ? 'Meta Muse · inference' : 'Wick · command receipt'} ·{' '}
-                    {step.status}
-                  </small>
-                </div>
-              </li>
-            ))}
-          </ol>
-          <p className="coding-note">Job clone</p>
-          <code className="coding-path">/tmp/wick-broker-coding/{job.id}/repository</code>
-        </section>
         <section className="coding-panel">
           <div className="coding-tabs" role="tablist" aria-label="Coding job details">
             {(['changes', 'tests', 'meta'] as const).map((key) => (
@@ -622,12 +700,21 @@ export function CodingJobPage({ id }: { id: string }) {
           </div>
           <div id="coding-detail" role="tabpanel" aria-labelledby={'coding-tab-' + tab}>
             {tab === 'changes' &&
-              (patch ? (
+              (data.artifactsExpired ? (
+                <div className="coding-empty">
+                  <FileDiff size={24} />
+                  <h3>Patch retention ended</h3>
+                  <p>
+                    Source artifacts are retained for 24 hours. Job metadata and usage receipts
+                    remain available.
+                  </p>
+                </div>
+              ) : patch ? (
                 <>
                   <div className="coding-title">
-                    <h2>Review patch</h2>
+                    <h2>{job.testsPassed ? 'Verified patch' : 'Retained patch'}</h2>
                     <span className="coding-note">
-                      {patch.truncated ? 'Truncated · inspect VM' : 'Fresh job branch'}
+                      {patch.truncated ? 'Export incomplete' : 'Saved for review'}
                     </span>
                   </div>
                   <pre className="coding-code">
@@ -643,60 +730,66 @@ export function CodingJobPage({ id }: { id: string }) {
               ) : (
                 <div className="coding-empty">
                   <FileDiff size={24} />
+                  <h3>{closed ? 'No retained patch' : 'Changes will appear here'}</h3>
                   <p>
-                    {steps.some((s) => s.action === 'write')
-                      ? 'Edits are saved in the VM. The final patch appears after the review step.'
-                      : 'The patch appears after Muse has inspected and edited the repository.'}
+                    {closed
+                      ? 'Execution ended without a complete exported patch. Review the saved history for the last confirmed result.'
+                      : 'Muse will inspect the repository, edit files, and verify the result before preparing the patch.'}
                   </p>
                 </div>
               ))}
             {tab === 'tests' && (
               <>
                 <div className="coding-title">
-                  <h2>Test evidence</h2>
-                  <span className={'coding-status ' + (job.testsPassed ? 'ready' : '')}>
-                    {job.testsPassed ? 'Passed after last edit' : 'No current passing result'}
+                  <h2>Latest test result</h2>
+                  <span className={'coding-status ' + (job.testsPassed ? 'success' : 'warning')}>
+                    {job.testsPassed ? 'Passed after last edit' : 'Verification needed'}
                   </span>
                 </div>
-                <code>{job.testCommand}</code>
-                {!tests.length && (
+                <code className="coding-test-command">{job.testCommand}</code>
+                {latestTest ? (
+                  <TestRun step={latestTest} current={job.testsPassed} />
+                ) : (
                   <div className="coding-empty">
                     <FlaskConical size={24} />
-                    <p>No test command result has been recorded.</p>
+                    <h3>
+                      {data.artifactsExpired ? 'Test output retention ended' : 'No test result yet'}
+                    </h3>
+                    <p>
+                      {data.artifactsExpired
+                        ? 'The retained command output has expired. The recorded verification status remains available.'
+                        : 'A completed test receipt will appear here.'}
+                    </p>
                   </div>
                 )}
-                {tests.map((step) => {
-                  const r = step.result?.result as
-                    | {
-                        exitCode?: number;
-                        output?: string;
-                        truncated?: boolean;
-                        interrupted?: boolean;
-                      }
-                    | undefined;
-                  return (
-                    <section className="coding-test-result" key={step.id}>
-                      <h3>
-                        Step {step.sequence + 1} · exit {r?.exitCode ?? 'unknown'}
-                        {r?.interrupted ? ' · interrupted' : ''}
-                      </h3>
-                      <pre className="coding-code">
-                        {r?.output || JSON.stringify(step.result, null, 2)}
-                      </pre>
-                      {r?.truncated && (
-                        <p className="coding-note">Output was truncated at the retained limit.</p>
-                      )}
-                    </section>
-                  );
-                })}
+                {tests.length > 1 && (
+                  <details className="coding-disclosure">
+                    <summary>Earlier test runs ({tests.length - 1})</summary>
+                    <p className="coding-note">
+                      These checks ran before the latest result. A failed earlier check does not
+                      describe the final file state.
+                    </p>
+                    {tests
+                      .slice(0, -1)
+                      .reverse()
+                      .map((step) => (
+                        <TestRun step={step} key={step.id} />
+                      ))}
+                  </details>
+                )}
               </>
             )}
             {tab === 'meta' && (
               <>
-                <h2>Meta Muse activity</h2>
+                <div className="coding-title">
+                  <h2>Meta Muse activity</h2>
+                  <span className="coding-note">
+                    {job.modelCalls} coding calls · {settled} settled in this history
+                  </span>
+                </div>
                 <p className="coding-note">
-                  Model actions use prepaid allowance. Reasoning tokens are included in the output
-                  count; hidden reasoning is not displayed.
+                  Model calls consume prepaid allowance. Output counts include reasoning; hidden
+                  reasoning is not displayed.
                 </p>
                 {models.map((step) => {
                   const r = step.result as {
@@ -704,85 +797,102 @@ export function CodingJobPage({ id }: { id: string }) {
                     usage?: { prompt_tokens: number; completion_tokens: number };
                     action?: { action: string; path?: string; summary?: string };
                   } | null;
+                  const outcome = stepState(step);
                   return (
-                    <section className="coding-model-result" key={step.id}>
-                      <Meta />
-                      <h3>
-                        {r?.action?.action ?? step.status}
-                        {r?.action?.path ? ' · ' + r.action.path : ''}
-                      </h3>
+                    <details className="coding-receipt" key={step.id}>
+                      <summary>
+                        <span>
+                          {r?.action?.action ?? 'Model request'}
+                          {r?.action?.path ? ' · ' + r.action.path : ''}
+                        </span>
+                        <span className={'coding-status ' + outcome.tone}>
+                          {step.receipt?.status === 'settled' && outcome.tone === 'success'
+                            ? 'Settled'
+                            : outcome.label}
+                        </span>
+                      </summary>
                       {r?.action?.summary && <p>{r.action.summary}</p>}
                       <p className="coding-note">
-                        {r?.provider ?? step.receipt?.provider ?? 'Awaiting route receipt'} · Input{' '}
+                        {r?.provider ?? step.receipt?.provider ?? 'Awaiting provider'} · Input{' '}
                         {r?.usage?.prompt_tokens ?? step.receipt?.inputTokens ?? '—'} · Output
                         including reasoning{' '}
                         {r?.usage?.completion_tokens ?? step.receipt?.outputTokens ?? '—'}
                       </p>
                       {step.receipt && (
                         <p className="coding-note">
-                          Receipt {step.receipt.status} · Reserved input{' '}
-                          {step.receipt.heldInputTokens.toLocaleString()} · Reserved output{' '}
+                          Receipt {step.receipt.status} · Held input{' '}
+                          {step.receipt.heldInputTokens.toLocaleString()} · Held output{' '}
                           {step.receipt.heldOutputTokens.toLocaleString()}
                         </p>
                       )}
                       {step.inferenceRequestId && <code>Receipt {step.inferenceRequestId}</code>}
-                    </section>
+                    </details>
                   );
                 })}
-                {!models.length && <p className="coding-note">No model call has been sent.</p>}
+                {!models.length && (
+                  <p className="coding-note">No model receipt is available in this history.</p>
+                )}
               </>
             )}
           </div>
           <div className="coding-actions">
-            {!finished(job) && (
-              <>
-                {['paused', 'needs_allowance'].includes(job.status) ? (
+            {parent ? (
+              <Link className="button secondary" href={taskLink}>
+                View Studio task <ArrowRight size={14} />
+              </Link>
+            ) : (
+              !closed && (
+                <>
+                  {['paused', 'needs_allowance'].includes(job.status) &&
+                  canConnect &&
+                  Date.parse(job.deadlineAt) > now ? (
+                    <button
+                      className="button secondary"
+                      disabled={busy}
+                      onClick={() => control('resume')}
+                    >
+                      <Play size={15} />
+                      Resume execution
+                    </button>
+                  ) : ['running', 'queued'].includes(job.status) ? (
+                    <button
+                      className="button secondary"
+                      disabled={busy || !!job.requestedAction}
+                      onClick={() => control('pause')}
+                    >
+                      <Pause size={15} />
+                      Pause execution
+                    </button>
+                  ) : null}
                   <button
                     className="button secondary"
-                    disabled={busy}
-                    onClick={() => control('resume')}
+                    disabled={busy || job.status === 'stopping'}
+                    onClick={() => control('stop')}
                   >
-                    <Play size={15} />
-                    Resume task
+                    <Square size={14} />
+                    Stop execution
                   </button>
-                ) : ['running', 'queued'].includes(job.status) ? (
-                  <button
-                    className="button secondary"
-                    disabled={busy || !!job.requestedAction}
-                    onClick={() => control('pause')}
-                  >
-                    <Pause size={15} />
-                    Pause task
-                  </button>
-                ) : null}
-                {job.status === 'uncertain' && (
-                  <button
-                    className="button secondary"
-                    disabled={busy}
-                    onClick={() => control('reconcile')}
-                  >
-                    <RefreshCw size={15} />
-                    {steps.at(-1)?.kind === 'model'
-                      ? 'Check existing receipt'
-                      : 'Inspect existing command'}
-                  </button>
-                )}
-                <button
-                  className="button secondary"
-                  disabled={busy || job.status === 'stopping'}
-                  onClick={() => control('stop')}
-                >
-                  <Square size={14} />
-                  Stop task
-                </button>
-              </>
+                </>
+              )
             )}
-            <Link className="button secondary" href={'/vms/' + job.vmId}>
-              <TerminalSquare size={15} />
-              Open VM terminal
-            </Link>
+            {job.status === 'uncertain' && steps.at(-1)?.kind === 'command' && (
+              <button
+                className="button secondary"
+                disabled={busy}
+                onClick={() => control('reconcile')}
+              >
+                <RefreshCw size={15} />
+                Inspect existing command
+              </button>
+            )}
+            {canConnect && (
+              <Link className="button secondary" href={'/vms/' + job.vmId}>
+                <TerminalSquare size={15} />
+                Open VM terminal
+              </Link>
+            )}
           </div>
-          {job.status === 'needs_allowance' && (
+          {!parent && job.status === 'needs_allowance' && (
             <div className="coding-actions">
               <Link className="button primary" href={'/token-orders/new?grantId=' + job.grantId}>
                 Buy allowance <ArrowRight size={15} />
@@ -792,9 +902,53 @@ export function CodingJobPage({ id }: { id: string }) {
           )}
           <div className="coding-footer">
             <ShieldCheck size={15} />
-            Commands stay in the job sandbox. VM rental and prepaid token purchases remain separate.
+            {parent
+              ? 'Resources and prepaid model allowance share the Studio task budget.'
+              : 'Commands run in the job sandbox. VM rental and prepaid allowance are purchased separately.'}
           </div>
         </section>
+        <details className="coding-panel coding-history-details">
+          <summary>Execution history · {steps.length} recorded steps</summary>
+          <p className="coding-note">
+            Command receipt completion and command success are recorded separately. Expand
+            individual results above for evidence.
+          </p>
+          <ol className="coding-timeline">
+            {steps.map((step) => {
+              const outcome = stepState(step);
+              return (
+                <li key={step.id} className={outcome.tone}>
+                  <span className="coding-dot">
+                    {outcome.tone === 'success' ? (
+                      <Check size={12} />
+                    ) : outcome.tone === 'error' ? (
+                      <X size={12} />
+                    ) : (
+                      step.sequence + 1
+                    )}
+                  </span>
+                  <div>
+                    {baselineTest(step) ? 'Check tests before changes' : actionLabel(step)}
+                    <small>
+                      {step.kind === 'model' ? 'Meta Muse' : 'Wick command'} · {outcome.label}
+                    </small>
+                  </div>
+                </li>
+              );
+            })}
+          </ol>
+          <details className="coding-disclosure">
+            <summary>Workspace details</summary>
+            <p className="coding-note">
+              {vm?.cleanupConfirmedAt
+                ? 'The VM workspace has been closed. Retained artifacts can be reviewed above.'
+                : 'Commands are confined to this job clone.'}
+            </p>
+            {!vm?.cleanupConfirmedAt && (
+              <code className="coding-path">/tmp/wick-broker-coding/{job.id}/repository</code>
+            )}
+          </details>
+        </details>
       </div>
     </div>
   );

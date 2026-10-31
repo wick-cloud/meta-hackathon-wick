@@ -268,10 +268,15 @@ export async function codingDetail(
 ): Promise<CodingDetail> {
   ownerOnly(actor);
   const job = (
-    await ctx.pool.query('SELECT * FROM broker_coding_jobs WHERE id=$1 AND buyer_id=$2', [
-      id,
-      actor.id,
-    ])
+    await ctx.pool.query(
+      `SELECT j.*,v.status vm_status,v.expires_at vm_expires_at,v.cleanup_confirmed_at,
+        t.id parent_task_id,t.status parent_task_status,t.blocked_reason parent_blocked_reason,t.completed_at parent_completed_at
+      FROM broker_coding_jobs j
+      LEFT JOIN broker_vms v ON v.id=j.vm_id AND v.buyer_id=j.buyer_id
+      LEFT JOIN broker_studio_tasks t ON t.id=j.studio_task_id AND t.buyer_id=j.buyer_id
+      WHERE j.id=$1 AND j.buyer_id=$2`,
+      [id, actor.id],
+    )
   ).rows[0];
   if (!job) throw new HttpError(404, 'Coding job not found.');
   const expired = new Date(job.artifacts_expire_at) <= new Date();
@@ -292,7 +297,26 @@ export async function codingDetail(
     ...(r.inference_receipt ? { receipt: receiptView(r.inference_receipt) } : {}),
   }));
   steps.reverse();
-  return { job: jobView(job), steps, artifactsExpired: expired };
+  return {
+    job: jobView(job),
+    steps,
+    artifactsExpired: expired,
+    parentTask: job.parent_task_id
+      ? {
+          id: job.parent_task_id,
+          status: job.parent_task_status,
+          blockedReason: job.parent_blocked_reason,
+          completedAt: iso(job.parent_completed_at),
+        }
+      : null,
+    vm: job.vm_status
+      ? {
+          status: job.vm_status,
+          expiresAt: iso(job.vm_expires_at),
+          cleanupConfirmedAt: iso(job.cleanup_confirmed_at),
+        }
+      : null,
+  };
 }
 export async function controlCoding(
   ctx: AppContext,

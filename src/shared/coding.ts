@@ -45,4 +45,15 @@ export interface CodingDetail {
   job: CodingJob;
   steps: CodingStep[];
   artifactsExpired: boolean;
+  parentTask?: {
+    id: string;
+    status: import('./studio.js').StudioStatus;
+    blockedReason: string | null;
+    completedAt: string | null;
+  } | null;
+  vm?: {
+    status: string;
+    expiresAt: string | null;
+    cleanupConfirmedAt: string | null;
+  } | null;
 }

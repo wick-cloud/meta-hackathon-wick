@@ -26,6 +26,20 @@ Private repositories, repository credentials, SSH/custom Git hosts, redirects,
 submodule recursion and Git LFS downloads are excluded. No VM is automatically
 purchased or extended by a coding job.
 
+Execution details show the latest test result first, with earlier runs and the
+command history collapsed. The initial check runs before edits; if its test
+directory does not exist yet, it is labeled **Could not start**, with the original
+output retained. Other nonzero test exits remain failures. A completed command
+receipt is not presented as a passing test. A pass before a later edit requires
+fresh verification.
+
+Studio-owned jobs link back to their task and include its completion and VM
+cleanup state. Finished jobs show an absolute deadline, and terminal access is
+offered only for a running, unexpired VM. Failed checks, missing allowance,
+expired artifacts, unavailable workspaces and unresolved results have distinct
+messages. Unknown command/model outcomes retain their reservations and are never
+automatically resent; command inspection reads the original journal.
+
 ## Guest prerequisites and execution
 
 The VM requires Linux, Python 3, Git and `bwrap` (bubblewrap), with working user,
