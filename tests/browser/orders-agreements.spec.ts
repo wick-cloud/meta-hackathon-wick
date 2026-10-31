@@ -525,6 +525,7 @@ test('Agreement review reserves the full target maximum and does not start VMs',
   await page.getByLabel('Target slots per window', { exact: true }).fill('20');
   await page.getByLabel('Minimum approved per window', { exact: true }).fill('12');
   await page.getByLabel('Reserve a normal-rate continuation').check();
+  await page.getByLabel('Maximum normal rate (USD / VM-hour)', { exact: true }).fill('0.20');
   await page.getByRole('button', { name: 'Review agreement', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Review capacity agreement' })).toBeVisible();
   await expect(page.getByText('$140.00 maximum', { exact: true })).toBeVisible();
@@ -1524,6 +1525,7 @@ test('Server-confirmed DST quote overrides this device and rejected calendars ne
   await page.getByLabel('Window opens', { exact: true }).fill('00:00');
   await page.getByLabel('Discount ends', { exact: true }).fill('06:00');
   await page.getByLabel('Reserve a normal-rate continuation').check();
+  await page.getByLabel('Maximum normal rate (USD / VM-hour)', { exact: true }).fill('0.20');
   const funding = page.locator('.market-two-column > aside');
   // Historical DST fixes the funding expectation independently of current timezone changes.
   await page.getByRole('button', { name: 'Review agreement', exact: true }).click();
