@@ -1,3 +1,4 @@
+import { TableViewport } from './table';
 import { useRef, useState } from 'react';
 import { ArrowLeft, ArrowRight, Copy, KeyRound, RefreshCw, Sparkles, X } from 'lucide-react';
 import type { TokenPack } from '../shared/inference';
@@ -51,7 +52,7 @@ function Quota({ pack, input, usable }: { pack: TokenPack; input: boolean; usabl
   return (
     <div className="token-inventory-quota">
       <strong>{count(usable ? available : 0)}</strong>
-      <span>of {count(total)} purchased</span>
+      <span title={`${count(total)} purchased tokens`}>of {count(total)}</span>
       <small>
         {count(used)} used
         {held > 0 && (
@@ -136,21 +137,32 @@ export function TokenInventory({ search }: { search: string }) {
             </div>
             {list.data.items.length ? (
               <>
-                <div
+                <TableViewport
+                  label="Purchased token batches"
+                  minWidth={1000}
                   className="table-scroll token-inventory-scroll"
                   tabIndex={0}
                   aria-label="Purchased token batches table"
                 >
                   <table className="token-inventory-table">
+                    <caption className="sr-only">Purchased token batches</caption>
                     <thead>
                       <tr>
                         <th scope="col">Batch</th>
-                        <th scope="col">Input available</th>
-                        <th scope="col">Output available</th>
+                        <th className="numeric-cell" scope="col">
+                          Input available
+                        </th>
+                        <th className="numeric-cell" scope="col">
+                          Output available
+                        </th>
                         <th scope="col">Status</th>
                         <th scope="col">Time left</th>
-                        <th scope="col">Paid</th>
-                        <th scope="col">Actions</th>
+                        <th className="numeric-cell" scope="col">
+                          Paid
+                        </th>
+                        <th className="actions-cell" scope="col">
+                          Actions
+                        </th>
                       </tr>
                     </thead>
                     <tbody>
@@ -176,10 +188,10 @@ export function TokenInventory({ search }: { search: string }) {
                                 <Link href={`/agents/${pack.grantId}`}>Agent budget</Link>
                               </div>
                             </td>
-                            <td>
+                            <td className="numeric-cell">
                               <Quota pack={pack} input usable={usable} />
                             </td>
-                            <td>
+                            <td className="numeric-cell">
                               <Quota pack={pack} input={false} usable={usable} />
                             </td>
                             <td>
@@ -201,15 +213,28 @@ export function TokenInventory({ search }: { search: string }) {
                                   ? 'Closed'
                                   : timeLeft(pack.expiresAt, now)}
                               </strong>
-                              <small title={pack.expiresAt}>{dateTime(pack.expiresAt)}</small>
+                              <small>
+                                <time
+                                  dateTime={pack.expiresAt}
+                                  title={dateTime(pack.expiresAt)}
+                                  aria-label={dateTime(pack.expiresAt)}
+                                >
+                                  {new Date(pack.expiresAt).toLocaleString(undefined, {
+                                    month: 'short',
+                                    day: 'numeric',
+                                    hour: 'numeric',
+                                    minute: '2-digit',
+                                  })}
+                                </time>
+                              </small>
                             </td>
-                            <td>
+                            <td className="numeric-cell">
                               <strong>{money(pack.priceCents)}</strong>
                               {pack.refundCents > 0 && (
                                 <small>{money(pack.refundCents)} refunded</small>
                               )}
                             </td>
-                            <td>
+                            <td className="actions-cell">
                               {usable ? (
                                 <Link
                                   href={connectUrl(pack.id)}
@@ -234,7 +259,7 @@ export function TokenInventory({ search }: { search: string }) {
                       })}
                     </tbody>
                   </table>
-                </div>
+                </TableViewport>
                 <p className="token-inventory-note">
                   Available excludes tokens reserved for in-flight or unresolved requests. Each
                   batch has its own expiry; unused prepaid quota is not automatically refunded.

@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page } from './table-review';
 import { defaultScopes, type BrokerKeySummary } from '../../src/shared/developer';
 
 // Every API request is intercepted. This suite cannot create real credentials or VMs.

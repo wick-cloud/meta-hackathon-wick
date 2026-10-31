@@ -1,3 +1,4 @@
+import { TableViewport } from './table';
 import { moneyUnits, MIN_ORDER_PRICE_CENTS } from '../shared/money';
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import {
@@ -323,17 +324,21 @@ export function Agents({ search = '' }: { search?: string }) {
         {list.loading ? (
           <Spinner label="Loading agents" />
         ) : list.data?.items.length ? (
-          <div className="table-scroll">
+          <TableViewport label="Agent budgets" minWidth={1000} className="table-scroll">
             <table className="agent-table" aria-label="Agent budgets and token allowance">
               <caption className="sr-only">Agent budgets and token allowance</caption>
               <thead>
                 <tr>
-                  <th>Agent</th>
-                  <th>Status</th>
-                  <th className="money-column">Available budget</th>
-                  <th>Calls available</th>
-                  <th>Expires</th>
-                  <th>
+                  <th scope="col">Agent</th>
+                  <th scope="col">Status</th>
+                  <th scope="col" className="money-column numeric-cell">
+                    Available budget
+                  </th>
+                  <th className="numeric-cell" scope="col">
+                    Calls available
+                  </th>
+                  <th scope="col">Expires</th>
+                  <th className="actions-cell" scope="col">
                     <span className="sr-only">Actions</span>
                   </th>
                 </tr>
@@ -378,11 +383,11 @@ export function Agents({ search = '' }: { search?: string }) {
                         }
                       />
                     </td>
-                    <td className="money-column">
+                    <td className="money-column numeric-cell">
                       {money(grant.availableCents)}
                       <small>{money(grant.heldCents)} held</small>
                     </td>
-                    <td>
+                    <td className="numeric-cell">
                       <strong>{count(grant.eligibleCalls)}</strong> calls
                       <small>At {count(grant.outputPerCall)} output / call</small>
                     </td>
@@ -402,7 +407,7 @@ export function Agents({ search = '' }: { search?: string }) {
                         </small>
                       </time>
                     </td>
-                    <td>
+                    <td className="actions-cell">
                       <Link
                         href={`/agents/${grant.id}`}
                         className="agent-open-link"
@@ -415,7 +420,7 @@ export function Agents({ search = '' }: { search?: string }) {
                 ))}
               </tbody>
             </table>
-          </div>
+          </TableViewport>
         ) : (
           <EmptyState
             icon={<Bot size={28} />}
@@ -881,14 +886,23 @@ export function AgentDetail({ id, search = '' }: { id: string; search?: string }
               <section className="card">
                 <h2>Recent token orders</h2>
                 {detail.orders.length ? (
-                  <div className="table-scroll">
+                  <TableViewport
+                    label="Recent token orders"
+                    minWidth={720}
+                    className="table-scroll"
+                  >
                     <table>
+                      <caption className="sr-only">Recent token orders</caption>
                       <thead>
                         <tr>
-                          <th>Order</th>
-                          <th>Tokens</th>
-                          <th>Status</th>
-                          <th>Price / ceiling</th>
+                          <th scope="col">Order</th>
+                          <th className="numeric-cell" scope="col">
+                            Tokens
+                          </th>
+                          <th scope="col">Status</th>
+                          <th className="numeric-cell" scope="col">
+                            Price / ceiling
+                          </th>
                         </tr>
                       </thead>
                       <tbody>
@@ -903,18 +917,20 @@ export function AgentDetail({ id, search = '' }: { id: string; search?: string }
                               </Link>
                               <small>{dateTime(order.createdAt)}</small>
                             </td>
-                            <td>
+                            <td className="numeric-cell">
                               {count(order.inputTokens)} input · {count(order.outputTokens)} output
                             </td>
                             <td>
                               <State value={order.status} />
                             </td>
-                            <td>{money(order.priceCents ?? order.maxTotalCents)}</td>
+                            <td className="numeric-cell">
+                              {money(order.priceCents ?? order.maxTotalCents)}
+                            </td>
                           </tr>
                         ))}
                       </tbody>
                     </table>
-                  </div>
+                  </TableViewport>
                 ) : (
                   <p className="inference-muted">
                     Purchases made by you or this agent appear here.
@@ -924,14 +940,21 @@ export function AgentDetail({ id, search = '' }: { id: string; search?: string }
               <section className="card">
                 <h2>Recent inference requests</h2>
                 {detail.requests.length ? (
-                  <div className="table-scroll">
+                  <TableViewport
+                    label="Recent inference requests"
+                    minWidth={720}
+                    className="table-scroll"
+                  >
                     <table>
+                      <caption className="sr-only">Recent inference requests</caption>
                       <thead>
                         <tr>
-                          <th>Request</th>
-                          <th>Provider</th>
-                          <th>Status</th>
-                          <th>Input / output</th>
+                          <th scope="col">Request</th>
+                          <th scope="col">Provider</th>
+                          <th scope="col">Status</th>
+                          <th className="numeric-cell" scope="col">
+                            Input / output
+                          </th>
                         </tr>
                       </thead>
                       <tbody>
@@ -949,7 +972,7 @@ export function AgentDetail({ id, search = '' }: { id: string; search?: string }
                               <State value={request.status} />
                               {request.failureCode && <small>{request.failureCode}</small>}
                             </td>
-                            <td>
+                            <td className="numeric-cell">
                               {request.inputTokens !== null
                                 ? `${count(request.inputTokens)} / ${count(request.outputTokens ?? 0)} used`
                                 : `${count(request.heldInputTokens)} / ${count(request.heldOutputTokens)} held`}
@@ -958,7 +981,7 @@ export function AgentDetail({ id, search = '' }: { id: string; search?: string }
                         ))}
                       </tbody>
                     </table>
-                  </div>
+                  </TableViewport>
                 ) : (
                   <p className="inference-muted">
                     Request usage and any unresolved token holds appear here.
@@ -2037,16 +2060,25 @@ function ProviderCommitments() {
       {packs.loading ? (
         <Spinner label="Loading commitments" />
       ) : packs.data?.items.length ? (
-        <div className="table-scroll">
+        <TableViewport label="Provider token commitments" minWidth={1040} className="table-scroll">
           <table>
+            <caption className="sr-only">Provider token commitments</caption>
             <thead>
               <tr>
-                <th>Pack</th>
-                <th>Outstanding quota</th>
-                <th>Status</th>
-                <th>Charged / refunded</th>
-                <th>Provider net</th>
-                <th>Broker fee</th>
+                <th scope="col">Pack</th>
+                <th className="numeric-cell" scope="col">
+                  Outstanding quota
+                </th>
+                <th scope="col">Status</th>
+                <th className="numeric-cell" scope="col">
+                  Charged / refunded
+                </th>
+                <th className="numeric-cell" scope="col">
+                  Provider net
+                </th>
+                <th className="numeric-cell" scope="col">
+                  Broker fee
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -2057,24 +2089,33 @@ function ProviderCommitments() {
                     <Mode mode={pack.mode} />
                     <small>{dateTime(pack.expiresAt)}</small>
                   </td>
-                  <td>
+                  <td className="numeric-cell">
                     {count(pack.availableInputTokens + pack.heldInputTokens)} input
                     <br />
                     {count(pack.availableOutputTokens + pack.heldOutputTokens)} output
+                    {(pack.heldInputTokens > 0 || pack.heldOutputTokens > 0) && (
+                      <small>
+                        {count(pack.heldInputTokens)} input / {count(pack.heldOutputTokens)} output
+                        pending
+                      </small>
+                    )}
                   </td>
                   <td>
                     <State value={pack.status} />
                   </td>
-                  <td>
-                    {money(pack.priceCents)} / {money(pack.refundCents)}
+                  <td className="numeric-cell">
+                    <strong>{money(pack.priceCents)}</strong>
+                    {pack.refundCents > 0 && <small>{money(pack.refundCents)} refunded</small>}
                   </td>
-                  <td>{moneyMicros(pack.revenueShare.providerNetMicros)}</td>
-                  <td>{moneyMicros(pack.revenueShare.brokerFeeMicros)}</td>
+                  <td className="numeric-cell">
+                    {moneyMicros(pack.revenueShare.providerNetMicros)}
+                  </td>
+                  <td className="numeric-cell">{moneyMicros(pack.revenueShare.brokerFeeMicros)}</td>
                 </tr>
               ))}
             </tbody>
           </table>
-        </div>
+        </TableViewport>
       ) : (
         <p className="inference-muted">
           Purchased packs and their exact commission shares will appear here.

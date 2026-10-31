@@ -330,9 +330,6 @@
 .market-row-actions .orders-secondary-action:hover {
   color: var(--accent);
 }
-.orders-scroll-hint {
-  display: none;
-}
 .orders-loading {
   position: relative;
   padding: 0 18px;
@@ -938,7 +935,7 @@ a.market-activation:hover strong {
   margin-right: 14px;
   margin-bottom: 14px;
 }
-.market-disclosure > .market-table-scroll {
+.market-disclosure > .data-table-frame {
   width: calc(100% - 28px);
 }
 .market-disclosure .market-copy {
@@ -1009,48 +1006,6 @@ a.market-activation:hover strong {
   }
   .orders-wallet {
     font-size: 12px;
-  }
-  .orders-table th:first-child,
-  .orders-table td:first-child {
-    position: sticky;
-    left: 0;
-    z-index: 1;
-    background: var(--card);
-    box-shadow: 1px 0 0 var(--line);
-  }
-  .orders-table th:first-child {
-    z-index: 2;
-    background: var(--sidebar);
-  }
-  .orders-table tr:hover td:first-child {
-    background: var(--surface-hover);
-  }
-  .orders-table {
-    min-width: 1000px;
-  }
-  .orders-table th:nth-child(1) {
-    width: 190px;
-  }
-  .orders-table th:nth-child(2) {
-    width: 190px;
-  }
-  .orders-table th:nth-child(3) {
-    width: 200px;
-  }
-  .orders-table th:nth-child(4) {
-    width: 230px;
-  }
-  .orders-table th:nth-child(5) {
-    width: 190px;
-  }
-  .orders-scroll-hint {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 9px 16px;
-    font-size: 10px;
-    color: var(--muted);
-    border-bottom: 1px solid var(--line);
   }
 }
 @media (max-width: 640px) {

@@ -1,5 +1,6 @@
 import type { BuyingPolicy, BuyingDecision } from '../../src/shared/buying';
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, reviewTables, type Page } from './table-review';
+import { revenueShare } from '../../src/shared/pricing';
 import type {
   InferenceCatalog,
   InferenceGrant,
@@ -746,6 +747,81 @@ test('agent setup and purchase form fit a narrow viewport and preserve back navi
   await expect(
     page.getByRole('heading', { name: 'Research assistant', exact: true }),
   ).toBeVisible();
+});
+
+test('agent receipts and provider commitments keep pending usage and exact earnings readable', async ({
+  page,
+}) => {
+  const f = await fixture(page);
+  const pack: TokenPack = {
+    id: packId,
+    orderId,
+    grantId,
+    provider: 'modal',
+    mode: 'fixture',
+    modelId,
+    status: 'active',
+    inputTokens: 1048600,
+    outputTokens: 512,
+    availableInputTokens: 1048470,
+    availableOutputTokens: 400,
+    heldInputTokens: 100,
+    heldOutputTokens: 64,
+    consumedInputTokens: 30,
+    consumedOutputTokens: 48,
+    retiredInputTokens: 0,
+    retiredOutputTokens: 0,
+    priceCents: 173.31,
+    refundCents: 0,
+    expiresAt: future(),
+    createdAt: new Date().toISOString(),
+    retirementReason: null,
+    revenueShare: revenueShare(173.31),
+  };
+  f.packs.push(pack);
+  f.orders.push({ ...liveOrder('awarded'), provider: 'modal', priceCents: 173.31, packId });
+  await page.route(`**/api/inference/grants/${grantId}`, (route) =>
+    route.fulfill({
+      json: {
+        grant: f.grant,
+        packs: f.packs,
+        orders: f.orders,
+        catalog: f.catalog,
+        requests: [
+          {
+            id: keyId,
+            packId,
+            provider: 'modal',
+            mode: 'fixture',
+            status: 'outcome_unknown',
+            createdAt: new Date().toISOString(),
+            failureCode: 'provider_timeout',
+            inputTokens: null,
+            outputTokens: null,
+            heldInputTokens: 100,
+            heldOutputTokens: 64,
+          },
+        ],
+      },
+    }),
+  );
+  await page.goto(`/agents/${grantId}`);
+  await page.getByRole('link', { name: 'Activity & receipts', exact: true }).click();
+  await expect(page.getByRole('table', { name: 'Recent token orders', exact: true })).toContainText(
+    '$1.7331',
+  );
+  await expect(
+    page.getByRole('table', { name: 'Recent inference requests', exact: true }),
+  ).toContainText('100 / 64 held');
+  await reviewTables(page, test.info());
+  const provider = await fixture(page, { role: 'provider' });
+  provider.packs.push(pack);
+  await page.goto('/provider/inference');
+  await page.getByRole('link', { name: 'Commitments', exact: true }).click();
+  const commitments = page.getByRole('table', { name: 'Provider token commitments', exact: true });
+  await expect(commitments).toContainText('$1.7331');
+  await expect(commitments).toContainText('100 input / 64 output pending');
+  expect([...f.writes, ...provider.writes]).toHaveLength(0);
 });
 
 function liveOrder(status: TokenOrder['status'] = 'open'): TokenOrder {

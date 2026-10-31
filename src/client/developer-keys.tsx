@@ -1,3 +1,4 @@
+import { TableViewport } from './table';
 import { usdToCents } from '../shared/money';
 import { useState, type FormEvent } from 'react';
 import { Copy, KeyRound, Plus, RefreshCw, ShieldCheck, X } from 'lucide-react';
@@ -198,17 +199,22 @@ export function DeveloperKeys() {
             </button>
           </EmptyState>
         ) : (
-          <div className="table-scroll">
+          <TableViewport label="API keys" minWidth={1040} className="table-scroll">
             <table>
+              <caption className="sr-only">API keys</caption>
               <thead>
                 <tr>
-                  <th>Name / prefix</th>
-                  <th>Access</th>
-                  <th>Budget / limits</th>
-                  <th>Last used</th>
-                  <th>Expires</th>
-                  <th>Status</th>
-                  <th />
+                  <th scope="col">Name / prefix</th>
+                  <th scope="col">Access</th>
+                  <th className="numeric-cell" scope="col">
+                    Budget / limits
+                  </th>
+                  <th scope="col">Last used</th>
+                  <th scope="col">Expires</th>
+                  <th scope="col">Status</th>
+                  <th scope="col" className="actions-cell">
+                    Actions
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -231,7 +237,7 @@ export function DeveloperKeys() {
                           </ul>
                         </details>
                       </td>
-                      <td>
+                      <td className="numeric-cell">
                         {key.grantId ? (
                           <Link href={`/agents/${key.grantId}`} className="text-link">
                             Funded agent budget
@@ -247,7 +253,7 @@ export function DeveloperKeys() {
                           {key.revokedAt ? 'Revoked' : expired ? 'Expired' : 'Active'}
                         </span>
                       </td>
-                      <td>
+                      <td className="actions-cell">
                         {!key.revokedAt && (
                           <button
                             className="text-button"
@@ -265,7 +271,7 @@ export function DeveloperKeys() {
                 })}
               </tbody>
             </table>
-          </div>
+          </TableViewport>
         )}
         <LoadMore
           available={!!list.nextCursor}

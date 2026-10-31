@@ -1,3 +1,4 @@
+import { TableViewport } from './table';
 import { useEffect, useMemo, useState } from 'react';
 import {
   ArrowLeft,
@@ -135,7 +136,7 @@ export function Orders({ search }: { search: string }) {
           </Link>
         </div>
       </header>
-      {!filtered && !cursor && <PurchaseCards compact />}
+      {!filtered && !cursor && list.data && !items.length && <PurchaseCards compact />}
       <div className="purchase-history-heading">
         <h2>Order history</h2>
         <p>Track purchases, live auctions and scheduled VM bookings.</p>
@@ -237,12 +238,9 @@ export function Orders({ search }: { search: string }) {
           </div>
         ) : items.length ? (
           <>
-            <div className="orders-scroll-hint">
-              <ArrowLeft size={12} />
-              <span>Scroll the table for pricing, timing and actions</span>
-              <ArrowRight size={12} />
-            </div>
-            <div
+            <TableViewport
+              label="Orders"
+              minWidth={920}
               className="market-table-scroll orders-table-scroll"
               tabIndex={0}
               role="region"
@@ -256,11 +254,11 @@ export function Orders({ search }: { search: string }) {
                   <tr>
                     <th scope="col">Order</th>
                     <th scope="col">Status</th>
-                    <th scope="col" className="orders-amount-head">
+                    <th scope="col" className="orders-amount-head numeric-cell">
                       Price / credit · USD
                     </th>
                     <th scope="col">Timing</th>
-                    <th scope="col">
+                    <th className="actions-cell" scope="col">
                       <span className="sr-only">Open</span>
                     </th>
                   </tr>
@@ -357,7 +355,7 @@ export function Orders({ search }: { search: string }) {
                           </div>
                         </div>
                       </td>
-                      <td className="orders-amount-cell">
+                      <td className="orders-amount-cell numeric-cell">
                         <strong>
                           {money(
                             item.amount.label === 'reserved'
@@ -432,7 +430,7 @@ export function Orders({ search }: { search: string }) {
                           </>
                         )}
                       </td>
-                      <td className="orders-actions-cell">
+                      <td className="orders-actions-cell actions-cell">
                         <div className="market-row-actions">
                           <Link
                             href={item.detailUrl}
@@ -462,7 +460,7 @@ export function Orders({ search }: { search: string }) {
                   ))}
                 </tbody>
               </table>
-            </div>
+            </TableViewport>
           </>
         ) : (
           <div className="orders-empty">
