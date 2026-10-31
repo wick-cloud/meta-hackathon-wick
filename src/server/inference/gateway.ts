@@ -27,7 +27,6 @@ import { fixtureInputTokens, InferenceUpstreamError, type AdapterResult } from '
 import { retirePackLocked } from './market.js';
 import { studioAuthority } from '../coding/studio-budget.js';
 import { seal } from '../coding/artifacts.js';
-import type { NativeCompletionInput } from './runtime.js';
 
 function inferenceFailure(code: string, id: string, message: string): never {
   try {
@@ -361,9 +360,8 @@ async function completeInternal(
   const { operationKey, ...input } = completionSchema.parse(raw),
     grantId = source?.grantId ?? requireGrantKey(actor),
     rt = runtime(ctx);
-  const dispatchInput: NativeCompletionInput =
-    source?.kind === 'studio' ? { ...input, reasoning_effort: 'low' } : input;
-  const fingerprint = operationFingerprint(dispatchInput);
+  // Leave reasoning policy with Muse's serving endpoint for every task and repair.
+  const fingerprint = operationFingerprint(input);
   const reservation = await transaction(ctx.pool, async (db) => {
     await authority(db, actor, 'inference:use');
     const grant = await lockedGrant(db, actor, grantId);
@@ -543,7 +541,7 @@ async function completeInternal(
   }
   let result: AdapterResult;
   try {
-    result = await rt.dispatch(native, dispatchInput, request.id);
+    result = await rt.dispatch(native, input, request.id);
   } catch (error) {
     const upstream =
       error instanceof InferenceUpstreamError

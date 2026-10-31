@@ -253,6 +253,7 @@ describe.skipIf(!url)('Studio task budget and lifecycle (disposable Postgres)', 
       { action: 'finish', summary: 'Implemented and tested the requested change.' },
     ];
     planningReplies = [];
+    vi.mocked(ctx.inference!.dispatch).mockClear();
   });
   afterAll(async () => {
     await pool?.end();
@@ -501,7 +502,10 @@ describe.skipIf(!url)('Studio task budget and lifecycle (disposable Postgres)', 
     ).toBe(1);
     expect((await pool.query('SELECT count(*)::int n FROM broker_vms')).rows[0].n).toBe(0);
     const calls = vi.mocked(ctx.inference!.dispatch).mock.calls.map((c) => c[1]);
-    expect(calls.every((c) => c.reasoning_effort === 'low' && c.max_tokens === 2048)).toBe(true);
+    for (const call of calls) {
+      expect(call).not.toHaveProperty('reasoning_effort');
+      expect(call.max_tokens).toBe(2048);
+    }
     expect(calls[1]!.messages[0]!.content).toContain('previous settled reply');
     expect(calls[1]!.messages[0]!.content).not.toContain('{"catalogId":');
     const detail = await studioDetail(ctx, owner, task.id);
@@ -550,6 +554,134 @@ describe.skipIf(!url)('Studio task budget and lifecycle (disposable Postgres)', 
       ).rows[0].n,
     ).toBe(1);
   });
+  it('completes coding and cleanup after a capped planning reply, without changing model reasoning policy', async () => {
+    planningReplies = [{ content: '', finishReason: 'length', outputTokens: 2048 }];
+    const task = await create(),
+      { task: t, vm } = await ready(task.id);
+    await processCodingJob(ctx, t.coding_job_id);
+    await tick(task.id);
+    await cleaned(task.id, vm.id);
+    const detail = await studioDetail(ctx, owner, task.id);
+    expect(detail.task.status).toBe('completed');
+    expect(detail.tests?.exitCode).toBe(0);
+    expect(detail.vm?.cleanupConfirmedAt).toBeTruthy();
+    expect(detail.task.reservedCents).toBe(0);
+    expect(detail.task.spentCents + detail.task.returnedCents).toBeCloseTo(200, 2);
+    expect(detail.modelPurchases).toHaveLength(1);
+    expect(modelCalls).toBe(6);
+    for (const [, call] of vi.mocked(ctx.inference!.dispatch).mock.calls) {
+      expect(call).not.toHaveProperty('reasoning_effort');
+      expect(call).not.toHaveProperty('reasoning');
+    }
+  });
+  it('stops a repair at exhausted prepaid quota without buying more capacity or dispatching again', async () => {
+    for (const route of ctx.inference!.routes.values()) route.maximumOutputTokens = 2048;
+    planningReplies = [{ content: '', finishReason: 'length', outputTokens: 2048 }];
+    const task = await create();
+    let t = await tick(task.id);
+    await pool.query(
+      "UPDATE broker_token_orders SET closes_at=clock_timestamp()-interval '1 second' WHERE id=$1",
+      [t.model_order_id],
+    );
+    await closeTokenAuction(ctx, t.model_order_id);
+    await pool.query(
+      'UPDATE broker_token_packs SET output_tokens=2048,available_output=2048 WHERE grant_id=$1',
+      [t.grant_id],
+    );
+    t = await tick(task.id);
+    expect(t.status).toBe('needs_attention');
+    expect((await studioDetail(ctx, owner, task.id)).planning).toMatchObject({
+      attempt: 2,
+      failureCode: 'allowance',
+      requestStatus: 'not_sent',
+    });
+    await controlStudio(ctx, owner, task.id, 'retry-plan');
+    await tick(task.id);
+    expect(modelCalls).toBe(1);
+    expect((await studioDetail(ctx, owner, task.id)).modelPurchases).toHaveLength(1);
+    expect((await pool.query('SELECT count(*)::int n FROM broker_vms')).rows[0].n).toBe(0);
+    const pack = (
+      await pool.query(
+        'SELECT consumed_output,held_output FROM broker_token_packs WHERE grant_id=$1',
+        [t.grant_id],
+      )
+    ).rows[0];
+    expect(Number(pack.consumed_output)).toBe(2048);
+    expect(Number(pack.held_output)).toBe(0);
+  });
+  it('serializes duplicate owner repair requests and competing workers into one repair', async () => {
+    invalidPlan = true;
+    const task = await create();
+    let t = await tick(task.id);
+    await pool.query(
+      "UPDATE broker_token_orders SET closes_at=clock_timestamp()-interval '1 second' WHERE id=$1",
+      [t.model_order_id],
+    );
+    await closeTokenAuction(ctx, t.model_order_id);
+    await tick(task.id);
+    invalidPlan = false;
+    const retries = await Promise.allSettled([
+      controlStudio(ctx, owner, task.id, 'retry-plan'),
+      controlStudio(ctx, owner, task.id, 'retry-plan'),
+    ]);
+    expect(retries.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    await Promise.all([tick(task.id), tick(task.id)]);
+    t = (await pool.query('SELECT * FROM broker_studio_tasks WHERE id=$1', [task.id])).rows[0];
+    expect(t.status).toBe('compute_auction');
+    expect(t.plan_attempt).toBe(1);
+    expect(modelCalls).toBe(2);
+    expect((await pool.query('SELECT count(*)::int n FROM broker_requests')).rows[0].n).toBe(1);
+  });
+  it.each(['stop', 'deadline', 'revocation', 'lease'] as const)(
+    'does not authorize a repair or VM when %s changes during planning',
+    async (change) => {
+      const task = await create();
+      let t = await tick(task.id);
+      await pool.query(
+        "UPDATE broker_token_orders SET closes_at=clock_timestamp()-interval '1 second' WHERE id=$1",
+        [t.model_order_id],
+      );
+      await closeTokenAuction(ctx, t.model_order_id);
+      const dispatch = vi.mocked(ctx.inference!.dispatch);
+      dispatch.mockImplementationOnce(async (_route, call, id) => {
+        modelCalls++;
+        if (change === 'stop') await controlStudio(ctx, owner, task.id, 'stop');
+        if (change === 'deadline')
+          await pool.query(
+            "UPDATE broker_studio_tasks SET deadline_at=clock_timestamp()-interval '1 second' WHERE id=$1",
+            [task.id],
+          );
+        if (change === 'revocation')
+          await pool.query('UPDATE "user" SET role=\'provider\' WHERE id=$1', [owner.id]);
+        if (change === 'lease')
+          await pool.query(
+            "UPDATE broker_studio_tasks SET lease_until=clock_timestamp()-interval '1 second' WHERE id=$1",
+            [task.id],
+          );
+        return {
+          id,
+          content: '',
+          finishReason: 'length',
+          inputTokens: fixtureInputTokens(call),
+          outputTokens: 2048,
+        };
+      });
+      t = await tick(task.id);
+      expect(modelCalls).toBe(1);
+      expect(t.plan_attempt).toBe(0);
+      expect(t.vm_request_id).toBeNull();
+      const receipt = (
+        await pool.query(
+          'SELECT status,output_tokens FROM broker_inference_requests WHERE source_task_id=$1',
+          [task.id],
+        )
+      ).rows[0];
+      expect(receipt).toMatchObject({ status: 'settled', output_tokens: 2048 });
+      await tick(task.id);
+      expect(modelCalls).toBe(1);
+      expect((await pool.query('SELECT count(*)::int n FROM broker_vms')).rows[0].n).toBe(0);
+    },
+  );
   it('recovers a settled saved reply after a worker checkpoint failure without another provider call', async () => {
     const task = await create();
     let t = await tick(task.id);

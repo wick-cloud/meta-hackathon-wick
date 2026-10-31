@@ -42,12 +42,14 @@ is available at `/studio/legacy`.
 
 ## Planning recovery
 
-Planning uses `reasoning_effort: low` and a compact repository summary: at most
+Planning sends no reasoning-effort override; Muse's serving endpoint controls
+reasoning for both the initial task and repair. It uses a compact repository summary: at most
 50 root entries and two 4,000-character manifest excerpts, marked when truncated.
 This keeps VM selection and offline verification planning separate from coding.
-Meta documents `xhigh` as Muse's default and `low` for short selection/tool loops:
-[recommended settings](https://dev.meta.ai/docs/muse-spark-open/settings).
-The existing qualified per-call input/output bounds stay in force.
+The existing qualified per-call input/output bounds stay in force. Omitting an
+override does not guarantee adaptive reasoning or prevent response truncation;
+provider defaults still apply. Recovery therefore handles a capped response
+explicitly instead of assuming every task will fit on its first attempt.
 
 Each task has at most two planning attempts. A settled truncated or malformed
 reply gets one shorter automatic repair from existing prepaid quota. Invalid
@@ -151,6 +153,8 @@ lost planning responses, funding closure, replenishment without a second VM or
 deadline extension, tenant isolation, and verified completion. A 10,000-task
 history checks bounded payloads and an `EXPLAIN (ANALYZE, BUFFERS)` plan using
 the owner-page and grant-primary-key indexes.
+Planning checks also exercise concurrent owner retries and workers, exhausted
+prepaid quota, and stop/deadline/revocation/lease changes during a provider call.
 
 ```sh
 TEST_DATABASE_URL=postgresql://localhost/disposable npm run check
@@ -159,10 +163,12 @@ CODING_TEST_DOCKER_CONTEXT=YOUR_ISOLATED_LOCAL_CONTEXT TEST_DATABASE_URL=postgre
 
 The opt-in Linux runner executes actual public Git cloning, source edits,
 sandboxed tests and patch export. It waits for both real 30-second fixture
-auctions, performs automatic verification and funding release, and removes its
-own container/database. Model decisions, prices, allocations and money are
+auctions, injects one capped planning response, repairs it using existing quota,
+then performs automatic verification and funding release. It verifies that
+planning, repair and coding calls have no Broker reasoning override, and removes
+its own container/database. Model decisions, prices, allocations and money are
 explicit fixtures; this is not live Meta/Wick-provider qualification. The
-isolated local Colima VM has no home mounts or SSH-agent forwarding. A browser
+test container has no host-directory mounts or SSH-agent forwarding. A browser
 run also starts a second task solely through the new form and verifies its
 completion, receipts, patch and cleanup.
 
