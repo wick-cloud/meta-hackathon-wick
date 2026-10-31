@@ -15,6 +15,7 @@ COPY package*.json ./
 RUN npm ci --omit=dev --workspaces=false && npm cache clean --force
 COPY --from=build /app/dist ./dist
 COPY migrations ./migrations
+COPY scripts/coding-guest.py ./scripts/coding-guest.py
 COPY client-releases ./client-releases
 USER node
 STOPSIGNAL SIGTERM

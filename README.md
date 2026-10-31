@@ -1,6 +1,8 @@
 # Wick Broker v1
 
-A single-process environment marketplace: describe an environment, review an immutable specification, run a 30-second provider auction, and open the winning VM's browser terminal. Customers type their own commands. Wick Broker does not execute customer workloads, inspect repositories, or launch customer agents.
+A single-process environment marketplace: describe an environment, review an immutable specification, run a 30-second provider auction, and open the winning VM's browser terminal. Customers can run their own commands or explicitly authorize a bounded public-repository coding job in Muse Studio.
+
+**Muse Studio:** the [public repository coding pilot](docs/public-repo-coding.md) clones an anonymous public GitHub repository into an existing owned Wick VM, uses purchased Meta Muse quota for edits, runs the owner's test command in a required guest sandbox, and returns a patch with command and usage receipts. Jobs, history and recovery use this same app/database. Local Linux execution is verified; native Wick provider and live-model qualification remain outstanding. Missing guest isolation fails closed.
 
 The permanent **Orders** hub retains every auction and funded scheduled agreement. Seven-day agreements reserve Broker pilot credit and future capacity; customers manually start VMs inside accepted windows. See [Orders and funded agreements](docs/orders-and-agreements.md) for the UI, funding model, API and real-provider enforcement boundary.
 

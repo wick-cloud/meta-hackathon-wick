@@ -448,6 +448,25 @@ function realAdapter(config: WickConfig): WickAdapter {
   }
   return {
     mode: 'real',
+    async runCommand(id, input) {
+      if (input.command.length > 180000)
+        throw new WickApiError('Coding command exceeds the request limit');
+      const result = await invoke(() =>
+        sdk.environments.runCommand({ path: { id }, body: input, timeoutMs: 110000 }),
+      );
+      if (
+        typeof result.stdout !== 'string' ||
+        typeof result.stderr !== 'string' ||
+        !Number.isInteger(result.exitCode) ||
+        result.simulated
+      )
+        throw new WickApiError('Wick returned an invalid command receipt');
+      return {
+        stdout: result.stdout.slice(0, 100000),
+        stderr: result.stderr.slice(0, 2000),
+        exitCode: result.exitCode,
+      };
+    },
     async catalog() {
       const raw = await invoke(() =>
         sdk.catalog.get({ query: { organizationId: config.wickOrganizationId } }),

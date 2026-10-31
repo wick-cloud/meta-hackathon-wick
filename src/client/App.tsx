@@ -43,6 +43,7 @@ import { DeveloperKeys } from './developer-keys';
 import { Agents, AgentDetail, TokenComposer, TokenOrderPage, ProviderInference } from './inference';
 import { PurchaseChooser } from './purchases';
 import { TokenInventory } from './token-inventory';
+import { CodingStudio, CodingJobPage } from './coding';
 import {
   ProviderCapacity,
   ProviderPolicy,
@@ -56,6 +57,7 @@ import {
 type NavigationItem = { path: string; label: string; icon: typeof Box; group?: string };
 const buyerNavigation: NavigationItem[] = [
   { path: '/orders', label: 'Orders', icon: ListOrdered, group: 'WORKSPACE' },
+  { path: '/studio', label: 'Muse Studio', icon: Sparkles, group: 'WORKSPACE' },
   { path: '/vms', label: 'Virtual machines', icon: Server, group: 'WORKSPACE' },
   { path: '/tokens', label: 'Purchased tokens', icon: Sparkles, group: 'WORKSPACE' },
   { path: '/agents', label: 'Agents', icon: Bot, group: 'WORKSPACE' },
@@ -372,6 +374,9 @@ export default function App() {
   if (path === '/keys' && user.role !== 'admin') content = <DeveloperKeys key={user.id} />;
   else if (user.role === 'buyer') {
     if (path === '/orders') content = <Orders search={search} />;
+    else if (path === '/studio') content = <CodingStudio key={user.id} search={search} />;
+    else if (path.startsWith('/studio/jobs/'))
+      content = <CodingJobPage key={path} id={path.split('/')[3]!} />;
     else if (path === '/agents') content = <Agents key={user.id} search={search} />;
     else if (path.startsWith('/agents/'))
       content = <AgentDetail key={`${user.id}:${path}`} id={path.split('/')[2]!} search={search} />;

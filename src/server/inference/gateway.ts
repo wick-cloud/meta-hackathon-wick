@@ -252,13 +252,63 @@ export async function complete(
   actor: Actor,
   raw: unknown,
 ): Promise<InferenceCompletion> {
+  return completeInternal(ctx, actor, raw);
+}
+/** Internal durable-job authority. Never exposed through the public completions route. */
+export async function completeCodingJob(
+  ctx: AppContext,
+  actor: Actor,
+  raw: unknown,
+  jobId: string,
+  leaseToken: string,
+) {
+  if (actor.apiKey || actor.role !== 'buyer')
+    failure(403, 'owner_required', 'Coding requires owner authority.');
+  const job = (
+    await ctx.pool.query('SELECT grant_id FROM broker_coding_jobs WHERE id=$1 AND buyer_id=$2', [
+      jobId,
+      actor.id,
+    ])
+  ).rows[0];
+  if (!job) failure(404, 'not_found', 'Coding job not found.');
+  return completeInternal(ctx, actor, raw, { id: jobId, grantId: job.grant_id, leaseToken });
+}
+async function codingAuthority(
+  db: PoolClient,
+  source: { id: string; leaseToken: string },
+  actor: Actor,
+) {
+  const row = (
+    await db.query(
+      `SELECT j.id FROM broker_coding_jobs j JOIN broker_vms v ON v.id=j.vm_id
+    WHERE j.id=$1 AND j.buyer_id=$2 AND j.lease_token=$3 AND j.lease_until>clock_timestamp()
+    AND j.status='running' AND j.requested_action IS NULL AND j.deadline_at>clock_timestamp()
+    AND v.status='running' AND v.expires_at>clock_timestamp() AND v.environment_id=j.environment_id
+    FOR SHARE OF j,v`,
+      [source.id, actor.id, source.leaseToken],
+    )
+  ).rows[0];
+  if (!row)
+    failure(
+      409,
+      'coding_authority_changed',
+      'The coding job was paused, stopped, expired, or lost its execution lease.',
+    );
+}
+async function completeInternal(
+  ctx: AppContext,
+  actor: Actor,
+  raw: unknown,
+  source?: { id: string; grantId: string; leaseToken: string },
+): Promise<InferenceCompletion> {
   const { operationKey, ...input } = completionSchema.parse(raw),
-    grantId = requireGrantKey(actor),
+    grantId = source?.grantId ?? requireGrantKey(actor),
     rt = runtime(ctx);
   const fingerprint = operationFingerprint(input);
   const reservation = await transaction(ctx.pool, async (db) => {
     await authority(db, actor, 'inference:use');
     const grant = await lockedGrant(db, actor, grantId);
+    if (source) await codingAuthority(db, source, actor);
     const prior = (
       await db.query(
         'SELECT * FROM broker_inference_requests WHERE grant_id=$1 AND operation_key=$2',
@@ -347,19 +397,20 @@ export async function complete(
       );
       const request = (
         await db.query(
-          `INSERT INTO broker_inference_requests(grant_id,pack_id,buyer_id,source_key_id,provider,source_mode,operation_key,input_fingerprint,reserved_input,reserved_output,deadline_at)
-        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,clock_timestamp()+interval '120 seconds') RETURNING *`,
+          `INSERT INTO broker_inference_requests(grant_id,pack_id,buyer_id,source_key_id,provider,source_mode,operation_key,input_fingerprint,reserved_input,reserved_output,deadline_at,source_job_id)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,clock_timestamp()+interval '120 seconds',$11) RETURNING *`,
           [
             grantId,
             pack.id,
             actor.id,
-            actor.apiKey!.id,
+            actor.apiKey?.id ?? null,
             pack.provider,
             pack.source_mode,
             operationKey,
             fingerprint,
             inputBound,
             input.max_tokens,
+            source?.id ?? null,
           ],
         )
       ).rows[0];
@@ -380,6 +431,7 @@ export async function complete(
     await transaction(ctx.pool, async (db) => {
       await authority(db, actor, 'inference:use');
       const grant = await lockedGrant(db, actor, grantId, true);
+      if (source) await codingAuthority(db, source, actor);
       activeMode(ctx, grant);
       const route = (
         await db.query('SELECT * FROM broker_inference_routes WHERE provider=$1 FOR UPDATE', [

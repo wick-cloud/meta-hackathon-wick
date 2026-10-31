@@ -66,6 +66,11 @@ export interface WickTerminalOptions {
 }
 export interface WickAdapter {
   mode: 'fixture' | 'real';
+  /** Structured execution, with native status/exit code. No command retries. */
+  runCommand?(
+    id: string,
+    input: { command: string; cwd?: string },
+  ): Promise<{ stdout: string; stderr: string; exitCode: number; simulated?: boolean }>;
   catalog(): Promise<CatalogItem[]>;
   preview(input: CreateEnvironmentInput): Promise<unknown>;
   create(input: CreateEnvironmentInput, idempotencyKey: string): Promise<WickCreateResult>;
