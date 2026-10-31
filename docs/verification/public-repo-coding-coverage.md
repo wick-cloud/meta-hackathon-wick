@@ -111,3 +111,39 @@ unknown usage, stop/deadline, replenishment, verified completion and bounded
 10,000-row task history. Type checking and production builds also passed.
 Live Meta responses, native VM images and larger provider output-accounting
 contracts require separate qualification before enabling real automatic tasks.
+
+## Ten-cent defaults: complete local flows — 2026-10-31
+
+The application at commit `44cb9a6` was exercised through the browser against
+isolated local app/auth/Postgres/PgBoss instances, followed by SDK and database
+assertions. The 17-check Linux runner also passed again on this commit.
+
+* Two VM auctions used the untouched $0.10 ceiling with explicitly prepared
+  fixture provider policies bidding $0.08 and $0.09. Each observed its full
+  30-second deadline, created one fixture VM, and issued exactly one $0.08
+  invoice. Commission was $0.0120 and provider share $0.0680 per rental.
+  Browser terminal echo worked; reload/reconnection preserved the VM identity
+  and exact expiry. Both fixture VMs acknowledged termination.
+* A separate auction against higher-price fixture policies kept its $0.10
+  ceiling, ended with no offers after 30 seconds, and created zero VMs.
+* A new agent retained its default $0.10 budget and purchase cap. Its auction
+  for 10,000 input / 512 output tokens received two $0.10 fixture bids and
+  charged $0.10 once. An actual SDK completion settled fixture usage without
+  another monetary charge. Replaying the operation returned 409 and kept one
+  inference request. The test key was revoked, the grant closed, and wallet
+  reservations returned to zero.
+* Studio started from the untouched $0.10 task budget and paused with no
+  purchases and $0 spent. The owner added $2 of fixture funding. The same task
+  completed both auctions, actual Linux edits and six passing tests, retained
+  its patch, confirmed VM cleanup and settled six model receipts. It spent
+  $1.6120 from $2.1000 and returned $0.4880, with no reserved funds. The original
+  grant-creation receipt proved its deadline was unchanged, and database checks
+  confirmed one VM request and one coding job for the task.
+
+The browser sequence was performed through the app UI; SDK/ledger assertions
+were separate API/database checks. The existing opt-in browser scenario was
+updated to use the new default budget/cap and a 512-output-token pack; its
+automation was not executed in this check. Type checking and formatting passed.
+All model calls and provider allocations above were fixtures. Only guest Git,
+file edits and sandboxed tests used actual Linux execution. This does not
+qualify a production inference route or native Wick provider.

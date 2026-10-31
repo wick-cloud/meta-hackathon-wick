@@ -62,8 +62,8 @@ test('owner funds agent → saved 30-second token auction → prepaid inference 
     await page.getByRole('button', { name: 'Create agent', exact: true }).first().click();
     const name = `Browser task ${randomUUID().slice(0, 8)}`;
     await page.getByLabel('Agent name').fill(name);
-    await page.getByLabel('Initial budget').fill('10');
-    await page.getByRole('button', { name: 'Reserve $10.00 and create' }).click();
+    // Exercise the default budget and purchase ceiling through the complete flow.
+    await page.getByRole('button', { name: 'Reserve $0.10 and create' }).click();
     await expect(page.getByRole('heading', { name, exact: true })).toBeVisible();
     grantId = new URL(page.url()).pathname.split('/').at(-1)!;
     await picture(page, 'agent-real-postgres-desktop');
@@ -84,8 +84,7 @@ test('owner funds agent → saved 30-second token auction → prepaid inference 
     );
     await page.goto(`/token-orders/new?grantId=${grantId}`);
     await page.getByLabel('Input tokens', { exact: true }).fill('10000');
-    await page.getByLabel('Output tokens', { exact: true }).fill('2000');
-    await page.getByLabel('Maximum total price').fill('1');
+    await page.getByLabel('Output tokens', { exact: true }).fill('512');
     await page.getByRole('checkbox', { name: /I understand/ }).check();
     await page.getByRole('button', { name: 'Start 30-second auction' }).click();
     await expect(page).toHaveURL(/\/token-orders\/[a-f0-9-]+$/);
@@ -93,6 +92,8 @@ test('owner funds agent → saved 30-second token auction → prepaid inference 
     const initial = await (await page.request.get(`/api${orderUrl}`)).json();
     expect(initial.bids).toHaveLength(2);
     expect(initial.order.status).toBe('open');
+    expect(initial.order.maxTotalCents).toBe(10);
+    expect(initial.order.outputTokens).toBe(512);
     await picture(page, 'token-auction-real-postgres');
     await page.goto('/orders?kind=token');
     await expect(page.locator(`a[href="${orderUrl}"]`).first()).toBeVisible();
