@@ -56,7 +56,7 @@ describe('Wick structured coding commands', () => {
       'invalid command receipt',
     );
     await expect(
-      adapter.runCommand!('env_fixture', { command: 'x'.repeat(180001) }),
+      adapter.runCommand!('env_fixture', { command: 'x'.repeat(16001) }),
     ).rejects.toThrow('limit');
     expect(fetcher).toHaveBeenCalledTimes(1);
   });

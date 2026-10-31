@@ -129,7 +129,9 @@ try {
       async runCommand(id, input) {
         assert.equal(id, environmentId, 'Command must target the selected local VM.');
         const payload = JSON.parse(
-          Buffer.from(input.command.match(/'([A-Za-z0-9+/=]+)'$/)![1]!, 'base64').toString(),
+          inflateSync(
+            Buffer.from(input.command.match(/'([A-Za-z0-9+/=]+)'$/)![1]!, 'base64'),
+          ).toString(),
         );
         nativeActions.push(payload.action.action);
         const result = await docker(['exec', container, 'sh', '-lc', input.command]);
@@ -487,3 +489,4 @@ try {
   if (process.env.CODING_LOCAL_REPORT)
     await writeFile(process.env.CODING_LOCAL_REPORT, JSON.stringify(report, null, 2) + '\n');
 }
+import { inflateSync } from 'node:zlib';

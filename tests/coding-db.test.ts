@@ -168,7 +168,7 @@ describe.skipIf(!url)('durable coding jobs (disposable PostgreSQL; no live provi
         mode: 'fixture',
         runCommand: vi.fn(async (_id: string, { command }: { command: string }) => {
           const encoded = command.match(/'([A-Za-z0-9+/=]+)'$/)![1]!;
-          const data = JSON.parse(Buffer.from(encoded, 'base64').toString());
+          const data = JSON.parse(inflateSync(Buffer.from(encoded, 'base64')).toString());
           commands.push(data);
           if (data.action.action === 'stop')
             return {
@@ -513,3 +513,4 @@ describe.skipIf(!url)('durable coding jobs (disposable PostgreSQL; no live provi
     expect(plan.Plan['Actual Rows']).toBe(26);
   });
 });
+import { inflateSync } from 'node:zlib';
