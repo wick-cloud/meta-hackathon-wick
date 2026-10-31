@@ -4,10 +4,37 @@ import {
   verifyPublicRepository,
   baseRefSchema,
   codingAction,
+  parseCodingResponse,
 } from '../src/server/coding/contracts.js';
 import { seal, open, ownerOnly } from '../src/server/coding/service.js';
 import type { AppContext } from '../src/server/context.js';
 describe('public coding contracts', () => {
+  it('accepts the observed Muse commentary envelope and still requires one strict action', () => {
+    const prefix = '<|start|>assistant to=commentary<|message|>';
+    const frame =
+      prefix + 'Creating the requested module — first inspecting project layout.<|eom|>';
+    expect(parseCodingResponse(frame + '{"action":"read","path":"pyproject.toml"}')).toEqual({
+      action: 'read',
+      path: 'pyproject.toml',
+    });
+    expect(parseCodingResponse('{"action":"test"}')).toEqual({ action: 'test' });
+    expect(parseCodingResponse(frame.repeat(4) + '{"action":"test"}')).toEqual({ action: 'test' });
+    for (const raw of [
+      frame.repeat(5) + '{"action":"test"}',
+      prefix + '{"action":"test"}',
+      'Here is the action: {"action":"test"}',
+      '<|start|>assistant to=analysis<|message|>{"action":"test"}<|eom|>',
+      frame + '{"action":"shell","command":"echo unapproved"}',
+      frame + '{"action":"test","command":"echo substituted"}',
+      frame + '{"action":"test"}{"action":"test"}',
+      'x'.repeat(16001),
+    ])
+      expect(parseCodingResponse(raw)).toBeNull();
+    const content = 'Literal ' + frame;
+    expect(
+      parseCodingResponse(JSON.stringify({ action: 'write', path: 'example.txt', content })),
+    ).toEqual({ action: 'write', path: 'example.txt', content });
+  });
   it('canonicalizes public GitHub URL shapes without accepting credentials or other origins', () => {
     expect(publicRepository('https://github.com/wick-cloud/example.git/').url).toBe(
       'https://github.com/wick-cloud/example',

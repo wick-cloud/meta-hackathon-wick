@@ -52,6 +52,25 @@ export const codingAction = z.discriminatedUnion('action', [
   z.object({ action: z.literal('finish'), summary: z.string().min(1).max(3000) }).strict(),
 ]);
 export type CodingAction = z.infer<typeof codingAction>;
+/** Muse may prefix final text with a complete, explicitly framed commentary message. */
+export function parseCodingResponse(raw: string): CodingAction | null {
+  if (raw.length > 16000) return null;
+  let text = raw.trim();
+  const prefix = '<|start|>assistant to=commentary<|message|>';
+  for (let frames = 0; text.startsWith(prefix); frames++) {
+    if (frames >= 4) return null;
+    const end = text.indexOf('<|eom|>', prefix.length);
+    if (end < 0) return null;
+    text = text.slice(end + '<|eom|>'.length).trim();
+  }
+  // Never scan arbitrary prose, reasoning, or tool frames for an executable object.
+  try {
+    const action = codingAction.safeParse(JSON.parse(text));
+    return action.success ? action.data : null;
+  } catch {
+    return null;
+  }
+}
 /** Anonymous, fixed-origin requests only. A valid URL shape does not prove public access. */
 export async function verifyPublicRepository(
   url: string,
