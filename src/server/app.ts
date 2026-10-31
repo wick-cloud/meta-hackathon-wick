@@ -1,4 +1,5 @@
 import Fastify, { LogController } from 'fastify';
+import { registerCoding, startCodingWorkers } from './coding/index.js';
 import websocket from '@fastify/websocket';
 import fastifyStatic from '@fastify/static';
 import { PgBoss } from 'pg-boss';
@@ -181,6 +182,7 @@ export async function buildApp(
   registerOrders(app, ctx);
   await registerAgreements(app, ctx);
   await registerInference(app, ctx);
+  registerCoding(app, ctx);
   registerAgreementBilling(app, ctx);
   registerNegotiation(app, ctx);
   await registerMuse(app, ctx);
@@ -188,6 +190,7 @@ export async function buildApp(
   await startMarketplaceWorkers(ctx);
   await startAgreementWorkers(ctx);
   await startInferenceWorkers(ctx);
+  await startCodingWorkers(ctx);
   const clientRoot = resolve(options.clientRoot ?? 'dist/client');
   if (existsSync(resolve(clientRoot, 'index.html'))) {
     await app.register(fastifyStatic, { root: clientRoot, prefix: '/', wildcard: false });
