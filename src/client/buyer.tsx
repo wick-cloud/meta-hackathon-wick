@@ -32,6 +32,7 @@ import {
 } from 'lucide-react';
 import {
   api,
+  DEFAULT_PRICE_CENTS,
   museLabel,
   cloudRouteName,
   regionName,
@@ -83,7 +84,7 @@ export function NewEnvironment() {
   const [description, setDescription] = useState(loadDraft()?.description || ''),
     [busy, setBusy] = useState(false),
     [error, setError] = useState(''),
-    [budget, setBudget] = useState(loadDraft()?.maxPriceCents ?? 500),
+    [budget, setBudget] = useState(loadDraft()?.maxPriceCents ?? DEFAULT_PRICE_CENTS),
     [budgetEdited, setBudgetEdited] = useState(false),
     [copying, setCopying] = useState(!!copyId);
   useEffect(() => {

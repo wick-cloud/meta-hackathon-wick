@@ -1,4 +1,4 @@
-import { formatMoney, formatMoneyMicros } from '../shared/money';
+import { centsToUsd, formatMoney, formatMoneyMicros } from '../shared/money';
 import type {
   Actor,
   CatalogItem,
@@ -14,6 +14,9 @@ import type {
 import { MUSE_DISPLAY_NAME, MUSE_PROVIDER } from '../shared/muse';
 export { MUSE_DISPLAY_NAME, MUSE_MODEL, MUSE_PROVIDER } from '../shared/muse';
 export const museLabel = `${MUSE_DISPLAY_NAME} · ${MUSE_PROVIDER}`;
+// Starting values for new editable money fields; never replace saved or quoted prices.
+export const DEFAULT_PRICE_CENTS = 10;
+export const DEFAULT_PRICE_USD = centsToUsd(DEFAULT_PRICE_CENTS);
 
 export interface Session {
   user: Actor | null;

@@ -24,7 +24,7 @@ import type {
   CreditHistory,
   CreditWallet,
 } from '../shared/agreements';
-import { museLabel, api, dateTime, money, post } from './api';
+import { museLabel, api, dateTime, money, post, DEFAULT_PRICE_CENTS } from './api';
 import { agreementEstimate, agreementWindows } from '../shared/schedule';
 export { agreementEstimate } from '../shared/schedule';
 import {
@@ -111,8 +111,8 @@ export function AgreementComposer() {
     targetQuantity: 1,
     requirements: { cpu: first?.cpu ?? 1, memoryGb: first?.memoryGb ?? 1 },
     region: first?.region ?? '',
-    maxDiscountRateCentsPerHour: 10,
-    continuation: { enabled: false, until: '08:00', maxRateCentsPerHour: 20 },
+    maxDiscountRateCentsPerHour: DEFAULT_PRICE_CENTS,
+    continuation: { enabled: false, until: '08:00', maxRateCentsPerHour: DEFAULT_PRICE_CENTS },
   });
   const [catalogId, setCatalogId] = useState(first?.id ?? ''),
     [review, setReview] = useState<AgreementInput | null>(null),

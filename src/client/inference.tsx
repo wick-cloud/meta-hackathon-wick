@@ -36,7 +36,7 @@ import {
 } from '../shared/inference';
 import type { BrokerKeySummary } from '../shared/developer';
 import type { CreditWallet } from '../shared/agreements';
-import { api, ApiError, dateTime, money, moneyMicros, post, put } from './api';
+import { api, ApiError, dateTime, money, moneyMicros, post, put, DEFAULT_PRICE_CENTS } from './api';
 import {
   AuctionCountdown,
   DetailRow,
@@ -229,8 +229,8 @@ export function Agents({ search = '' }: { search?: string }) {
   }
   const [creating, setCreating] = useState(false),
     [name, setName] = useState(''),
-    [budget, setBudget] = useState(1000),
-    [maximum, setMaximum] = useState(500),
+    [budget, setBudget] = useState(DEFAULT_PRICE_CENTS),
+    [maximum, setMaximum] = useState(DEFAULT_PRICE_CENTS),
     [hours, setHours] = useState(2),
     [providers, setProviders] = useState<InferenceProvider[]>(['modal', 'baseten']),
     [instant, setInstant] = useState(true),
@@ -639,7 +639,7 @@ export function AgentDetail({ id, search = '' }: { id: string; search?: string }
     5000,
   );
   const [dialog, setDialog] = useState<'fund' | 'close' | 'key' | null>(null),
-    [amount, setAmount] = useState(1000),
+    [amount, setAmount] = useState(DEFAULT_PRICE_CENTS),
     [busy, setBusy] = useState(false),
     [error, setError] = useState(''),
     [notice, setNotice] = useState(''),
@@ -1100,7 +1100,7 @@ export function TokenComposer({ search }: { search: string }) {
     [inputTokens, setInputTokens] = useState(2000000),
     [outputTokens, setOutputTokens] = useState(100000),
     [mode, setMode] = useState<'auction' | 'instant'>('auction'),
-    [maximum, setMaximum] = useState(500),
+    [maximum, setMaximum] = useState(DEFAULT_PRICE_CENTS),
     [quotes, setQuotes] = useState<TokenQuote[]>([]),
     [quoteId, setQuoteId] = useState(''),
     [quoting, setQuoting] = useState(false),

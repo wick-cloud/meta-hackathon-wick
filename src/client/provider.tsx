@@ -36,6 +36,7 @@ import { AgreementCharges } from './agreement-charges';
 import {
   ApiError,
   api,
+  DEFAULT_PRICE_CENTS,
   museLabel,
   MUSE_MODEL,
   cloudRouteName,
@@ -914,7 +915,7 @@ export function ProviderRequests() {
             <ProviderRequestCard
               key={request.id}
               request={request}
-              basePriceCents={dashboard.data?.policy.basePriceCents ?? 150}
+              basePriceCents={dashboard.data?.policy.basePriceCents ?? DEFAULT_PRICE_CENTS}
               onBid={() => {
                 reload();
                 dashboard.reload();
@@ -959,7 +960,7 @@ export function ProviderOfferings() {
       catalogId: approved[0]?.id || '',
       name: '',
       description: '',
-      priceCents: 150,
+      priceCents: DEFAULT_PRICE_CENTS,
     }),
     [showForm, setShowForm] = useState(false),
     [busy, setBusy] = useState(''),
@@ -1011,7 +1012,12 @@ export function ProviderOfferings() {
       await post('/api/provider/offerings', { ...draft, priceCents: publishPrice });
       setShowForm(false);
       setSuccess('Offering published. New bids can use this revision.');
-      setDraft({ catalogId: approved[0]?.id || '', name: '', description: '', priceCents: 150 });
+      setDraft({
+        catalogId: approved[0]?.id || '',
+        name: '',
+        description: '',
+        priceCents: DEFAULT_PRICE_CENTS,
+      });
       reload();
     } catch (err) {
       setActionError(err instanceof Error ? err.message : 'Offering could not be published.');

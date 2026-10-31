@@ -418,7 +418,7 @@ test('owner creates a funded agent, saves a key once, adds funds and closes its 
   await page.screenshot({ path: test.info().outputPath('agent-desktop.png'), fullPage: true });
   expect(f.writes[0]!.body).toMatchObject({
     budgetCents: 1200,
-    maxPurchaseCents: 500,
+    maxPurchaseCents: 10,
     allowedProviders: ['modal', 'baseten'],
   });
   expect(f.writes[0]!.body.operationKey).toBeTruthy();

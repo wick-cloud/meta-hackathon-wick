@@ -17,7 +17,7 @@ import {
 } from 'lucide-react';
 import type { StudioTask, StudioDetail, StudioStatus } from '../shared/studio';
 import { usdToCents } from '../shared/money';
-import { money, post, dateTime } from './api';
+import { money, post, dateTime, DEFAULT_PRICE_USD } from './api';
 import {
   ErrorBox,
   Link,
@@ -118,7 +118,7 @@ export function Studio({ search = '' }: { search?: string }) {
   const [compose, setCompose] = useState(params.get('new') === '1'),
     [goal, setGoal] = useState(''),
     [repo, setRepo] = useState(''),
-    [budget, setBudget] = useState('5'),
+    [budget, setBudget] = useState(DEFAULT_PRICE_USD),
     [duration, setDuration] = useState('30'),
     [instant, setInstant] = useState(true),
     [test, setTest] = useState(''),
@@ -528,7 +528,7 @@ export function StudioTaskPage({ id }: { id: string }) {
     [tab, setTab] = useState<'activity' | 'changes' | 'tests' | 'purchases'>('activity'),
     [busy, setBusy] = useState(false),
     [error, setError] = useState(''),
-    [fund, setFund] = useState('5');
+    [fund, setFund] = useState(DEFAULT_PRICE_USD);
   const now = useNow(),
     task = detail.data?.task;
   useEffect(() => {
