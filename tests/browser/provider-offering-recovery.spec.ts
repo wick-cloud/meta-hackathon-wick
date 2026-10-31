@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page } from './table-review';
 
 // All API calls are intercepted; these tests never publish supply or call a provider.
 async function fixture(page: Page, mode: 'fixture' | 'real', allowed: boolean) {

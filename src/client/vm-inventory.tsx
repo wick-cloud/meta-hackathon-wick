@@ -1,3 +1,4 @@
+import { TableViewport } from './table';
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import {
   ArrowDownWideNarrow,
@@ -73,6 +74,11 @@ export function MyVMs({ search = '' }: { search?: string }) {
     setSearchText(term);
   }, [term]);
   useEffect(() => {
+    if (!copied) return;
+    const timer = setTimeout(() => setCopied(''), 2000);
+    return () => clearTimeout(timer);
+  }, [copied]);
+  useEffect(() => {
     setConfirm(null);
     setActionError('');
   }, [search]);
@@ -112,7 +118,6 @@ export function MyVMs({ search = '' }: { search?: string }) {
     try {
       await navigator.clipboard.writeText(vm.id);
       setCopied(vm.id);
-      setNotice('VM ID copied.');
     } catch {
       setActionError('Could not copy the VM ID. Open the environment to select and copy it.');
     }
@@ -158,6 +163,9 @@ export function MyVMs({ search = '' }: { search?: string }) {
         </div>
       </header>
       {notice && <SuccessBox>{notice}</SuccessBox>}
+      <span className="sr-only" role="status">
+        {copied ? 'VM ID copied.' : ''}
+      </span>
       {!confirm && <ErrorBox error={actionError} />}
       <section className="card vm-inventory-panel" aria-label="VM inventory">
         <div className="vm-panel-toolbar">
@@ -303,8 +311,9 @@ export function MyVMs({ search = '' }: { search?: string }) {
           </EmptyState>
         ) : (
           <>
-            <p className="vm-scroll-hint">Scroll the table for expiry, price and actions.</p>
-            <div
+            <TableViewport
+              label="Virtual machines"
+              minWidth={940}
               className="vm-table-scroll"
               tabIndex={0}
               role="region"
@@ -318,14 +327,14 @@ export function MyVMs({ search = '' }: { search?: string }) {
                   <tr>
                     <th scope="col">Environment</th>
                     <th scope="col">Status</th>
-                    <th scope="col">Provider</th>
+                    <th scope="col">Location</th>
                     <th scope="col">Resources</th>
-                    <th scope="col">Region</th>
                     <th scope="col">Expires</th>
-                    <th scope="col">Fixed price</th>
-                    <th scope="col">Created</th>
-                    <th scope="col">
-                      <span className="sr-only">Actions</span>
+                    <th scope="col" className="numeric-cell">
+                      Total price
+                    </th>
+                    <th scope="col" className="actions-cell">
+                      Actions
                     </th>
                   </tr>
                 </thead>
@@ -336,15 +345,25 @@ export function MyVMs({ search = '' }: { search?: string }) {
                     const canTerminate =
                       ['running', 'provisioning'].includes(vm.status) && !vm.cleanupPending;
                     const ongoing = ['running', 'provisioning'].includes(vm.status) && !expired;
+                    const closingSoon =
+                      ongoing && !!vm.expiresAt && Date.parse(vm.expiresAt) - displayNow <= 300000;
+                    const route = vm.provider ? cloudRouteName(vm.provider) : '';
+                    const showRoute =
+                      route &&
+                      vm.providerName &&
+                      route.toLowerCase() !== vm.providerName.toLowerCase();
                     return (
-                      <tr key={vm.id}>
+                      <tr
+                        key={vm.id}
+                        className={!ongoing && !vm.cleanupPending ? 'vm-history-row' : undefined}
+                      >
                         <td>
                           <div className="vm-environment-cell">
                             <span className={`vm-row-icon ${running ? 'running' : ''}`}>
                               <Server size={18} />
                             </span>
                             <div>
-                              <Link href={`/vms/${vm.id}`} className="vm-name">
+                              <Link href={`/vms/${vm.id}`} className="vm-name" title={vm.name}>
                                 {vm.name}
                               </Link>
                               <div className="vm-id-line">
@@ -356,7 +375,28 @@ export function MyVMs({ search = '' }: { search?: string }) {
                                 >
                                   {copied === vm.id ? <Check size={12} /> : <Copy size={12} />}
                                 </button>
-                                <span>{rentalSourceLabel(vm.sourceMode)}</span>
+                                <span aria-hidden="true">·</span>
+                                <time
+                                  dateTime={vm.createdAt}
+                                  title={`Created ${dateTime(vm.createdAt)}`}
+                                >
+                                  {new Date(vm.createdAt).toLocaleDateString(undefined, {
+                                    month: 'short',
+                                    day: 'numeric',
+                                  })}
+                                </time>
+                                {vm.sourceMode === 'fixture' ? (
+                                  <span
+                                    className="vm-demo-label"
+                                    title={rentalSourceLabel(vm.sourceMode)}
+                                  >
+                                    Demo
+                                  </span>
+                                ) : (
+                                  <span className="sr-only">
+                                    {rentalSourceLabel(vm.sourceMode)}
+                                  </span>
+                                )}
                               </div>
                             </div>
                           </div>
@@ -374,29 +414,36 @@ export function MyVMs({ search = '' }: { search?: string }) {
                           )}
                         </td>
                         <td>
-                          <strong className="vm-cell-primary">
-                            {vm.providerName || (vm.provider ? cloudRouteName(vm.provider) : '—')}
+                          <strong
+                            className="vm-cell-primary"
+                            title={vm.providerName || route || undefined}
+                          >
+                            {vm.providerName || route || '—'}
                           </strong>
-                          {vm.provider &&
-                            vm.providerName &&
-                            cloudRouteName(vm.provider).toLowerCase() !==
-                              vm.providerName.toLowerCase() && (
-                              <small className="vm-cell-note">
-                                {cloudRouteName(vm.provider)} route
-                              </small>
-                            )}
+                          <small
+                            className="vm-cell-note"
+                            title={showRoute ? `Native route: ${route}` : undefined}
+                          >
+                            {vm.region ? regionName(vm.region) : '—'}
+                            {showRoute ? ` · ${route}` : ''}
+                          </small>
                         </td>
                         <td>
                           <span className="vm-resource-value">
                             {vm.cpu === null ? '—' : `${vm.cpu} vCPU`}
-                            {vm.memoryGb !== null && ` · ${vm.memoryGb} GiB`}
                           </span>
-                          {vm.gpu && <small className="vm-cell-note">{vm.gpu}</small>}
+                          {vm.memoryGb !== null && (
+                            <small className="vm-cell-note">{vm.memoryGb} GiB</small>
+                          )}
+                          {vm.gpu && (
+                            <small className="vm-cell-note" title={vm.gpu}>
+                              {vm.gpu}
+                            </small>
+                          )}
                         </td>
-                        <td>{vm.region ? regionName(vm.region) : '—'}</td>
                         <td>
                           <span
-                            className={`vm-time ${ongoing ? 'active' : ''}`}
+                            className={`vm-time ${closingSoon ? 'expiring' : ''}`}
                             title={vm.expiresAt ? dateTime(vm.expiresAt) : undefined}
                           >
                             {ongoing
@@ -407,45 +454,44 @@ export function MyVMs({ search = '' }: { search?: string }) {
                           </span>
                           {vm.expiresAt && (
                             <small className="vm-cell-note">
-                              {new Date(vm.expiresAt).toLocaleTimeString(undefined, {
+                              {new Date(vm.expiresAt).toLocaleString(undefined, {
+                                ...(ongoing ? {} : { month: 'short', day: 'numeric' }),
                                 hour: '2-digit',
                                 minute: '2-digit',
                               })}
                             </small>
                           )}
                         </td>
-                        <td>
-                          <span className="vm-fixed-price">
+                        <td className="numeric-cell">
+                          <span
+                            className="vm-fixed-price"
+                            title={
+                              vm.billingSource === 'scheduled_capacity'
+                                ? 'Booked capacity window'
+                                : 'Fixed total for the full rental'
+                            }
+                          >
                             {vm.priceCents === null ? '—' : money(vm.priceCents)}
                           </span>
-                          <small className="vm-cell-note">
-                            {vm.billingSource === 'scheduled_capacity'
-                              ? 'Booked window'
-                              : 'Full rental'}
-                          </small>
+                          {vm.billingSource === 'scheduled_capacity' && (
+                            <small className="vm-cell-note">Booked window</small>
+                          )}
                         </td>
-                        <td>
-                          <time dateTime={vm.createdAt} title={dateTime(vm.createdAt)}>
-                            {new Date(vm.createdAt).toLocaleDateString(undefined, {
-                              month: 'short',
-                              day: 'numeric',
-                            })}
-                          </time>
-                        </td>
-                        <td>
+                        <td className="actions-cell">
                           <div className="vm-row-actions">
                             <Link
                               href={`/vms/${vm.id}`}
-                              className="button secondary small"
+                              className={running ? 'button secondary small' : 'vm-details-link'}
                               aria-label={`${running ? 'Open terminal' : 'Open environment'} ${vm.name}`}
                             >
                               {running ? <SquareTerminal size={14} /> : <ArrowRight size={14} />}
-                              <span>{running ? 'Terminal' : 'Open'}</span>
+                              <span>{running ? 'Terminal' : 'Details'}</span>
                             </Link>
                             {canTerminate && (
                               <button
                                 className="icon-button vm-terminate"
                                 aria-label={`Terminate ${vm.name}`}
+                                title="Terminate VM"
                                 onClick={() => {
                                   setActionError('');
                                   setConfirm({ vm, operationKey: crypto.randomUUID() });
@@ -461,7 +507,7 @@ export function MyVMs({ search = '' }: { search?: string }) {
                   })}
                 </tbody>
               </table>
-            </div>
+            </TableViewport>
           </>
         )}
         {list.data && (

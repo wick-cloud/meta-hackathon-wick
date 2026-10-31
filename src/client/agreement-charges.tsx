@@ -1,3 +1,4 @@
+import { TableViewport } from './table';
 import { CalendarClock } from 'lucide-react';
 import type { RevenueShare } from '../shared/types';
 import { dateTime, money, moneyMicros } from './api';
@@ -46,21 +47,36 @@ export function AgreementCharges({ provider = false }: { provider?: boolean }) {
       {charges.loading ? (
         <Spinner label="Loading agreement charges" />
       ) : charges.data?.items.length ? (
-        <div className="market-table-scroll">
+        <TableViewport
+          label="Scheduled agreement charges"
+          minWidth={provider ? 1120 : 900}
+          className="market-table-scroll"
+        >
           <table className="market-table">
+            <caption className="sr-only">Scheduled agreement charges</caption>
             <thead>
               <tr>
-                <th>Agreement / capacity window</th>
-                <th>Slots / rates</th>
-                <th>Booked / credit</th>
-                <th>Settled charge</th>
+                <th scope="col">Agreement / capacity window</th>
+                <th className="numeric-cell" scope="col">
+                  Slots / rates
+                </th>
+                <th className="numeric-cell" scope="col">
+                  Booked / credit
+                </th>
+                <th className="numeric-cell" scope="col">
+                  Settled charge
+                </th>
                 {provider && (
                   <>
-                    <th>Broker · 15%</th>
-                    <th>You keep · 85%</th>
+                    <th className="numeric-cell" scope="col">
+                      Broker · 15%
+                    </th>
+                    <th className="numeric-cell" scope="col">
+                      You keep · 85%
+                    </th>
                   </>
                 )}
-                <th>Status</th>
+                <th scope="col">Status</th>
               </tr>
             </thead>
             <tbody>
@@ -84,7 +100,7 @@ export function AgreementCharges({ provider = false }: { provider?: boolean }) {
                       Hard end {dateTime(c.endsAt)}
                     </div>
                   </td>
-                  <td>
+                  <td className="numeric-cell">
                     {c.quantity} slots
                     <div className="market-meta">
                       {hourly(c.discountRateCentsPerHour)}
@@ -92,11 +108,11 @@ export function AgreementCharges({ provider = false }: { provider?: boolean }) {
                       Normal {hourly(c.normalRateCentsPerHour)}
                     </div>
                   </td>
-                  <td>
+                  <td className="numeric-cell">
                     {money(c.grossCents)} booked
                     <div className="market-meta">−{money(c.creditCents)} failed-start credit</div>
                   </td>
-                  <td>
+                  <td className="numeric-cell">
                     <strong>{money(c.totalCents)}</strong>
                     <div className="market-meta">
                       Buyer fee {money(c.feeCents)}
@@ -106,8 +122,10 @@ export function AgreementCharges({ provider = false }: { provider?: boolean }) {
                   </td>
                   {provider && (
                     <>
-                      <td>{moneyMicros(c.revenueShare.brokerFeeMicros)}</td>
-                      <td>
+                      <td className="numeric-cell">
+                        {moneyMicros(c.revenueShare.brokerFeeMicros)}
+                      </td>
+                      <td className="numeric-cell">
                         {moneyMicros(c.revenueShare.providerNetMicros)}
                         <div className="market-meta">Before compute costs</div>
                       </td>
@@ -121,7 +139,7 @@ export function AgreementCharges({ provider = false }: { provider?: boolean }) {
               ))}
             </tbody>
           </table>
-        </div>
+        </TableViewport>
       ) : (
         <EmptyState
           icon={<CalendarClock size={24} />}

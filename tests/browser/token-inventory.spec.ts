@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page } from './table-review';
 import type { TokenPack } from '../../src/shared/inference';
 
 // Every API call is intercepted; this suite never creates a real key or consumes paid tokens.
@@ -312,4 +312,21 @@ test('the inventory scrolls within its table on mobile and connection links rema
     path: test.info().outputPath('batch-connection-mobile.png'),
     fullPage: true,
   });
+});
+
+test('large pack totals stay readable beside their connection action', async ({ page }) => {
+  const f = await fixture(page);
+  f.first.priceCents = 99999999.99;
+  await page.setViewportSize({ width: 1024, height: 900 });
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.goto('/tokens');
+  await page
+    .getByRole('button', { name: 'Purchased token batches: scroll right', exact: true })
+    .click();
+  const row = page.getByRole('row').filter({ hasText: '#11111111' });
+  await expect(row).toContainText('$999,999.9999');
+  const total = await row.locator('td.numeric-cell').last().boundingBox();
+  const action = await row.locator('td.actions-cell').boundingBox();
+  expect(total!.x + total!.width).toBeLessThanOrEqual(action!.x + 1);
+  expect(f.writes).toHaveLength(0);
 });

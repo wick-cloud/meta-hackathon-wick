@@ -1,3 +1,4 @@
+import { TableViewport } from './table';
 import { centsToUsd, usdToCents, isMoneyCents } from '../shared/money';
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import {
@@ -66,13 +67,14 @@ const utcStamp = (value: string) =>
   new Date(value).toISOString().replace('T', ' ').replace('.000Z', ' UTC');
 function ServerSchedule({ preview }: { preview: AgreementPreview }) {
   return (
-    <div className="market-table-scroll">
+    <TableViewport label="Server-confirmed schedule" minWidth={720} className="market-table-scroll">
       <table className="market-table">
+        <caption className="sr-only">Server-confirmed schedule</caption>
         <thead>
           <tr>
-            <th>Window opens · UTC</th>
-            <th>Discount ends · UTC</th>
-            <th>Hard end · UTC</th>
+            <th scope="col">Window opens · UTC</th>
+            <th scope="col">Discount ends · UTC</th>
+            <th scope="col">Hard end · UTC</th>
           </tr>
         </thead>
         <tbody>
@@ -91,7 +93,7 @@ function ServerSchedule({ preview }: { preview: AgreementPreview }) {
           ))}
         </tbody>
       </table>
-    </div>
+    </TableViewport>
   );
 }
 export function AgreementComposer() {
@@ -1004,14 +1006,21 @@ export function AgreementDetail({ id }: { id: string }) {
               Every window needs {a.minimumQuantity} approved slots before the agreement is
               approved. Providers may fill toward the target of {a.targetQuantity}.
             </p>
-            <div className="market-table-scroll">
+            <TableViewport label="Agreement windows" minWidth={880} className="market-table-scroll">
               <table className="market-table">
+                <caption className="sr-only">Agreement windows</caption>
                 <thead>
                   <tr>
-                    <th>Window · {a.timeZone}</th>
-                    <th>Approved / target</th>
-                    <th>Runtime slots held</th>
-                    <th>Booked</th>
+                    <th scope="col">Window · {a.timeZone}</th>
+                    <th className="numeric-cell" scope="col">
+                      Approved / target
+                    </th>
+                    <th className="numeric-cell" scope="col">
+                      Runtime slots held
+                    </th>
+                    <th className="numeric-cell" scope="col">
+                      Booked
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1025,7 +1034,7 @@ export function AgreementDetail({ id }: { id: string }) {
                           Hard end {zonedTime(w.endsAt, a.timeZone)}
                         </div>
                       </td>
-                      <td>
+                      <td className="numeric-cell">
                         <strong>
                           {w.approvedQuantity} / {a.targetQuantity}
                         </strong>
@@ -1042,16 +1051,16 @@ export function AgreementDetail({ id }: { id: string }) {
                             : `${a.minimumQuantity - w.approvedQuantity} more to minimum`}
                         </span>
                       </td>
-                      <td>
+                      <td className="numeric-cell">
                         {w.runningQuantity} held
                         <span className="market-meta">Includes starts and pending cleanup</span>
                       </td>
-                      <td>{money(w.committedCents)}</td>
+                      <td className="numeric-cell">{money(w.committedCents)}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
-            </div>
+            </TableViewport>
           </section>
           <section className="card market-panel">
             <h2>Your environments</h2>
@@ -1103,15 +1112,28 @@ export function AgreementDetail({ id }: { id: string }) {
           {bookings.length > 0 && (
             <details className="card market-panel market-disclosure">
               <summary>Frozen provider bookings · {bookings.length} blocks</summary>
-              <div className="market-table-scroll">
+              <TableViewport
+                label="Booked providers"
+                minWidth={880}
+                className="market-table-scroll"
+              >
                 <table className="market-table">
+                  <caption className="sr-only">Booked providers</caption>
                   <thead>
                     <tr>
-                      <th>Provider / window</th>
-                      <th>Slots</th>
-                      <th>Discount</th>
-                      <th>Normal</th>
-                      <th>Booked total</th>
+                      <th scope="col">Provider / window</th>
+                      <th className="numeric-cell" scope="col">
+                        Slots
+                      </th>
+                      <th className="numeric-cell" scope="col">
+                        Discount
+                      </th>
+                      <th className="numeric-cell" scope="col">
+                        Normal
+                      </th>
+                      <th className="numeric-cell" scope="col">
+                        Booked total
+                      </th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1121,15 +1143,15 @@ export function AgreementDetail({ id }: { id: string }) {
                           <strong>{b.providerName}</strong>
                           <div className="market-meta">{zonedTime(b.startsAt, a.timeZone)}</div>
                         </td>
-                        <td>{b.quantity}</td>
-                        <td>{hourly(b.discountRateCentsPerHour)}</td>
-                        <td>{hourly(b.normalRateCentsPerHour)}</td>
-                        <td>{money(b.totalCents)}</td>
+                        <td className="numeric-cell">{b.quantity}</td>
+                        <td className="numeric-cell">{hourly(b.discountRateCentsPerHour)}</td>
+                        <td className="numeric-cell">{hourly(b.normalRateCentsPerHour)}</td>
+                        <td className="numeric-cell">{money(b.totalCents)}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
-              </div>
+              </TableViewport>
             </details>
           )}
         </div>
@@ -1284,14 +1306,19 @@ export function Credits() {
         {history.loading ? (
           <Spinner label="Loading credit history" />
         ) : history.data?.items.length ? (
-          <div className="market-table-scroll">
+          <TableViewport label="Wallet ledger" minWidth={760} className="market-table-scroll">
             <table className="market-table">
+              <caption className="sr-only">Wallet ledger</caption>
               <thead>
                 <tr>
-                  <th>Entry</th>
-                  <th>Credit change</th>
-                  <th>Reserved change</th>
-                  <th>When</th>
+                  <th scope="col">Entry</th>
+                  <th className="numeric-cell" scope="col">
+                    Credit change
+                  </th>
+                  <th className="numeric-cell" scope="col">
+                    Reserved change
+                  </th>
+                  <th scope="col">When</th>
                 </tr>
               </thead>
               <tbody>
@@ -1306,11 +1333,11 @@ export function Credits() {
                         </Link>
                       )}
                     </td>
-                    <td>
+                    <td className="numeric-cell">
                       {e.amountCents > 0 ? '+' : ''}
                       {money(e.amountCents)}
                     </td>
-                    <td>
+                    <td className="numeric-cell">
                       {e.reservedDeltaCents > 0 ? '+' : ''}
                       {money(e.reservedDeltaCents)}
                     </td>
@@ -1319,7 +1346,7 @@ export function Credits() {
                 ))}
               </tbody>
             </table>
-          </div>
+          </TableViewport>
         ) : (
           <EmptyState
             icon={<Wallet size={25} />}

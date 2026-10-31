@@ -1,4 +1,5 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, reviewTables, type Page } from './table-review';
+import { revenueShare } from '../../src/shared/pricing';
 import { agreementEstimate, agreementWindows } from '../../src/shared/schedule';
 
 // UI contract fixtures intercept every API request. These tests cannot allocate compute,
@@ -527,6 +528,7 @@ test('Agreement review reserves the full target maximum and does not start VMs',
   await page.getByRole('button', { name: 'Review agreement', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Review capacity agreement' })).toBeVisible();
   await expect(page.getByText('$140.00 maximum', { exact: true })).toBeVisible();
+  await reviewTables(page, test.info());
   expect(writes).toHaveLength(0);
   await page.getByLabel('I accept the booked-capacity charges', { exact: false }).check();
   await page.getByRole('button', { name: 'Fund & request capacity', exact: true }).click();
@@ -539,6 +541,244 @@ test('Agreement review reserves the full target maximum and does not start VMs',
     continuation: { enabled: true, until: '08:00', maxRateCentsPerHour: 20 },
   });
   expect(writes[0].body.operationKey).toBeTruthy();
+});
+
+for (const width of [1440, 390]) {
+  test(`billing and wallet tables retain precise amounts at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 1000 });
+    const charge = {
+      id,
+      agreementId: id,
+      windowId: id,
+      description: 'Nightly research capacity',
+      providerName: 'Fixture supplier',
+      quantity: 12,
+      startsAt: iso(-3600000),
+      discountEndsAt: iso(-1800000),
+      endsAt: iso(-1000),
+      discountRateCentsPerHour: 10,
+      normalRateCentsPerHour: 20,
+      grossCents: 135.79,
+      creditCents: 12.34,
+      totalCents: 123.45,
+      feeCents: 0,
+      revenueShare: revenueShare(123.45),
+      createdAt: iso(-1000),
+      currency: 'USD',
+      status: 'pilot-credit',
+      label: 'Booked window settled',
+    };
+    const invoice = {
+      id,
+      number: 'INV-101',
+      vmId: id,
+      catalogName: 'Research workspace',
+      createdAt: iso(-60000),
+      amountCents: 123.45,
+      totalCents: 123.45,
+      revenueShare: revenueShare(123.45),
+    };
+    const writes = await fixture(page, 'buyer', (path) => {
+      if (path === '/api/invoices') return { items: [invoice] };
+      if (path === '/api/agreement-charges') return { items: [charge] };
+      if (path === '/api/credits/history')
+        return {
+          wallet,
+          items: [
+            {
+              id,
+              description: 'Owner-funded credit',
+              kind: 'grant',
+              amountCents: 123.45,
+              reservedDeltaCents: 0,
+              createdAt: iso(-60000),
+            },
+          ],
+        };
+    });
+    await page.goto('/invoices');
+    await expect(
+      page.getByRole('table', { name: 'Instant rental invoices', exact: true }),
+    ).toContainText('$1.2345');
+    await reviewTables(page, test.info());
+    await page.goto('/credits');
+    await expect(page.getByRole('table', { name: 'Wallet ledger', exact: true })).toContainText(
+      '$1.2345',
+    );
+    await reviewTables(page, test.info());
+    const providerWrites = await fixture(page, 'provider', (path) => {
+      if (path === '/api/provider/earnings') return { items: [invoice] };
+      if (path === '/api/provider/agreement-charges') return { items: [charge] };
+    });
+    await page.goto('/provider/earnings');
+    await expect(page.getByRole('table', { name: 'Rental revenue', exact: true })).toContainText(
+      '$1.2345',
+    );
+    await expect(page.getByRole('alert')).toHaveCount(0);
+    expect([...writes, ...providerWrites]).toHaveLength(0);
+  });
+
+  test(`scheduled supply, demand and frozen bookings remain readable at ${width}px`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width, height: 1000 });
+    const writes = await fixture(page, 'provider', (path) => {
+      if (path === '/api/provider/scheduled-offerings')
+        return {
+          items: [
+            {
+              id,
+              name: 'Overnight capacity',
+              catalogId: 'micro',
+              timeZone: 'UTC',
+              windowStart: '00:00',
+              windowEnd: '06:00',
+              availableUntil: '08:00',
+              weekdays: [0, 1, 2, 3, 4, 5, 6],
+              capacityQuantity: 5,
+              discountRateCentsPerHour: 10,
+              normalRateCentsPerHour: 20,
+              active: true,
+              deadlineEligible: true,
+              revision: 1,
+            },
+          ],
+        };
+      if (path === '/api/provider/commitments')
+        return {
+          items: [
+            {
+              id,
+              agreementDescription: 'Nightly research fleet',
+              startsAt: iso(3600000),
+              discountEndsAt: iso(6 * 3600000),
+              endsAt: iso(8 * 3600000),
+              timeZone: 'UTC',
+              quantity: 5,
+              runningQuantity: 2,
+              discountRateCentsPerHour: 10,
+              normalRateCentsPerHour: 20,
+              totalCents: 500,
+            },
+          ],
+        };
+      if (path === '/api/provider/agreement-demand')
+        return {
+          items: [
+            {
+              id,
+              description: 'Singapore research fleet',
+              requirements: { cpu: 1, memoryGb: 1 },
+              region: 'us',
+              approvedQuantity: 12,
+              targetQuantity: 20,
+              minimumQuantity: 10,
+              maxDiscountRateCentsPerHour: 10,
+              maxNormalRateCentsPerHour: 20,
+              startsAt: iso(3600000),
+              endsAt: iso(7 * 86400000),
+              timeZone: 'UTC',
+            },
+          ],
+        };
+    });
+    await page.goto('/provider/scheduled');
+    await expect(
+      page.getByRole('table', { name: 'Scheduled offerings', exact: true }),
+    ).toContainText('Overnight capacity');
+    await reviewTables(page, test.info());
+    await page.getByRole('button', { name: 'Capacity calendar', exact: true }).click();
+    await expect(
+      page.getByRole('table', { name: 'Capacity commitments', exact: true }),
+    ).toContainText('$5.00');
+    await reviewTables(page, test.info());
+    await page.getByRole('button', { name: 'Buyer demand', exact: true }).click();
+    await expect(
+      page.getByRole('table', { name: 'Scheduled buyer demand', exact: true }),
+    ).toContainText('Singapore research fleet');
+    expect(writes).toHaveLength(0);
+  });
+}
+
+test('frozen provider bookings preserve exact prices inside their disclosure', async ({ page }) => {
+  const data = {
+    ...detail(),
+    bookings: [
+      {
+        id,
+        providerName: 'Fixture supplier',
+        startsAt: iso(3600000),
+        quantity: 12,
+        discountRateCentsPerHour: 10,
+        normalRateCentsPerHour: 20,
+        totalCents: 123.45,
+      },
+    ],
+  };
+  const writes = await fixture(page, 'buyer', (path) =>
+    path === `/api/agreements/${id}` ? data : undefined,
+  );
+  await page.goto(`/orders/${id}`);
+  await page.getByText('Frozen provider bookings · 1 blocks', { exact: true }).click();
+  await expect(page.getByRole('table', { name: 'Booked providers', exact: true })).toContainText(
+    '$1.2345',
+  );
+  expect(writes).toHaveLength(0);
+});
+
+test('counteroffer comparison makes every changed resource visible before acceptance', async ({
+  page,
+}) => {
+  const desired = {
+    catalogId: 'micro',
+    cpu: 4,
+    memoryGb: 8,
+    region: 'us',
+    durationMinutes: 30,
+    maxPriceCents: 500,
+  };
+  const writes = await fixture(page, 'buyer', (path) =>
+    path === `/api/intents/${id}`
+      ? {
+          intent: {
+            id,
+            description: 'A research environment',
+            status: 'open',
+            sourceMode: 'fixture',
+            desired,
+            flexibility: {
+              minCPU: 2,
+              minMemoryGb: 4,
+              allowedRegions: ['us'],
+              allowedDurations: [15, 30],
+              hardMaxPriceCents: 500,
+              gpu: 'preserve',
+            },
+            createdAt: iso(0),
+          },
+          offers: [
+            {
+              id: 'offer-one',
+              providerName: 'Fixture supplier',
+              catalogName: 'Small Linux',
+              before: desired,
+              after: { ...desired, cpu: 2, memoryGb: 4 },
+              totalPriceCents: 123.45,
+              tradeoffs: ['Less CPU and memory at a lower fixed price.'],
+              expiresAt: iso(600000),
+              mode: 'fixture',
+              modelCalled: false,
+            },
+          ],
+        }
+      : undefined,
+  );
+  await page.goto(`/alternatives/${id}`);
+  await page.getByRole('button', { name: 'Review this exact offer', exact: true }).click();
+  const table = page.getByRole('table', { name: 'Alternative comparison', exact: true });
+  await expect(table).toContainText('Originally requested');
+  await expect(table.getByRole('rowheader', { name: 'Memory (GiB)', exact: true })).toBeVisible();
+  expect(writes).toHaveLength(0);
 });
 
 test('Manual VM starts use the authoritative available slots and a separate confirmation', async ({

@@ -648,10 +648,6 @@ tbody tr {
 tbody tr:hover {
   background: color-mix(in srgb, var(--surface-hover) 65%, transparent);
 }
-th:last-child,
-td:last-child {
-  text-align: right;
-}
 .saved-label {
   display: inline-flex;
   gap: 5px;

@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page } from './table-review';
 
 // Navigation and first-run states only. No provider, model or payment calls.
 async function buyer(page: Page, olderBudget = false) {

@@ -1,0 +1,159 @@
+.data-table-frame {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  contain: inline-size;
+}
+.data-table-frame .data-table-scroll {
+  width: 100%;
+  max-width: 100%;
+  overflow: auto;
+  max-height: min(68vh, 720px);
+  overscroll-behavior-x: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) var(--card);
+}
+.data-table-scroll:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.data-table-frame .data-table-scroll > table {
+  width: 100%;
+  min-width: var(--table-min-width);
+  border-collapse: separate;
+  border-spacing: 0;
+  text-align: left;
+  font-size: 12px;
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+}
+.data-table-frame .data-table-scroll > table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  height: 39px;
+  padding: 10px 16px;
+  color: var(--muted);
+  background: var(--sidebar);
+  border-block: 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  text-align: left;
+  white-space: nowrap;
+}
+.data-table-frame .data-table-scroll > table :is(td, tbody th) {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: middle;
+  color: var(--soft);
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: left;
+}
+.data-table-frame .data-table-scroll > table tbody tr:last-child :is(td, th) {
+  border-bottom: 0;
+}
+.data-table-frame .data-table-scroll > table tbody tr:is(:hover, :focus-within) {
+  background: var(--surface-hover);
+}
+.data-table-frame
+  .data-table-scroll
+  > table
+  :is(.numeric-cell, .money-cell, .money-column, .orders-amount-cell, .orders-amount-head) {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.data-table-frame .data-table-scroll > table .numeric-cell {
+  white-space: nowrap;
+  color: var(--ink);
+}
+.data-table-frame .data-table-scroll > table .actions-cell {
+  text-align: right;
+  white-space: nowrap;
+}
+.data-table-frame table td small {
+  display: block;
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 1.5;
+  margin-top: 4px;
+}
+.data-table-frame table td strong {
+  font-size: 12px;
+  font-weight: 550;
+}
+.data-table-frame table .status-pill {
+  font-size: 10.5px;
+  padding: 3px 7px;
+}
+.data-table-frame table .button.small {
+  min-height: 29px;
+  padding: 5px 9px;
+  font-size: 11px;
+}
+.data-table-frame table .button.secondary {
+  background: transparent;
+}
+.data-table-frame .market-meta,
+.data-table-frame .table-subtitle {
+  margin-top: 4px;
+  font-size: 10.5px;
+  line-height: 1.6;
+}
+.data-table-navigation {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 14px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 10.5px;
+}
+.data-table-navigation > span,
+.data-table-navigation > div {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.data-table-navigation button {
+  display: grid;
+  place-items: center;
+  width: 27px;
+  height: 25px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--card);
+  color: var(--soft);
+}
+.data-table-navigation button:hover:not(:disabled) {
+  border-color: var(--line-strong);
+  color: var(--ink);
+}
+.data-table-navigation button:disabled {
+  opacity: 0.35;
+}
+@media (pointer: coarse) {
+  .data-table-navigation button {
+    width: 40px;
+    height: 38px;
+  }
+}
+.card:not(.vm-inventory-panel, .token-inventory-card, .market-orders, .agent-table-shell)
+  > .data-table-frame
+  > .data-table-scroll
+  > table
+  tr
+  > :first-child {
+  padding-left: 0;
+}
+.card:not(.vm-inventory-panel, .token-inventory-card, .market-orders, .agent-table-shell)
+  > .data-table-frame
+  > .data-table-scroll
+  > table
+  tr
+  > :last-child {
+  padding-right: 0;
+}

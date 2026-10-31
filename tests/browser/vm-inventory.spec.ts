@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page } from './table-review';
 import type { VMInventoryItem } from '../../src/shared/vm-inventory';
 
 // All API requests are intercepted. These tests cannot allocate or terminate real VMs.
@@ -159,13 +159,14 @@ test('VMs use a compact table with frozen provider/resources, exact price and sa
   await page.goto('/vms');
   await expect(page.getByRole('heading', { name: 'Virtual machines', exact: true })).toBeVisible();
   const table = page.getByRole('table');
-  await expect(table.getByRole('columnheader')).toHaveCount(9);
+  await expect(table.getByRole('columnheader')).toHaveCount(7);
   await expect(table.locator('tbody tr')).toHaveCount(5);
   await expect(page.locator('.vm-grid')).toHaveCount(0);
   const running = table
     .getByRole('row')
     .filter({ has: page.getByRole('link', { name: 'Research workspace', exact: true }) });
-  await expect(running).toContainText('2 vCPU · 4 GiB');
+  await expect(running).toContainText('2 vCPU');
+  await expect(running).toContainText('4 GiB');
   await expect(running).toContainText('$1.7331');
   await expect(running).toContainText('E2B');
   await expect(
@@ -318,4 +319,36 @@ test('empty inventory makes the next step clear without creating a VM', async ({
     '/new/vm',
   );
   expect(f.writes).toHaveLength(0);
+});
+
+test('long identities and maximum four-decimal prices do not overlap actions', async ({ page }) => {
+  const f = await fixture(page);
+  f.rows[0]!.name = 'Research workspace with a very long descriptive name '.repeat(5);
+  f.rows[0]!.providerName = 'Enterprise provider with a long account name';
+  f.rows[0]!.priceCents = 99999999.99;
+  await page.setViewportSize({ width: 1024, height: 900 });
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.goto('/vms');
+  await expect(page.getByRole('table').locator('tbody tr')).toHaveCount(5);
+  await page.getByRole('button', { name: 'Virtual machines: scroll right', exact: true }).click();
+  const row = page.getByRole('table').locator('tbody tr').first();
+  await expect(row).toContainText('$999,999.9999');
+  const amount = await row.locator('.vm-fixed-price').boundingBox();
+  const actions = await row.locator('.actions-cell').boundingBox();
+  expect(amount!.x + amount!.width).toBeLessThan(actions!.x);
+  expect(f.writes).toHaveLength(0);
+});
+
+test('copying an ID gives accessible feedback without shifting the table', async ({ page }) => {
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+  await fixture(page);
+  await page.goto('/vms');
+  await expect(page.getByRole('table')).toBeVisible();
+  const top = (await page.getByRole('table').boundingBox())!.y;
+  await page.getByRole('button', { name: `Copy VM ID ${ids[0]}`, exact: true }).click();
+  await expect(page.getByRole('status').filter({ hasText: 'VM ID copied.' })).toHaveText(
+    'VM ID copied.',
+  );
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(ids[0]);
+  expect((await page.getByRole('table').boundingBox())!.y).toBe(top);
 });

@@ -283,9 +283,14 @@ export const cloudRouteName = (provider: string) =>
       string
     >
   )[provider] || provider;
-export const regionName = (region: string) =>
-  region === 'any'
-    ? 'Any available region'
-    : region === 'auto'
-      ? 'Provider-selected region'
-      : region;
+const regionLabels = new Map([
+  ['any', 'Any available region'],
+  ['auto', 'Provider-selected region'],
+  ['us', 'United States'],
+  ['eu', 'Europe'],
+  ['sg', 'Singapore'],
+  ['us-east', 'US East'],
+  ['us-west', 'US West'],
+  ['eu-west', 'Europe West'],
+]);
+export const regionName = (region: string) => regionLabels.get(region) ?? region;

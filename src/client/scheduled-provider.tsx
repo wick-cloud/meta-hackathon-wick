@@ -1,3 +1,4 @@
+import { TableViewport } from './table';
 import { centsToUsd, usdToCents, moneyUnits } from '../shared/money';
 import { useRef, useState, type FormEvent } from 'react';
 import {
@@ -19,7 +20,7 @@ import type {
   ScheduledOffering,
   ScheduledOfferingInput,
 } from '../shared/agreements';
-import { museLabel, api, money, moneyMicros, post, type Dashboard } from './api';
+import { museLabel, api, money, moneyMicros, post, regionName, type Dashboard } from './api';
 import {
   DetailRow,
   EmptyState,
@@ -561,16 +562,27 @@ export function ProviderScheduled() {
             {offerings.loading ? (
               <Spinner label="Loading schedules" />
             ) : offerings.data?.items.length ? (
-              <div className="market-table-scroll">
+              <TableViewport
+                label="Scheduled offerings"
+                minWidth={1000}
+                className="market-table-scroll"
+              >
                 <table className="market-table">
+                  <caption className="sr-only">Scheduled offerings</caption>
                   <thead>
                     <tr>
-                      <th>Offering</th>
-                      <th>Schedule</th>
-                      <th>Slots</th>
-                      <th>Rates / VM-hour</th>
-                      <th>State</th>
-                      <th>Action</th>
+                      <th scope="col">Offering</th>
+                      <th scope="col">Schedule</th>
+                      <th className="numeric-cell" scope="col">
+                        Slots
+                      </th>
+                      <th className="numeric-cell" scope="col">
+                        Rates / VM-hour
+                      </th>
+                      <th scope="col">State</th>
+                      <th className="actions-cell" scope="col">
+                        Action
+                      </th>
                     </tr>
                   </thead>
                   <tbody>
@@ -580,7 +592,7 @@ export function ProviderScheduled() {
                           <strong>{o.name}</strong>
                           <div className="market-meta">
                             {catalog.find((c) => c.id === o.catalogId)?.name ?? 'Configuration'} ·{' '}
-                            {catalog.find((c) => c.id === o.catalogId)?.region ?? ''}
+                            {regionName(catalog.find((c) => c.id === o.catalogId)?.region ?? '')}
                           </div>
                         </td>
                         <td>
@@ -596,11 +608,11 @@ export function ProviderScheduled() {
                             · {o.timeZone}
                           </div>
                         </td>
-                        <td>
+                        <td className="numeric-cell">
                           {o.capacityQuantity}
                           <div className="market-meta">Revision {o.revision}</div>
                         </td>
-                        <td>
+                        <td className="numeric-cell">
                           {hourly(o.discountRateCentsPerHour)}
                           <div className="market-meta">
                             Normal {hourly(o.normalRateCentsPerHour)}
@@ -620,7 +632,7 @@ export function ProviderScheduled() {
                             </div>
                           )}
                         </td>
-                        <td>
+                        <td className="actions-cell">
                           <button
                             className="button secondary small"
                             disabled={busy || (!o.active && !o.deadlineEligible)}
@@ -634,7 +646,7 @@ export function ProviderScheduled() {
                     ))}
                   </tbody>
                 </table>
-              </div>
+              </TableViewport>
             ) : (
               <EmptyState
                 icon={<CalendarClock size={24} />}
@@ -659,14 +671,25 @@ export function ProviderScheduled() {
             {commitments.loading ? (
               <Spinner label="Loading commitments" />
             ) : commitments.data?.items.length ? (
-              <div className="market-table-scroll">
+              <TableViewport
+                label="Capacity commitments"
+                minWidth={920}
+                className="market-table-scroll"
+              >
                 <table className="market-table">
+                  <caption className="sr-only">Capacity commitments</caption>
                   <thead>
                     <tr>
-                      <th>Agreement / window</th>
-                      <th>Slots</th>
-                      <th>Rates / VM-hour</th>
-                      <th>Booked amount</th>
+                      <th scope="col">Agreement / window</th>
+                      <th className="numeric-cell" scope="col">
+                        Slots
+                      </th>
+                      <th className="numeric-cell" scope="col">
+                        Rates / VM-hour
+                      </th>
+                      <th className="numeric-cell" scope="col">
+                        Booked amount
+                      </th>
                     </tr>
                   </thead>
                   <tbody>
@@ -683,17 +706,17 @@ export function ProviderScheduled() {
                             Hard end {zonedTime(c.endsAt, c.timeZone ?? 'UTC')}
                           </div>
                         </td>
-                        <td>
+                        <td className="numeric-cell">
                           <strong>{c.quantity} booked</strong>
                           <div className="market-meta">
                             {c.runningQuantity} runtime slots held · idle slots remain paid
                           </div>
                         </td>
-                        <td>
+                        <td className="numeric-cell">
                           {hourly(c.discountRateCentsPerHour)}
                           <div className="market-meta">Then {hourly(c.normalRateCentsPerHour)}</div>
                         </td>
-                        <td>
+                        <td className="numeric-cell">
                           <strong>{money(c.totalCents)} gross</strong>
                           <div className="market-meta">
                             {moneyMicros(moneyUnits(c.totalCents) * 85n)} estimated net before
@@ -709,7 +732,7 @@ export function ProviderScheduled() {
                   Booked amounts include idle capacity. Final settled charges and failed-start
                   adjustments appear in Earnings. Broker fee 15%; buyer fee $0.
                 </p>
-              </div>
+              </TableViewport>
             ) : (
               <EmptyState
                 icon={<Layers3 size={24} />}
@@ -730,14 +753,23 @@ export function ProviderScheduled() {
             {demand.loading ? (
               <Spinner label="Loading agreement demand" />
             ) : demand.data?.items.length ? (
-              <div className="market-table-scroll">
+              <TableViewport
+                label="Scheduled buyer demand"
+                minWidth={920}
+                className="market-table-scroll"
+              >
                 <table className="market-table">
+                  <caption className="sr-only">Scheduled buyer demand</caption>
                   <thead>
                     <tr>
-                      <th>Buyer demand</th>
-                      <th>Capacity</th>
-                      <th>Price caps</th>
-                      <th>Schedule</th>
+                      <th scope="col">Buyer demand</th>
+                      <th className="numeric-cell" scope="col">
+                        Capacity
+                      </th>
+                      <th className="numeric-cell" scope="col">
+                        Price caps
+                      </th>
+                      <th scope="col">Schedule</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -746,14 +778,15 @@ export function ProviderScheduled() {
                         <td>
                           <strong>{d.description}</strong>
                           <div className="market-meta">
-                            {d.requirements.cpu} vCPU / {d.requirements.memoryGb} GB · {d.region}
+                            {d.requirements.cpu} vCPU / {d.requirements.memoryGb} GB ·{' '}
+                            {regionName(d.region)}
                           </div>
                         </td>
-                        <td>
+                        <td className="numeric-cell">
                           {d.approvedQuantity} approved / {d.targetQuantity} target
                           <div className="market-meta">Minimum {d.minimumQuantity} per window</div>
                         </td>
-                        <td>
+                        <td className="numeric-cell">
                           {hourly(d.maxDiscountRateCentsPerHour)}
                           <div className="market-meta">
                             Normal cap {hourly(d.maxNormalRateCentsPerHour)}
@@ -771,7 +804,7 @@ export function ProviderScheduled() {
                     ))}
                   </tbody>
                 </table>
-              </div>
+              </TableViewport>
             ) : (
               <EmptyState
                 icon={<CalendarClock size={24} />}

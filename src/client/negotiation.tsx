@@ -1,7 +1,17 @@
+import { TableViewport } from './table';
 import './negotiation.css';
 import { useEffect, useState, type FormEvent } from 'react';
 import { ArrowRight, ChevronLeft, Sparkles } from 'lucide-react';
-import { museLabel, ApiError, api, dateTime, money, post, type EnvironmentRequest } from './api';
+import {
+  museLabel,
+  ApiError,
+  api,
+  dateTime,
+  money,
+  post,
+  regionName,
+  type EnvironmentRequest,
+} from './api';
 import {
   DetailRow,
   EmptyState,
@@ -728,13 +738,14 @@ export function AlternativeDetail({ id }: { id: string }) {
           <p>
             {selected.providerName} · {selected.catalogName}
           </p>
-          <div className="table-scroll">
+          <TableViewport label="Alternative comparison" minWidth={680} className="table-scroll">
             <table>
+              <caption className="sr-only">Alternative comparison</caption>
               <thead>
                 <tr>
-                  <th>Dimension</th>
-                  <th>Originally requested</th>
-                  <th>Reviewed alternative</th>
+                  <th scope="col">Dimension</th>
+                  <th scope="col">Originally requested</th>
+                  <th scope="col">Reviewed alternative</th>
                 </tr>
               </thead>
               <tbody>
@@ -742,7 +753,7 @@ export function AlternativeDetail({ id }: { id: string }) {
                   ['vCPUs', selected.before.cpu, selected.after.cpu],
                   ['Memory (GiB)', selected.before.memoryGb, selected.after.memoryGb],
                   ['GPU', selected.before.gpu || 'None', selected.after.gpu || 'None'],
-                  ['Region', selected.before.region, selected.after.region],
+                  ['Region', regionName(selected.before.region), regionName(selected.after.region)],
                   [
                     'Duration (minutes)',
                     selected.before.durationMinutes,
@@ -755,14 +766,14 @@ export function AlternativeDetail({ id }: { id: string }) {
                   ],
                 ].map(([label, before, after]) => (
                   <tr key={label}>
-                    <th>{label}</th>
+                    <th scope="row">{label}</th>
                     <td>{before}</td>
                     <td>{after}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
-          </div>
+          </TableViewport>
           <DetailRow label="Fixed full rental total">
             {money(selected.totalPriceCents)} · No payment due
           </DetailRow>

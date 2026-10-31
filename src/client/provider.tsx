@@ -1,3 +1,4 @@
+import { TableViewport } from './table';
 import { isMoneyCents, moneyUnits } from '../shared/money';
 import { useEffect, useState, type FormEvent } from 'react';
 import {
@@ -1436,17 +1437,24 @@ export function ProviderEarnings() {
         {loading ? (
           <Spinner label="Loading provider earnings" />
         ) : items.length ? (
-          <div className="table-scroll">
+          <TableViewport label="Rental revenue" minWidth={1000} className="table-scroll">
             <table>
+              <caption className="sr-only">Rental revenue</caption>
               <thead>
                 <tr>
-                  <th>Invoice</th>
-                  <th>Environment</th>
-                  <th>Created</th>
-                  <th>Rental gross</th>
-                  <th>Broker fee · 15%</th>
-                  <th>You keep · 85%</th>
-                  <th>Status</th>
+                  <th scope="col">Invoice</th>
+                  <th scope="col">Environment</th>
+                  <th scope="col">Created</th>
+                  <th className="numeric-cell" scope="col">
+                    Rental gross
+                  </th>
+                  <th className="numeric-cell" scope="col">
+                    Broker fee · 15%
+                  </th>
+                  <th className="numeric-cell" scope="col">
+                    You keep · 85%
+                  </th>
+                  <th scope="col">Status</th>
                 </tr>
               </thead>
               <tbody>
@@ -1455,27 +1463,27 @@ export function ProviderEarnings() {
                     <td>{item.id.slice(0, 8)}</td>
                     <td>{item.catalogName || item.vmId.slice(0, 8)}</td>
                     <td>{shortDate(item.createdAt)}</td>
-                    <td className="money-cell">{money(item.totalCents)}</td>
-                    <td className="money-cell">
+                    <td className="money-cell numeric-cell">{money(item.totalCents)}</td>
+                    <td className="money-cell numeric-cell">
                       {item.revenueShare
                         ? moneyMicros(item.revenueShare.brokerFeeMicros)
                         : 'Not assessed'}
                     </td>
-                    <td className="money-cell">
+                    <td className="money-cell numeric-cell">
                       {item.revenueShare
                         ? moneyMicros(item.revenueShare.providerNetMicros)
                         : 'Not assessed'}
                     </td>
                     <td>
                       <span className="quiet-badge">
-                        {item.revenueShare ? 'Demo · no payout' : 'Historical · unchanged'}
+                        {item.revenueShare ? 'Recorded · no payout' : 'Historical · unchanged'}
                       </span>
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
-          </div>
+          </TableViewport>
         ) : (
           <EmptyState
             icon={<CircleDollarSign size={27} />}
@@ -1662,15 +1670,18 @@ export function AdminConfig({ onUpdated }: { onUpdated: () => void }) {
             )}
           </button>
         </div>
-        <div className="table-scroll">
+        <TableViewport label="Catalog configurations" minWidth={820} className="table-scroll">
           <table>
+            <caption className="sr-only">Catalog configurations</caption>
             <thead>
               <tr>
-                <th>Configuration</th>
-                <th>Resources</th>
-                <th>Region</th>
-                <th>Exact rentals</th>
-                <th>Approval</th>
+                <th scope="col">Configuration</th>
+                <th scope="col">Resources</th>
+                <th scope="col">Region</th>
+                <th scope="col">Exact rentals</th>
+                <th className="actions-cell" scope="col">
+                  Approval
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -1686,9 +1697,9 @@ export function AdminConfig({ onUpdated }: { onUpdated: () => void }) {
                     {item.cpu} vCPU · {item.memoryGb} GiB
                     {item.gpu && <span className="table-subtitle">{item.gpu}</span>}
                   </td>
-                  <td>{item.region}</td>
+                  <td>{regionName(item.region)}</td>
                   <td>{item.durationMinutes.map((n) => `${n}m`).join(' · ')}</td>
-                  <td>
+                  <td className="actions-cell">
                     <button
                       className={`button small ${item.approved ? 'approved-button' : 'secondary'}`}
                       disabled={!!busy}
@@ -1716,7 +1727,7 @@ export function AdminConfig({ onUpdated }: { onUpdated: () => void }) {
               ))}
             </tbody>
           </table>
-        </div>
+        </TableViewport>
         {catalog.length === 0 && (
           <EmptyState
             icon={<Server size={24} />}

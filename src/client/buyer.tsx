@@ -1,3 +1,4 @@
+import { TableViewport } from './table';
 import { lazy, Suspense, useEffect, useState, type FormEvent } from 'react';
 import { fixedQuote, managedPricing } from '../shared/pricing';
 import { parseExplicitBuyerDescription } from '../shared/muse-contracts';
@@ -1325,7 +1326,7 @@ export function Invoices() {
         <StatCard
           label="Payment due"
           value="$0.00"
-          note="Demo only · no payment collection"
+          note="Pilot · no payment collection"
           icon={<ShieldCheck size={18} />}
         />
       </div>
@@ -1340,15 +1341,18 @@ export function Invoices() {
         {loading ? (
           <Spinner label="Loading invoices" />
         ) : items.length ? (
-          <div className="table-scroll">
+          <TableViewport label="Instant rental invoices" minWidth={760} className="table-scroll">
             <table>
+              <caption className="sr-only">Instant rental invoices</caption>
               <thead>
                 <tr>
-                  <th>Invoice</th>
-                  <th>Environment</th>
-                  <th>Created</th>
-                  <th>Fixed total</th>
-                  <th>Status</th>
+                  <th scope="col">Invoice</th>
+                  <th scope="col">Environment</th>
+                  <th scope="col">Created</th>
+                  <th className="numeric-cell" scope="col">
+                    Fixed total
+                  </th>
+                  <th scope="col">Status</th>
                 </tr>
               </thead>
               <tbody>
@@ -1366,7 +1370,7 @@ export function Invoices() {
                       </Link>
                     </td>
                     <td>{shortDate(invoice.createdAt)}</td>
-                    <td className="money-cell">{money(amount(invoice))}</td>
+                    <td className="money-cell numeric-cell">{money(amount(invoice))}</td>
                     <td>
                       <span className="quiet-badge">No payment due</span>
                     </td>
@@ -1374,7 +1378,7 @@ export function Invoices() {
                 ))}
               </tbody>
             </table>
-          </div>
+          </TableViewport>
         ) : (
           <EmptyState
             icon={<ReceiptText size={27} />}
