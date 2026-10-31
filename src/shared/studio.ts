@@ -1,3 +1,4 @@
+import type { StudioUsage } from './studio-usage.js';
 export type StudioStatus =
   | 'queued'
   | 'model_auction'
@@ -44,6 +45,7 @@ export interface StudioPlan {
   explanation: string;
 }
 export interface StudioDetail {
+  usage?: StudioUsage | null;
   modelActivity: {
     id: string;
     provider: string;
