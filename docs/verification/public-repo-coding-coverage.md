@@ -77,3 +77,73 @@ another model call; a Postgres regression also covers a zero-exit overflow.
 The intentional child-cleanup test emits Python's expected ResourceWarning for
 an unreaped subprocess inside the test. A separate process inspection verifies
 that no marked child remains after the namespace exits.
+
+## Automatic Studio task verification — 2026-10-31
+
+The task-budget extension uses the same public SDK command transport and all
+four route contracts above. E2B, Daytona, Modal and Blaxel each retain their
+existing allocation, terminal, Git, file/copy, snapshot, pause/resume and native
+lifecycle owners. No provider-specific implementation, capability flag or
+private Wick source changed. Native automatic-task setup remains unverified
+for all four providers and every size; fixture contracts are not native proof.
+
+`npm run test:studio-local` passed 17 checks in the isolated Linux environment
+above. It deliberately removed bubblewrap from its own disposable container
+before starting a task through the authenticated owner HTTP API. The fresh-VM
+bootstrap installed the missing fixed OS package, verified namespaces, cloned
+the pinned public repository, and ran the actual edits and six tests. Both
+model and compute fixture auctions observed their full 30-second deadlines.
+The result retained a patch, confirmed fixture VM cleanup, returned unspent
+funding, and removed the actual container and database at teardown. Its task
+spent $1.6120 from $10.0000 and returned $8.3880, with six settled fixture model
+receipts and no pending budget holds. These amounts are fixture accounting,
+not real provider charges.
+
+A separate browser-started task used only the task, public repository and a
+$5.0000 budget, without selecting a VM, grant or model quantities. It completed
+the same Linux work and returned $3.3880. Desktop inspection verified the
+budget breakdown, activity, test receipts and cleanup state. Small-screen CSS
+was reviewed; no runtime device-viewport verification is claimed.
+
+The complete disposable-Postgres suite passed 821 tests across 63 files,
+including 18 Studio tests for funding, operation replay, isolation, leases,
+unknown usage, stop/deadline, replenishment, verified completion and bounded
+10,000-row task history. Type checking and production builds also passed.
+Live Meta responses, native VM images and larger provider output-accounting
+contracts require separate qualification before enabling real automatic tasks.
+
+## Ten-cent defaults: complete local flows — 2026-10-31
+
+The application at commit `44cb9a6` was exercised through the browser against
+isolated local app/auth/Postgres/PgBoss instances, followed by SDK and database
+assertions. The 17-check Linux runner also passed again on this commit.
+
+* Two VM auctions used the untouched $0.10 ceiling with explicitly prepared
+  fixture provider policies bidding $0.08 and $0.09. Each observed its full
+  30-second deadline, created one fixture VM, and issued exactly one $0.08
+  invoice. Commission was $0.0120 and provider share $0.0680 per rental.
+  Browser terminal echo worked; reload/reconnection preserved the VM identity
+  and exact expiry. Both fixture VMs acknowledged termination.
+* A separate auction against higher-price fixture policies kept its $0.10
+  ceiling, ended with no offers after 30 seconds, and created zero VMs.
+* A new agent retained its default $0.10 budget and purchase cap. Its auction
+  for 10,000 input / 512 output tokens received two $0.10 fixture bids and
+  charged $0.10 once. An actual SDK completion settled fixture usage without
+  another monetary charge. Replaying the operation returned 409 and kept one
+  inference request. The test key was revoked, the grant closed, and wallet
+  reservations returned to zero.
+* Studio started from the untouched $0.10 task budget and paused with no
+  purchases and $0 spent. The owner added $2 of fixture funding. The same task
+  completed both auctions, actual Linux edits and six passing tests, retained
+  its patch, confirmed VM cleanup and settled six model receipts. It spent
+  $1.6120 from $2.1000 and returned $0.4880, with no reserved funds. The original
+  grant-creation receipt proved its deadline was unchanged, and database checks
+  confirmed one VM request and one coding job for the task.
+
+The browser sequence was performed through the app UI; SDK/ledger assertions
+were separate API/database checks. The existing opt-in browser scenario was
+updated to use the new default budget/cap and a 512-output-token pack; its
+automation was not executed in this check. Type checking and formatting passed.
+All model calls and provider allocations above were fixtures. Only guest Git,
+file edits and sandboxed tests used actual Linux execution. This does not
+qualify a production inference route or native Wick provider.

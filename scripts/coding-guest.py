@@ -193,7 +193,7 @@ def main():
     if time.time() >= data["deadline"] or (job / "stop").exists():
         return {"state": "failed", "error": "Job stopped or deadline reached"}
     sequence = str(data["sequence"])
-    if not re.fullmatch(r"\d{1,2}", sequence):
+    if not re.fullmatch(r"\d{1,3}", sequence):
         raise ValueError("Invalid step identity")
     journal = job / (sequence + ".json")
     lock = open(job / (sequence + ".lock"), "a")
@@ -207,6 +207,17 @@ def main():
     try:
         kind = action["action"]
         if kind == "clone":
+            # Task authorization covers preparation of this newly rented, disposable VM.
+            # Only fixed packages from the guest's configured OS repositories are installed.
+            # No repository script or dependency installer ever runs with privilege.
+            if data.get("allowBootstrap") and (not shutil.which("bwrap", path=env["PATH"]) or not shutil.which("git", path=env["PATH"])):
+                if not shutil.which("apt-get", path=env["PATH"]):
+                    raise ValueError("Automatic task setup needs a Debian/Ubuntu guest with apt-get")
+                prefix = [] if os.geteuid() == 0 else ["sudo", "-n"]
+                for command in [["apt-get", "update", "-qq"], ["env", "DEBIAN_FRONTEND=noninteractive", "apt-get", "install", "-y", "-qq", "--no-install-recommends", "git", "bubblewrap", "ca-certificates"]]:
+                    setup = execute(prefix + command, seconds=40)
+                    if setup["exitCode"] != 0 or setup["interrupted"]:
+                        raise ValueError("Task sandbox setup failed; no repository code was executed")
             # Probe the actual isolation mechanism before downloading/executing any repository.
             repo.mkdir(exist_ok=True)
             probe = execute(sandbox("test ! -e /root && test ! -e /workspace && printf isolated"), seconds=10)

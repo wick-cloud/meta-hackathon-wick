@@ -2,6 +2,7 @@ import { moneyAmount } from './data.js';
 import { addCents } from '../../shared/money.js';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { z } from 'zod';
+import type { PoolClient } from 'pg';
 import type { Actor } from '../../shared/types.js';
 import { INFERENCE_PROVIDERS } from '../../shared/inference.js';
 import { agentScopes } from '../../shared/developer.js';
@@ -47,10 +48,19 @@ const createSchema = z
   })
   .strict();
 export async function createGrant(ctx: AppContext, actor: Actor, raw: unknown) {
+  return transaction(ctx.pool, (db) => createGrantInTransaction(ctx, db, actor, raw));
+}
+/** Shared transaction lets Studio reserve its full budget with its task record. */
+export async function createGrantInTransaction(
+  ctx: AppContext,
+  db: PoolClient,
+  actor: Actor,
+  raw: unknown,
+) {
   ownerOnly(actor);
   const input = createSchema.parse(raw),
     rt = runtime(ctx);
-  return transaction(ctx.pool, async (db) => {
+  {
     await db.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`agent-grants:${actor.id}`]);
     await authority(db, actor);
     return withOperation(
@@ -111,9 +121,15 @@ export async function createGrant(ctx: AppContext, actor: Actor, raw: unknown) {
         return grantView(row);
       },
     );
-  });
+  }
 }
-export async function fundGrant(ctx: AppContext, actor: Actor, id: string, raw: unknown) {
+export async function fundGrant(
+  ctx: AppContext,
+  actor: Actor,
+  id: string,
+  raw: unknown,
+  studioTaskId?: string,
+) {
   ownerOnly(actor);
   const input = z
     .object({ amountCents: moneyAmount(100_000_000), operationKey: operationSchema })
@@ -122,6 +138,17 @@ export async function fundGrant(ctx: AppContext, actor: Actor, id: string, raw: 
   return transaction(ctx.pool, async (db) => {
     await authority(db, actor);
     const grant = await lockedGrant(db, actor, id);
+    if (
+      studioTaskId &&
+      !(
+        await db.query(
+          `SELECT id FROM broker_studio_tasks WHERE id=$1 AND buyer_id=$2 AND grant_id=$3
+      AND NOT stop_requested AND outcome IS NULL AND deadline_at>clock_timestamp() FOR UPDATE`,
+          [studioTaskId, actor.id, id],
+        )
+      ).rowCount
+    )
+      failure(409, 'task_ended', 'The task no longer accepts additional funding.');
     return withOperation(
       db,
       actor,
@@ -150,7 +177,7 @@ export async function fundGrant(ctx: AppContext, actor: Actor, id: string, raw: 
           );
         const row = (
           await db.query(
-            `UPDATE broker_inference_grants SET funded_cents=funded_cents+$2,available_cents=available_cents+$2 WHERE id=$1 RETURNING *`,
+            `UPDATE broker_inference_grants SET funded_cents=funded_cents+$2,available_cents=available_cents+$2${studioTaskId ? ',max_purchase_cents=funded_cents+$2' : ''} WHERE id=$1 RETURNING *`,
             [id, input.amountCents],
           )
         ).rows[0];

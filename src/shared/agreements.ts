@@ -117,6 +117,7 @@ export interface CreditEntry {
     | 'failed_start_credit'
     | 'agent_fund'
     | 'token_purchase'
+    | 'studio_compute'
     | 'agent_release'
     | 'token_refund';
   amountCents: number;

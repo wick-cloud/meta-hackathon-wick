@@ -24,6 +24,7 @@ import {
   parseCodingResponse,
 } from './contracts.js';
 import { guestStep } from './guest.js';
+import { studioAuthority, type StudioSource } from './studio-budget.js';
 
 export const CODING_QUEUE = 'broker-coding-job';
 const terminal = ['ready', 'failed', 'stopped'];
@@ -36,8 +37,8 @@ const createSchema = z
     grantId: z.uuid(),
     goal: z.string().trim().min(10).max(4000),
     testCommand: z.string().trim().min(1).max(500),
-    maxCalls: z.number().int().min(1).max(8).default(8),
-    maxOutputTokens: z.number().int().min(128).max(512).default(512),
+    maxCalls: z.number().int().min(1).max(64).default(8),
+    maxOutputTokens: z.number().int().min(128).max(8192).default(512),
   })
   .strict();
 export function ownerOnly(actor: Actor) {
@@ -105,13 +106,18 @@ export async function createCodingJob(
   actor: Actor,
   raw: unknown,
   verify = verifyPublicRepository,
+  studio?: StudioSource,
 ) {
   ownerOnly(actor);
   if (!ctx.wick.runCommand)
     throw new HttpError(409, 'Structured coding execution is unavailable in this VM adapter.');
   const input = createSchema.parse(raw),
     repo = publicRepository(input.repositoryUrl);
-  const fingerprint = operationFingerprint({ ...input, repositoryUrl: repo.url });
+  const fingerprint = operationFingerprint({
+    ...input,
+    repositoryUrl: repo.url,
+    ...(studio ? { studioTaskId: studio.id } : {}),
+  });
   const prior = (
     await ctx.pool.query(
       'SELECT * FROM broker_coding_jobs WHERE buyer_id=$1 AND operation_key=$2',
@@ -142,6 +148,18 @@ export async function createCodingJob(
     await authority(db, actor);
     const grant = await lockedGrant(db, actor, input.grantId, true);
     activeMode(ctx, grant);
+    const studioTask = studio ? await studioAuthority(db, studio, actor) : null;
+    if (
+      studioTask &&
+      (studioTask.grant_id !== grant.id ||
+        !(
+          await db.query('SELECT 1 FROM broker_vms WHERE id=$1 AND request_id=$2', [
+            input.vmId,
+            studioTask.vm_request_id,
+          ])
+        ).rowCount)
+    )
+      throw new HttpError(403, 'The VM and budget must belong to this task.');
     await db.query('SELECT pg_advisory_xact_lock(62401277)');
     const existing = (
       await db.query('SELECT * FROM broker_coding_jobs WHERE buyer_id=$1 AND operation_key=$2', [
@@ -189,8 +207,8 @@ export async function createCodingJob(
       );
     const row = (
       await db.query(
-        `INSERT INTO broker_coding_jobs(buyer_id,vm_id,grant_id,environment_id,operation_key,input_fingerprint,repository_url,commit_sha,base_ref,goal,test_command,source_mode,deadline_at,max_calls,max_output_tokens)
-      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,LEAST(clock_timestamp()+interval '10 minutes',$13,$14),$15,$16) RETURNING *`,
+        `INSERT INTO broker_coding_jobs(buyer_id,vm_id,grant_id,environment_id,operation_key,input_fingerprint,repository_url,commit_sha,base_ref,goal,test_command,source_mode,deadline_at,max_calls,max_output_tokens,studio_task_id)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,LEAST(COALESCE($17::timestamptz,clock_timestamp()+interval '10 minutes'),$13,$14),$15,$16,$18) RETURNING *`,
         [
           actor.id,
           vm.id,
@@ -208,11 +226,18 @@ export async function createCodingJob(
           grant.expires_at,
           input.maxCalls,
           input.maxOutputTokens,
+          studioTask?.deadline_at ?? null,
+          studio?.id ?? null,
         ],
       )
     ).rows[0];
+    if (studio)
+      await db.query('UPDATE broker_studio_tasks SET coding_job_id=$2 WHERE id=$1', [
+        studio.id,
+        row.id,
+      ]);
     await db.query(
-      "INSERT INTO broker_coding_steps(job_id,sequence,kind,payload_cipher) VALUES($1,0,'command',$2)",
+      "INSERT INTO broker_coding_steps(job_id,sequence,kind,payload_cipher,action) VALUES($1,0,'command',$2,'clone')",
       [row.id, seal(ctx, { action: 'clone' })],
     );
     return row;
@@ -253,7 +278,7 @@ export async function codingDetail(
   const steps = (
     await ctx.pool.query(
       `SELECT s.*,to_jsonb(r) inference_receipt FROM broker_coding_steps s LEFT JOIN broker_inference_requests r
-        ON r.id=s.inference_request_id AND r.buyer_id=$2 WHERE s.job_id=$1 ORDER BY s.sequence LIMIT 25`,
+        ON r.id=s.inference_request_id AND r.buyer_id=$2 WHERE s.job_id=$1 ORDER BY s.sequence DESC LIMIT 64`,
       [id, actor.id],
     )
   ).rows.map((r) => ({
@@ -266,6 +291,7 @@ export async function codingDetail(
     inferenceRequestId: r.inference_request_id,
     ...(r.inference_receipt ? { receipt: receiptView(r.inference_receipt) } : {}),
   }));
+  steps.reverse();
   return { job: jobView(job), steps, artifactsExpired: expired };
 }
 export async function controlCoding(
@@ -416,9 +442,9 @@ async function appendResult(
   }
   if (!next && (status === 'running' || status === 'paused')) next = { action: 'model' };
   if (next === null && status === 'running') next = { action: 'model' };
-  if (step.sequence >= 23) {
+  if (step.sequence >= (job.studio_task_id ? 255 : 23)) {
     status = 'paused';
-    reason = 'The 24-step task limit was reached.';
+    reason = 'The execution safety boundary was reached. Review the saved result.';
     next = null;
   }
   await transaction(ctx.pool, async (db) => {
@@ -441,8 +467,14 @@ async function appendResult(
     );
     if (next && status !== 'ready' && status !== 'failed')
       await db.query(
-        'INSERT INTO broker_coding_steps(job_id,sequence,kind,payload_cipher) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING',
-        [job.id, step.sequence + 1, next.action === 'model' ? 'model' : 'command', seal(ctx, next)],
+        'INSERT INTO broker_coding_steps(job_id,sequence,kind,payload_cipher,action) VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING',
+        [
+          job.id,
+          step.sequence + 1,
+          next.action === 'model' ? 'model' : 'command',
+          seal(ctx, next),
+          next.action,
+        ],
       );
   });
 }
@@ -537,7 +569,15 @@ export async function processCodingJob(ctx: AppContext, id: string) {
           [job.grant_id, job.buyer_id],
         )
       ).rows[0];
-      if (!actor || actor.role !== 'buyer' || !vm || !grant) {
+      const studioActive =
+        !job.studio_task_id ||
+        (
+          await ctx.pool.query(
+            `SELECT 1 FROM broker_studio_tasks WHERE id=$1 AND NOT stop_requested AND outcome IS NULL AND deadline_at>clock_timestamp()`,
+            [job.studio_task_id],
+          )
+        ).rowCount;
+      if (!actor || actor.role !== 'buyer' || !vm || !grant || !studioActive) {
         await ctx.pool.query(
           "UPDATE broker_coding_jobs SET status='stopping',requested_action='stop' WHERE id=$1 AND lease_token=$2",
           [id, token],
@@ -704,6 +744,12 @@ export async function processCodingJob(ctx: AppContext, id: string) {
       'UPDATE broker_coding_jobs SET lease_token=NULL,lease_until=NULL WHERE id=$1 AND lease_token=$2',
       [id, token],
     );
+    const pending = (
+      await ctx.pool.query("SELECT 1 FROM broker_coding_jobs WHERE id=$1 AND status='running'", [
+        id,
+      ])
+    ).rowCount;
+    if (pending) await wakeCoding(ctx, id);
   }
 }
 async function reconcileCoding(ctx: AppContext, job: Row) {

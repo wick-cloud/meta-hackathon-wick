@@ -288,11 +288,11 @@ export function CodingStudio({ search = '' }: { search?: string }) {
                 </div>
                 <div>
                   <dt>Job limit</dt>
-                  <dd>10 minutes · 8 calls</dd>
+                  <dd>Up to 10 minutes within VM and grant deadlines</dd>
                 </div>
                 <div>
-                  <dt>Output per call</dt>
-                  <dd>512, including reasoning</dd>
+                  <dt>Model allowance</dt>
+                  <dd>Existing purchased allowance</dd>
                 </div>
                 <div>
                   <dt>Command limit</dt>
@@ -384,9 +384,7 @@ export function CodingStudio({ search = '' }: { search?: string }) {
                     <td>
                       <JobStatus job={job} />
                     </td>
-                    <td>
-                      {job.modelCalls}/{job.maxCalls}
-                    </td>
+                    <td>{job.modelCalls}</td>
                     <td>{dateTime(job.createdAt)}</td>
                     <td>
                       <Link href={'/studio/jobs/' + job.id}>
@@ -440,7 +438,7 @@ export function CodingStudio({ search = '' }: { search?: string }) {
             </div>
             <div>
               <dt>Limits</dt>
-              <dd>10 minutes · 8 Meta calls</dd>
+              <dd>Up to 10 minutes within VM and grant deadlines</dd>
             </div>
           </dl>
           <p className="coding-note">
@@ -537,10 +535,7 @@ export function CodingJobPage({ id }: { id: string }) {
           Deadline <strong>{remaining(job.deadlineAt, now)}</strong>
         </span>
         <span>
-          Meta calls{' '}
-          <strong>
-            {job.modelCalls}/{job.maxCalls}
-          </strong>
+          Meta calls <strong>{job.modelCalls}</strong>
         </span>
         <JobStatus job={job} />
         {job.mode === 'fixture' && (

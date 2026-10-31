@@ -1,7 +1,12 @@
 # Public repository coding pilot
 
-Muse Studio (`/studio`) runs small coding tasks in an existing owned Wick VM.
+The saved coding-job worker runs small coding tasks in an owned Wick VM.
 It uses the existing Railway app, Postgres and PgBoss, and the public Wick SDK.
+The default `/studio` experience now orchestrates the entire task through a
+[single task budget](studio-task-budgets.md), including model and VM purchases,
+execution verification and cleanup. The manual existing-VM composer remains at
+`/studio/legacy`; saved `/studio/jobs/:id` links remain valid. The limits below
+describe that legacy pilot, not user-facing controls in the task workflow.
 
 ## Customer flow
 
@@ -96,7 +101,7 @@ These intentionally are not agent-key SDK/OpenAPI routes:
 * `GET /api/coding/jobs/:id/patch`
 
 History uses buyer-scoped keyset pagination, maximum 100. Details load at most
-25 step rows and never call providers per row. Three-minute fenced leases and
+64 recent step rows and never call providers per row. Three-minute fenced leases and
 bounded maintenance batches recover missed queue wakes. The Railway image
 ships the guest helper as inert source; customer code never runs on Railway.
 

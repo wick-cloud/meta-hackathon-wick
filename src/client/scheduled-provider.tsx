@@ -20,7 +20,16 @@ import type {
   ScheduledOffering,
   ScheduledOfferingInput,
 } from '../shared/agreements';
-import { museLabel, api, money, moneyMicros, post, regionName, type Dashboard } from './api';
+import {
+  museLabel,
+  api,
+  money,
+  moneyMicros,
+  post,
+  regionName,
+  DEFAULT_PRICE_CENTS,
+  type Dashboard,
+} from './api';
 import {
   DetailRow,
   EmptyState,
@@ -64,8 +73,8 @@ export function ProviderScheduled() {
       windowEnd: '06:00',
       availableUntil: '08:00',
       capacityQuantity: 1,
-      discountRateCentsPerHour: 10,
-      normalRateCentsPerHour: 20,
+      discountRateCentsPerHour: DEFAULT_PRICE_CENTS,
+      normalRateCentsPerHour: DEFAULT_PRICE_CENTS,
     }),
     [busy, setBusy] = useState(false),
     [error, setError] = useState(''),

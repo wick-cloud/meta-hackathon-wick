@@ -4,6 +4,7 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { ArrowRight, ChevronLeft, Sparkles } from 'lucide-react';
 import {
   museLabel,
+  DEFAULT_PRICE_CENTS,
   ApiError,
   api,
   dateTime,
@@ -119,14 +120,14 @@ export function AlternativeComposer({ sourceRequestId }: { sourceRequestId?: str
           memoryGb: first?.memoryGb || 4,
           region: first?.region || '',
           durationMinutes: 30,
-          maxPriceCents: 500,
+          maxPriceCents: DEFAULT_PRICE_CENTS,
         },
         flexibility: {
           minCPU: first?.cpu || 2,
           minMemoryGb: first?.memoryGb || 4,
           allowedRegions: [],
           allowedDurations: [],
-          hardMaxPriceCents: 500,
+          hardMaxPriceCents: DEFAULT_PRICE_CENTS,
           gpu: 'preserve',
         },
       },

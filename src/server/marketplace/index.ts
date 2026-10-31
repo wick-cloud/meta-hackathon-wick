@@ -1,3 +1,4 @@
+import { cancelRequest } from './auction.js';
 import { moneyCents } from './data.js';
 import { registerVmInventory } from './inventory.js';
 import { clientOperationKey, recordKeyAction, withOperation } from '../operations.js';
@@ -92,42 +93,15 @@ export async function registerMarketplace(app: FastifyInstance, ctx: AppContext)
   });
   app.post<{ Params: { id: string } }>('/api/requests/:id/cancel', async (request) => {
     const actor = await ctx.requireActor(request, ['buyer']);
-    const id = uuid(request.params.id);
-    const result = await transaction(ctx.pool, async (db) =>
-      withOperation(
-        db,
-        actor,
-        'orders.cancel',
-        clientOperationKey(
-          (request.body as Row)?.operationKey ?? request.headers['idempotency-key'],
-          Boolean(actor.apiKey),
-        ),
-        { id },
-        async () => {
-          const row = (
-            await db.query('SELECT * FROM broker_requests WHERE id=$1 AND buyer_id=$2 FOR UPDATE', [
-              id,
-              actor.id,
-            ])
-          ).rows[0];
-          if (!row) throw new HttpError(404, 'Request not found.');
-          if (row.status === 'cancelled') return { cancelled: true };
-          if (row.status !== 'open')
-            throw new HttpError(
-              409,
-              'The auction has ended. Manage termination from the VM detail page.',
-            );
-          await db.query("UPDATE broker_requests SET status='cancelled' WHERE id=$1", [id]);
-          await db.query("UPDATE broker_bids SET status='cancelled' WHERE request_id=$1", [id]);
-          await db.query(
-            "UPDATE broker_holds SET released_at=now(),release_reason='Buyer cancelled auction' WHERE bid_id IN(SELECT id FROM broker_bids WHERE request_id=$1) AND released_at IS NULL",
-            [id],
-          );
-          return { cancelled: true };
-        },
+    return cancelRequest(
+      ctx,
+      actor,
+      uuid(request.params.id),
+      clientOperationKey(
+        (request.body as Row)?.operationKey ?? request.headers['idempotency-key'],
+        Boolean(actor.apiKey),
       ),
     );
-    return result;
   });
   app.post<{ Params: { id: string } }>('/api/requests/:id/retry', async (request) => {
     const actor = await ctx.requireActor(request, ['buyer']);
