@@ -681,6 +681,47 @@ export function StudioTaskPage({ id }: { id: string }) {
               {task.blockedReason}
             </div>
           )}
+          {data.planning && (data.planning.failureCode || task.status === 'needs_attention') && (
+            <section className="studio-card" aria-label="Planning recovery">
+              <div className="studio-section-head">
+                <h3>Planning response</h3>
+                <span className="studio-tag">Attempt {data.planning.attempt} of 2</span>
+              </div>
+              <p>
+                Request: {data.planning.requestStatus.replaceAll('_', ' ')}
+                {data.planning.finishReason && ` · Finish reason: ${data.planning.finishReason}`}
+                {data.planning.outputTokens != null &&
+                  ` · ${data.planning.outputTokens.toLocaleString('en-US')} output tokens used`}
+              </p>
+              <p>
+                {data.planning.hasSavedResponse
+                  ? 'A saved response is available. Recovery validates it before considering another model call.'
+                  : data.planning.canRetry
+                    ? 'A retry uses existing prepaid quota and the original deadline. It does not buy another token pack or VM.'
+                    : [
+                          'reserved',
+                          'dispatching',
+                          'outcome_unknown',
+                          'needs_reconciliation',
+                        ].includes(data.planning.requestStatus)
+                      ? 'Usage is still unresolved. Keep the original receipt; a replacement call will not be sent.'
+                      : data.planning.attempt >= 2
+                        ? 'The single planning repair has been used. Stop the task to return unspent funding; existing prepaid purchases remain payable.'
+                        : 'No new VM has been purchased. Stop the task to return unspent funding, or inspect the planning receipt.'}
+              </p>
+              {data.planning.canRetry && (
+                <button
+                  className="button primary"
+                  disabled={busy}
+                  onClick={() => act('retry-plan')}
+                >
+                  {data.planning.hasSavedResponse
+                    ? 'Resume saved planning response'
+                    : 'Retry planning with existing quota'}
+                </button>
+              )}
+            </section>
+          )}
           {task.status === 'needs_budget' && (
             <section className="studio-card studio-funding">
               <h3>More funding is needed</h3>
@@ -965,7 +1006,7 @@ export function StudioTaskPage({ id }: { id: string }) {
             )}
             {!finished(task.status) && (
               <>
-                {task.status === 'needs_attention' && (
+                {task.status === 'needs_attention' && !data.planning && (
                   <button
                     className="button secondary"
                     disabled={busy}

@@ -45,6 +45,17 @@ export interface StudioPlan {
   explanation: string;
 }
 export interface StudioDetail {
+  planning?: {
+    attempt: number;
+    requestId: string | null;
+    requestStatus: string;
+    finishReason: string | null;
+    outputTokens: number | null;
+    maximumOutputTokens: number;
+    failureCode: string | null;
+    canRetry: boolean;
+    hasSavedResponse: boolean;
+  } | null;
   usage?: StudioUsage | null;
   modelActivity: {
     id: string;

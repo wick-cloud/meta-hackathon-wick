@@ -53,6 +53,8 @@ export interface AdapterResult {
   /** Provider diagnostic discrepancy paid by Wick, outside the agent's quota. */
   platformOutputTokens?: 1;
 }
+/** Internal planner tuning; the public buffered-text API remains unchanged. */
+export type NativeCompletionInput = InferenceCompletionInput & { reasoning_effort?: 'low' };
 export class InferenceUpstreamError extends Error {
   constructor(
     public code: string,
@@ -68,7 +70,7 @@ export interface InferenceRuntime {
   routes: Map<InferenceProvider, RuntimeRoute>;
   dispatch(
     route: RuntimeRoute,
-    input: InferenceCompletionInput,
+    input: NativeCompletionInput,
     requestId: string,
   ): Promise<AdapterResult>;
 }
@@ -139,7 +141,7 @@ const usageSchema = z.object({
 /** A single buffered POST. No retries, redirects, provider failover, or prompt logging. */
 export async function dispatchReal(
   route: RuntimeRoute,
-  input: InferenceCompletionInput,
+  input: NativeCompletionInput,
   requestId: string,
   fetcher: typeof fetch = fetch,
 ): Promise<AdapterResult> {

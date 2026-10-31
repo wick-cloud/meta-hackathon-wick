@@ -40,6 +40,36 @@ explanation, guest test output, retained patch, and saved activity. Existing
 bring-your-own-VM coding links remain at `/studio/jobs/:id`; their old composer
 is available at `/studio/legacy`.
 
+## Planning recovery
+
+Planning uses `reasoning_effort: low` and a compact repository summary: at most
+50 root entries and two 4,000-character manifest excerpts, marked when truncated.
+This keeps VM selection and offline verification planning separate from coding.
+Meta documents `xhigh` as Muse's default and `low` for short selection/tool loops:
+[recommended settings](https://dev.meta.ai/docs/muse-spark-open/settings).
+The existing qualified per-call input/output bounds stay in force.
+
+Each task has at most two planning attempts. A settled truncated or malformed
+reply gets one shorter automatic repair from existing prepaid quota. Invalid
+VM choices, changed owner commands and refusals stop for review. No repair buys
+another pack or starts a VM. Unknown usage is never retried or released merely
+because a worker restarted. Owner, grant, deadline and lease checks apply at
+admission, dispatch and plan acceptance.
+
+The bounded final reply is encrypted with the existing artifact key and saved
+in the same transaction as usage settlement. A lost worker checkpoint recovers
+that saved reply instead of repeating the provider call. Responses expire with
+the task's existing 24-hour artifacts; finish reason and failure category remain
+as diagnostic metadata. Response bodies and reasoning are never returned in the
+task API or copied into repair prompts.
+
+The task UI shows the failure category, attempt, finish reason and settled usage.
+An owner can recover a saved result or authorize the one remaining repair for a
+legacy settled call whose response was not retained. Both actions use the
+original deadline and existing allowance. Unresolved receipts and exhausted
+repairs have no retry action. Older 2,048-token receipts without a finish reason
+remain inconclusive about truncation; the new diagnostics do not fabricate one.
+
 ## Money and authority
 
 The grant's existing equation remains authoritative:

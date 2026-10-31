@@ -27,6 +27,7 @@ import {
   studioDetail,
   listStudioTasks,
   studioPatch,
+  maintainStudio,
 } from '../src/server/coding/studio.js';
 import { processCodingJob, codingDetail } from '../src/server/coding/service.js';
 import { reserveStudioCompute } from '../src/server/coding/studio-budget.js';
@@ -42,6 +43,8 @@ import {
   recordUsageSample,
   taskUsage,
 } from '../src/server/coding/usage-data.js';
+import type { AdapterResult } from '../src/server/inference/runtime.js';
+import { planOperation, PLAN_DIAGNOSTICS_SELECT } from '../src/server/coding/planning.js';
 
 const url = process.env.TEST_DATABASE_URL;
 describe.skipIf(!url)('Studio task budget and lifecycle (disposable Postgres)', () => {
@@ -85,6 +88,7 @@ describe.skipIf(!url)('Studio task budget and lifecycle (disposable Postgres)', 
     wrote = false,
     modelCalls = 0;
   let actions: unknown[] = [];
+  let planningReplies: Partial<AdapterResult>[] = [];
   const verify = async () => ({
     url: 'https://github.com/example/public',
     owner: 'example',
@@ -134,6 +138,7 @@ describe.skipIf(!url)('Studio task budget and lifecycle (disposable Postgres)', 
         finishReason: 'stop',
         inputTokens: fixtureInputTokens(call),
         outputTokens: 80,
+        ...(planning ? planningReplies.shift() : undefined),
       };
     });
     const command = vi.fn(async (_id: string, { command }: { command: string }) => {
@@ -247,6 +252,7 @@ describe.skipIf(!url)('Studio task budget and lifecycle (disposable Postgres)', 
       { action: 'test' },
       { action: 'finish', summary: 'Implemented and tested the requested change.' },
     ];
+    planningReplies = [];
   });
   afterAll(async () => {
     await pool?.end();
@@ -454,8 +460,233 @@ describe.skipIf(!url)('Studio task budget and lifecycle (disposable Postgres)', 
     expect(t.status).toBe('needs_attention');
     expect(t.vm_request_id).toBeNull();
     expect(modelCalls).toBe(1);
+    expect((await studioDetail(ctx, owner, task.id)).planning).toMatchObject({
+      failureCode: 'unapproved_vm',
+      canRetry: true,
+      requestStatus: 'settled',
+    });
     await tick(task.id);
     expect(modelCalls).toBe(1);
+  });
+  it('repairs one settled truncated planning reply from the existing pack before opening the VM auction', async () => {
+    for (const route of ctx.inference!.routes.values()) route.maximumOutputTokens = 2048;
+    planningReplies = [{ content: '{"catalogId":', finishReason: 'length', outputTokens: 2048 }];
+    const task = await create(),
+      t = await planned(task.id);
+    expect(modelCalls).toBe(2);
+    const attempts = (
+      await pool.query(
+        'SELECT a.*,r.status FROM broker_studio_plan_attempts a JOIN broker_inference_requests r ON r.id=a.request_id WHERE task_id=$1 ORDER BY attempt',
+        [task.id],
+      )
+    ).rows;
+    expect(attempts).toHaveLength(2);
+    expect(attempts[0]).toMatchObject({
+      failure_code: 'truncated',
+      finish_reason: 'length',
+      status: 'settled',
+    });
+    expect(attempts[1]).toMatchObject({
+      failure_code: null,
+      finish_reason: 'stop',
+      status: 'settled',
+    });
+    expect(attempts[0].response_cipher).not.toContain('catalogId');
+    expect(
+      (
+        await pool.query('SELECT count(*)::int n FROM broker_token_orders WHERE grant_id=$1', [
+          t.grant_id,
+        ])
+      ).rows[0].n,
+    ).toBe(1);
+    expect((await pool.query('SELECT count(*)::int n FROM broker_vms')).rows[0].n).toBe(0);
+    const calls = vi.mocked(ctx.inference!.dispatch).mock.calls.map((c) => c[1]);
+    expect(calls.every((c) => c.reasoning_effort === 'low' && c.max_tokens === 2048)).toBe(true);
+    expect(calls[1]!.messages[0]!.content).toContain('previous settled reply');
+    expect(calls[1]!.messages[0]!.content).not.toContain('{"catalogId":');
+    const detail = await studioDetail(ctx, owner, task.id);
+    expect(detail.events.some((e) => e.title === 'Muse is repairing its plan')).toBe(true);
+    expect(JSON.stringify(detail)).not.toContain('response_cipher');
+    await tick(task.id);
+    expect(modelCalls).toBe(2);
+  });
+  it('stops after the single repair and exposes its exact failure without another purchase or VM', async () => {
+    for (const route of ctx.inference!.routes.values()) route.maximumOutputTokens = 2048;
+    planningReplies = Array.from({ length: 3 }, () => ({
+      content: '',
+      finishReason: 'length',
+      outputTokens: 2048,
+    }));
+    const task = await create();
+    let t = await tick(task.id);
+    await pool.query(
+      "UPDATE broker_token_orders SET closes_at=clock_timestamp()-interval '1 second' WHERE id=$1",
+      [t.model_order_id],
+    );
+    await closeTokenAuction(ctx, t.model_order_id);
+    t = await tick(task.id);
+    expect(t.status).toBe('needs_attention');
+    expect(t.blocked_reason).toContain('2,048-token planning response limit');
+    expect(t.blocked_reason).toContain('single planning repair has been used');
+    expect(modelCalls).toBe(2);
+    expect((await studioDetail(ctx, owner, task.id)).planning).toMatchObject({
+      attempt: 2,
+      failureCode: 'truncated',
+      finishReason: 'length',
+      outputTokens: 2048,
+      canRetry: false,
+    });
+    await expect(controlStudio(ctx, owner, task.id, 'retry-plan')).rejects.toThrow(
+      'cannot be retried',
+    );
+    await tick(task.id);
+    expect(modelCalls).toBe(2);
+    expect((await pool.query('SELECT count(*)::int n FROM broker_vms')).rows[0].n).toBe(0);
+    expect(
+      (
+        await pool.query('SELECT count(*)::int n FROM broker_token_orders WHERE grant_id=$1', [
+          t.grant_id,
+        ])
+      ).rows[0].n,
+    ).toBe(1);
+  });
+  it('recovers a settled saved reply after a worker checkpoint failure without another provider call', async () => {
+    const task = await create();
+    let t = await tick(task.id);
+    await pool.query(
+      "UPDATE broker_token_orders SET closes_at=clock_timestamp()-interval '1 second' WHERE id=$1",
+      [t.model_order_id],
+    );
+    await closeTokenAuction(ctx, t.model_order_id);
+    const query = pool.query.bind(pool);
+    let failed = false;
+    const spy = vi.spyOn(pool, 'query').mockImplementation(((...args: any[]) => {
+      if (
+        !failed &&
+        String(args[0]).includes('UPDATE broker_studio_plan_attempts a SET failure_code')
+      ) {
+        failed = true;
+        throw Error('Synthetic lost worker checkpoint');
+      }
+      return (query as any)(...args);
+    }) as any);
+    try {
+      t = await tick(task.id);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(t.status).toBe('needs_attention');
+    expect(modelCalls).toBe(1);
+    expect((await studioDetail(ctx, owner, task.id)).planning).toMatchObject({
+      hasSavedResponse: true,
+      canRetry: true,
+    });
+    await controlStudio(ctx, owner, task.id, 'retry-plan');
+    t = await tick(task.id);
+    expect(t.status).toBe('compute_auction');
+    expect(t.plan_attempt).toBe(0);
+    expect(modelCalls).toBe(1);
+  });
+  it('keeps usage held if the planning response cannot be committed atomically with settlement', async () => {
+    const task = await create();
+    let t = await tick(task.id);
+    await pool.query(
+      "UPDATE broker_token_orders SET closes_at=clock_timestamp()-interval '1 second' WHERE id=$1",
+      [t.model_order_id],
+    );
+    await closeTokenAuction(ctx, t.model_order_id);
+    await pool.query(
+      `CREATE FUNCTION reject_planning_result() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.response_cipher IS NOT NULL THEN RAISE EXCEPTION 'Synthetic artifact persistence failure'; END IF; RETURN NEW; END $$`,
+    );
+    await pool.query(
+      `CREATE TRIGGER fail_planning_result BEFORE UPDATE ON broker_studio_plan_attempts FOR EACH ROW EXECUTE FUNCTION reject_planning_result()`,
+    );
+    try {
+      t = await tick(task.id);
+    } finally {
+      await pool.query('DROP TRIGGER fail_planning_result ON broker_studio_plan_attempts');
+      await pool.query('DROP FUNCTION reject_planning_result()');
+    }
+    expect(t.status).toBe('needs_attention');
+    expect(modelCalls).toBe(1);
+    const request = (
+      await pool.query(
+        'SELECT status,input_tokens,output_tokens FROM broker_inference_requests WHERE source_task_id=$1',
+        [task.id],
+      )
+    ).rows[0];
+    expect(request).toEqual({ status: 'outcome_unknown', input_tokens: null, output_tokens: null });
+    const pack = (
+      await pool.query(
+        'SELECT consumed_input,held_input FROM broker_token_packs WHERE grant_id=$1',
+        [t.grant_id],
+      )
+    ).rows[0];
+    expect(Number(pack.consumed_input)).toBe(0);
+    expect(Number(pack.held_input)).toBeGreaterThan(0);
+    expect((await studioDetail(ctx, owner, task.id)).planning).toMatchObject({
+      canRetry: false,
+      hasSavedResponse: false,
+    });
+    await tick(task.id);
+    expect(modelCalls).toBe(1);
+  });
+  it('allows one owner-authorized legacy repair, blocks other tenants, and never repeats the old operation', async () => {
+    invalidPlan = true;
+    const task = await create();
+    let t = await tick(task.id);
+    await pool.query(
+      "UPDATE broker_token_orders SET closes_at=clock_timestamp()-interval '1 second' WHERE id=$1",
+      [t.model_order_id],
+    );
+    await closeTokenAuction(ctx, t.model_order_id);
+    t = await tick(task.id);
+    await pool.query('DELETE FROM broker_studio_plan_attempts WHERE task_id=$1', [task.id]);
+    expect((await studioDetail(ctx, owner, task.id)).planning).toMatchObject({
+      failureCode: 'missing_response',
+      canRetry: true,
+    });
+    await expect(controlStudio(ctx, other, task.id, 'retry-plan')).rejects.toThrow('not found');
+    await expect(
+      controlStudio(
+        ctx,
+        { ...owner, apiKey: { id: randomUUID(), grantId: t.grant_id, scopes: [], limits: {} } },
+        task.id,
+        'retry-plan',
+      ),
+    ).rejects.toThrow('signed-in owner');
+    invalidPlan = false;
+    await controlStudio(ctx, owner, task.id, 'retry-plan');
+    t = await tick(task.id);
+    expect(t.status).toBe('compute_auction');
+    expect(modelCalls).toBe(2);
+    const operations = (
+      await pool.query(
+        'SELECT operation_key FROM broker_inference_requests WHERE grant_id=$1 ORDER BY created_at',
+        [t.grant_id],
+      )
+    ).rows.map((r) => r.operation_key);
+    expect(operations).toEqual([planOperation(task.id, 0), planOperation(task.id, 1)]);
+  });
+  it('expires retained planning replies with task artifacts while preserving diagnostic metadata', async () => {
+    const task = await create();
+    await planned(task.id);
+    await pool.query(
+      "UPDATE broker_studio_tasks SET artifacts_expire_at=clock_timestamp()-interval '1 second' WHERE id=$1",
+      [task.id],
+    );
+    await maintainStudio(ctx);
+    const attempt = (
+      await pool.query(
+        'SELECT response_cipher,finish_reason FROM broker_studio_plan_attempts WHERE task_id=$1',
+        [task.id],
+      )
+    ).rows[0];
+    expect(attempt).toEqual({ response_cipher: null, finish_reason: 'stop' });
+    expect(
+      (await pool.query('SELECT plan_input_cipher FROM broker_studio_tasks WHERE id=$1', [task.id]))
+        .rows[0].plan_input_cipher,
+    ).toBeNull();
   });
   it('stops an open compute auction, prevents a late award, and releases only unspent funding', async () => {
     const task = await create();
@@ -514,6 +745,9 @@ describe.skipIf(!url)('Studio task budget and lifecycle (disposable Postgres)', 
     expect(t.plan_request_id).toBeTruthy();
     await tick(task.id);
     expect(modelCalls).toBe(1);
+    await expect(controlStudio(ctx, owner, task.id, 'retry-plan')).rejects.toThrow(
+      'cannot be retried',
+    );
     await controlStudio(ctx, owner, task.id, 'stop');
     t = await tick(task.id);
     expect(t.status).toBe('needs_attention');
@@ -522,6 +756,13 @@ describe.skipIf(!url)('Studio task budget and lifecycle (disposable Postgres)', 
       await pool.query('SELECT held_output FROM broker_token_packs WHERE grant_id=$1', [t.grant_id])
     ).rows[0];
     expect(Number(held.held_output)).toBeGreaterThan(0);
+    expect((await studioDetail(ctx, owner, task.id)).planning).toMatchObject({
+      requestStatus: 'outcome_unknown',
+      canRetry: false,
+    });
+    await expect(controlStudio(ctx, owner, task.id, 'retry-plan')).rejects.toThrow(
+      'closed or expired',
+    );
     expect(
       (await pool.query('SELECT count(*)::int n FROM broker_studio_usage_samples')).rows[0].n,
     ).toBe(0);
@@ -695,6 +936,26 @@ describe.skipIf(!url)('Studio task budget and lifecycle (disposable Postgres)', 
     expect(JSON.stringify(plan)).toContain('broker_studio_usage_training');
     expect(plan[0].Plan['Actual Rows']).toBe(200);
     expect(JSON.stringify(plan)).not.toContain('Seq Scan');
+    await pool.query(
+      `INSERT INTO broker_studio_plan_attempts(task_id,attempt,response_cipher)
+      SELECT id,0,repeat('opaque-body',500) FROM broker_studio_tasks WHERE buyer_id=$1`,
+      [owner.id],
+    );
+    await pool.query('ANALYZE broker_studio_plan_attempts');
+    const historyId = (await pool.query('SELECT task_id FROM broker_studio_plan_attempts LIMIT 1'))
+      .rows[0].task_id;
+    const diagnostic = (await pool.query(PLAN_DIAGNOSTICS_SELECT, [historyId, 0])).rows;
+    expect(diagnostic).toHaveLength(1);
+    expect(JSON.stringify(diagnostic)).not.toContain('opaque-body');
+    expect(JSON.stringify(diagnostic).length).toBeLessThan(500);
+    const diagnosticPlan = (
+      await pool.query('EXPLAIN(ANALYZE,BUFFERS,FORMAT JSON) ' + PLAN_DIAGNOSTICS_SELECT, [
+        historyId,
+        0,
+      ])
+    ).rows[0]['QUERY PLAN'];
+    expect(JSON.stringify(diagnosticPlan)).toContain('broker_studio_plan_attempts_pkey');
+    expect(diagnosticPlan[0].Plan['Actual Rows']).toBe(1);
     const task = await create(),
       state = await tick(task.id);
     const summary = await studioDetail(ctx, owner, task.id);

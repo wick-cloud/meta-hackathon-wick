@@ -64,6 +64,33 @@ function detail(): StudioDetail {
     },
   };
 }
+function pendingPlan(): StudioDetail {
+  const data = detail();
+  const now = new Date().toISOString();
+  Object.assign(data.task, {
+    status: 'needs_attention',
+    executionStartedAt: null,
+    verifiedAt: null,
+    completedAt: null,
+    summary: null,
+    returnedCents: 0,
+    availableCents: 75,
+    deadlineAt: new Date(Date.now() + 30 * 60000).toISOString(),
+  });
+  data.modelPurchases = [
+    { id: 'model-order', status: 'awarded', provider: 'baseten', priceCents: 25, closesAt: now },
+  ];
+  data.events = [
+    {
+      id: 'planning-event',
+      kind: 'meta',
+      title: 'Planning needs review',
+      message: 'The response could not be accepted. No VM has been purchased.',
+      createdAt: now,
+    },
+  ];
+  return data;
+}
 async function fixture(page: Page, data: StudioDetail) {
   const writes: string[] = [];
   await page.route('**/api/**', async (route) => {
@@ -124,4 +151,125 @@ test('learned diagnostics and unresolved usage remain readable on a phone', asyn
     .evaluateAll((cells) => cells.filter((c) => c.scrollWidth > c.clientWidth + 1).length);
   expect(overflowing).toBe(0);
   await card.screenshot({ path: info.outputPath('usage-estimate-phone.png') });
+});
+
+test('a settled legacy planning failure offers an explicit existing-quota repair', async ({
+  page,
+}) => {
+  const data = pendingPlan();
+  data.task.status = 'needs_attention';
+  data.task.blockedReason =
+    'The planning call settled, but its response is unavailable for recovery. No VM has been purchased.';
+  data.planning = {
+    attempt: 1,
+    requestId: 'request',
+    requestStatus: 'settled',
+    finishReason: null,
+    outputTokens: 2048,
+    maximumOutputTokens: 2048,
+    failureCode: 'missing_response',
+    canRetry: true,
+    hasSavedResponse: false,
+  };
+  await fixture(page, data);
+  const card = page.getByRole('region', { name: 'Planning recovery' });
+  await expect(card.getByText('Attempt 1 of 2', { exact: true })).toBeVisible();
+  await expect(card.getByText(/2,048 output tokens used/)).toBeVisible();
+  await expect(
+    card.getByRole('button', { name: 'Retry planning with existing quota', exact: true }),
+  ).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Resume after review', exact: true })).toHaveCount(
+    0,
+  );
+  const writes: string[] = [];
+  await page.route('**/api/studio/tasks/' + id + '/retry-plan', async (route) => {
+    writes.push(route.request().method());
+    data.task.status = 'planning';
+    data.task.blockedReason = null;
+    data.planning = null;
+    await route.fulfill({ json: data });
+  });
+  await card
+    .getByRole('button', { name: 'Retry planning with existing quota', exact: true })
+    .click();
+  await expect(page.getByRole('region', { name: 'Planning recovery' })).toHaveCount(0);
+  expect(writes).toEqual(['POST']);
+});
+
+test('unknown planning usage offers inspection without another generation', async ({ page }) => {
+  const data = pendingPlan();
+  data.task.status = 'needs_attention';
+  data.task.blockedReason = 'The planning call has unresolved usage. It will not be resent.';
+  data.planning = {
+    attempt: 1,
+    requestId: 'request',
+    requestStatus: 'outcome_unknown',
+    finishReason: null,
+    outputTokens: null,
+    maximumOutputTokens: 2048,
+    failureCode: 'unresolved',
+    canRetry: false,
+    hasSavedResponse: false,
+  };
+  await fixture(page, data);
+  await expect(page.getByText(/a replacement call will not be sent/)).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: /Retry planning|Resume after review/ }),
+  ).toHaveCount(0);
+});
+
+test('an exhausted planning repair shows its finish reason and remains readable on a phone', async ({
+  page,
+}, info) => {
+  const data = pendingPlan();
+  data.task.status = 'needs_attention';
+  data.task.blockedReason =
+    'Muse reached the 2,048-token planning response limit. The single planning repair has been used.';
+  data.planning = {
+    attempt: 2,
+    requestId: 'request',
+    requestStatus: 'settled',
+    finishReason: 'length',
+    outputTokens: 2048,
+    maximumOutputTokens: 2048,
+    failureCode: 'truncated',
+    canRetry: false,
+    hasSavedResponse: false,
+  };
+  await page.setViewportSize({ width: 390, height: 844 });
+  await fixture(page, data);
+  await expect(page.getByText(/Finish reason: length/)).toBeVisible();
+  await expect(page.getByText('Attempt 2 of 2', { exact: true })).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: /Retry planning|Resume after review/ }),
+  ).toHaveCount(0);
+  expect(
+    await page.evaluate(() => document.documentElement.scrollWidth - innerWidth),
+  ).toBeLessThanOrEqual(1);
+  await page.screenshot({ path: info.outputPath('planning-recovery-phone.png'), fullPage: true });
+});
+
+test('a saved response offers recovery before another paid generation', async ({ page }) => {
+  const data = pendingPlan();
+  data.planning = {
+    attempt: 2,
+    requestId: 'request',
+    requestStatus: 'settled',
+    finishReason: 'stop',
+    outputTokens: 300,
+    maximumOutputTokens: 2048,
+    failureCode: null,
+    canRetry: true,
+    hasSavedResponse: true,
+  };
+  await fixture(page, data);
+  await expect(
+    page.getByText(/Recovery validates it before considering another model call/),
+  ).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: 'Resume saved planning response', exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: 'Retry planning with existing quota', exact: true }),
+  ).toHaveCount(0);
 });
