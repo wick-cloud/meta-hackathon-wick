@@ -154,6 +154,14 @@ describe('inference runtime enablement and qualification', () => {
     expect(inputReservation(next, compatibility)).toBeGreaterThan(
       4128 + Buffer.byteLength(compatibility.messages[0].content),
     );
+    const directives =
+      'Reasoning effort Reasoning Effort reasoning effort REASONING EFFORT '.repeat(500);
+    expect(inputReservation(next, { messages: [{ role: 'system', content: directives }] })).toBe(
+      4128 + Buffer.byteLength(directives) + 4 * 500 * 2,
+    );
+    expect(inputReservation(next, { messages: [{ role: 'user', content: directives }] })).toBe(
+      4128 + Buffer.byteLength(directives),
+    );
     const invalid = await certifiedRuntime([
       certificate('baseten', { fixedInputUpperBound: 4000, inputAccounting: 'utf8-bytes-v1' }),
     ]);
@@ -243,6 +251,8 @@ describe('inference runtime enablement and qualification', () => {
     ['fractional input bound', { fixedInputUpperBound: 1.5 }],
     ['zero input bound', { fixedInputUpperBound: 0 }],
     ['excessive output bound', { maximumOutputTokens: 8193 }],
+    ['zero output minimum', { minimumOutputTokens: 0 }],
+    ['inverted output range', { minimumOutputTokens: 512, maximumOutputTokens: 256 }],
     ['unexpected field', { undocumentedFallback: true }],
   ])('fails closed for %s', async (_name, patch) => {
     const runtime = await certifiedRuntime([certificate('baseten', patch)]);
@@ -323,6 +333,7 @@ describe('inference runtime enablement and qualification', () => {
       { revision: 'accounting-contract-v2' },
       { fixedInputUpperBound: 65536 },
       { maximumOutputTokens: 2048 },
+      { minimumOutputTokens: 256 },
     ]) {
       const changed = (await certifiedRuntime([certificate('baseten', patch)])).routes.get(
         'baseten',
@@ -333,6 +344,26 @@ describe('inference runtime enablement and qualification', () => {
 });
 
 describe('single-attempt provider requests and authoritative usage', () => {
+  it('rejects output caps outside the certified range without contacting the provider', async () => {
+    const fetcher = vi.fn<typeof fetch>();
+    const native = (
+      await certifiedRuntime([certificate('modal', { minimumOutputTokens: 256 })])
+    ).routes.get('modal')!;
+    expect(routeView(native).reason).toContain('256');
+    await expect(
+      dispatchReal(native, { ...input, max_tokens: 8 }, 'below-minimum', fetcher),
+    ).rejects.toMatchObject({ code: 'unqualified_output_limit', definite: true });
+    await expect(
+      dispatchReal(native, { ...input, max_tokens: 4097 }, 'above-maximum', fetcher),
+    ).rejects.toMatchObject({ code: 'unqualified_output_limit', definite: true });
+    expect(fetcher).not.toHaveBeenCalled();
+    const explicitDefault = (
+      await certifiedRuntime([certificate('baseten', { minimumOutputTokens: 1 })])
+    ).routes.get('baseten')!;
+    expect(explicitDefault.fingerprint).toBe(
+      (await certifiedRuntime([certificate()])).routes.get('baseten')!.fingerprint,
+    );
+  });
   it.each(['baseten', 'modal'] as const)(
     'requests native JSON only for opted-in internal %s calls',
     async (provider) => {

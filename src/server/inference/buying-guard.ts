@@ -78,6 +78,7 @@ export async function allowance(
       !p.quarantined_at &&
       p.route_fingerprint === p.fingerprint &&
       bound > 0 &&
+      outputPerCall >= Number(p.snapshot.minimumOutputTokens ?? 1) &&
       outputPerCall <= p.max_output_tokens
     )
       result.eligibleCalls += Math.min(

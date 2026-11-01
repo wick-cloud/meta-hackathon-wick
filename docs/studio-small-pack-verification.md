@@ -1,4 +1,4 @@
-# Studio small-pack verification — 2026-11-01 UTC
+# Studio small-pack verification — October 31, 2026 (America/Vancouver)
 
 Base: `ab43fe8` (PR #31). Checks ran against a local Broker app and disposable PostgreSQL 17 databases. Baseten and Modal inference, Wick provisioning and guest execution were real. Production Railway records, variables, credentials and routes were not changed.
 
@@ -14,20 +14,20 @@ Each run used a fresh $1 pilot wallet, one published inference seller and one re
 
 The task added a Python greeting module and stdlib regression tests to the pinned public `octocat/Hello-World` repository. During the compute auction, an owner-issued grant key made three real metered calls to exhaust the initial output quota. No balances, usage receipts or auction clocks were overwritten. Inference consumed prepaid quota without another monetary charge. The subsequent coding job had to buy more through the normal marketplace.
 
-| Check | Baseten | Modal |
-| --- | ---: | ---: |
-| Expected input / output | 17,324 / 4,240 | 17,324 / 4,240 |
-| First purchased input / output | 19,057 / 4,664 | 19,057 / 4,664 |
-| Real requests, including three load calls | 14 | 12 |
-| Task-only settled input / output | 12,280 / 3,453 | 9,864 / 3,691 |
-| Refill auctions | 6 | 5 |
-| Broker model purchases | $0.2181 | $0.1934 |
-| Broker compute charge | $0.0300 | $0.0300 |
-| Unspent credit returned | $0.7519 | $0.7766 |
-| Unresolved calls | 0 | 0 |
-| Guest tests, retained patch, browser receipt | Passed | Passed |
-| One logical native allocation, original deadline | Passed | Passed |
-| VM cleanup confirmed | Yes | Yes |
+| Check                                            |        Baseten |          Modal |
+| ------------------------------------------------ | -------------: | -------------: |
+| Expected input / output                          | 17,324 / 4,240 | 17,324 / 4,240 |
+| First purchased input / output                   | 19,057 / 4,664 | 19,057 / 4,664 |
+| Real requests, including three load calls        |             14 |             12 |
+| Task-only settled input / output                 | 12,280 / 3,453 |  9,864 / 3,691 |
+| Refill auctions                                  |              6 |              5 |
+| Broker model purchases                           |        $0.2181 |        $0.1934 |
+| Broker compute charge                            |        $0.0300 |        $0.0300 |
+| Unspent credit returned                          |        $0.7519 |        $0.7766 |
+| Unresolved calls                                 |              0 |              0 |
+| Guest tests, retained patch, browser receipt     |         Passed |         Passed |
+| One logical native allocation, original deadline |         Passed |         Passed |
+| VM cleanup confirmed                             |            Yes |            Yes |
 
 These Broker prices use the test seller's published $1.70/M input and $5.60/M output ask, with the existing 15% provider fee. They are pilot wallet amounts, separate from native provider invoices and external payment collection. Native cleanup acknowledgment does not establish asynchronous physical purge.
 
@@ -57,4 +57,4 @@ Live tests are opt-in: `RUN_STUDIO_LIVE_TEST=1`, `STUDIO_LIVE_PROVIDER`, a fresh
 
 ## Rollout boundary
 
-Finite live probes do not prove accounting for every accepted input or renew qualification. The request-sized UTF-8 method and native JSON behavior require independent operator review. Production certificates were not changed. A legacy fixed-context route cannot start new automatic Studio tasks under this change. Before rollout, reconcile/retire old commitments and install reviewed certificates with the new accounting fingerprint; existing manual packs and accepted prices are not rewritten. This branch was not deployed.
+Finite live probes do not prove accounting for every accepted input or renew qualification. At the time of these Studio runs, production certificates were not changed and the branch was not deployed. The subsequent [operator certificate review](verification/accounting-certificate-review-2026-10-31.md) approves Baseten's request-sized contract and records Modal's blockers. A legacy fixed-context route cannot start new automatic Studio tasks under this change. Before rollout, reconcile/retire old commitments and install reviewed certificates with the new accounting fingerprint; existing manual packs and accepted prices are not rewritten.

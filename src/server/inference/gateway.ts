@@ -155,7 +155,7 @@ async function settleLocked(
     !Number(updated.held_input) &&
     !Number(updated.held_output) &&
     (Number(updated.available_input) < Number(pack.snapshot.minimumInputReservation) ||
-      !Number(updated.available_output))
+      Number(updated.available_output) < Number(pack.snapshot.minimumOutputTokens ?? 1))
   )
     await retirePackLocked(db, updated, 'quota_exhausted');
   await db.query(
@@ -429,6 +429,7 @@ async function completeInternal(
         [grantId, actor.apiKey?.packId ?? null],
       )
     ).rows;
+    let requiredOutputMinimum: number | undefined;
     for (const pack of packs) {
       const route = routes.find((r) => r.provider === pack.provider);
       const native = rt.routes.get(pack.provider as InferenceProvider);
@@ -446,6 +447,11 @@ async function completeInternal(
       } catch {
         continue;
       }
+      const minimumOutput = native.minimumOutputTokens ?? 1;
+      if (input.max_tokens < minimumOutput) {
+        requiredOutputMinimum = Math.min(requiredOutputMinimum ?? minimumOutput, minimumOutput);
+        continue;
+      }
       const inputBound = inputReservation(native, input);
       const outputBound = source
         ? Math.min(input.max_tokens, Number(pack.available_output))
@@ -455,7 +461,10 @@ async function completeInternal(
         Number(pack.available_input) < inputBound ||
         Number(pack.available_output) < outputBound ||
         outputBound <
-          Math.min(input.max_tokens, source ? MIN_TASK_OUTPUT_RESERVATION : input.max_tokens)
+          Math.max(
+            minimumOutput,
+            Math.min(input.max_tokens, source ? MIN_TASK_OUTPUT_RESERVATION : input.max_tokens),
+          )
       )
         continue;
       const now = await clock(db);
@@ -506,6 +515,12 @@ async function completeInternal(
       });
       return { request, native, pack };
     }
+    if (requiredOutputMinimum)
+      failure(
+        409,
+        'output_limit_unqualified',
+        `These prepaid routes require max_tokens of at least ${requiredOutputMinimum}. No provider call was sent.`,
+      );
     failure(
       409,
       'token_allowance_exceeded',

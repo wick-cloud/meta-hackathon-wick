@@ -175,6 +175,7 @@ function snapshot(row: Row, native: RuntimeRoute) {
     fingerprint: row.fingerprint,
     revision: row.revision,
     minimumInputReservation: minimumInputReservation(native),
+    ...(native.minimumOutputTokens ? { minimumOutputTokens: native.minimumOutputTokens } : {}),
     ...(native.inputAccounting
       ? { inputAccounting: native.inputAccounting, maximumInputReservation: native.inputBound }
       : {}),
@@ -235,6 +236,7 @@ export async function quotes(
       if (
         !offeringOpen(row, now) ||
         input.inputTokens < minimumInputReservation(native) ||
+        input.outputTokens < (native.minimumOutputTokens ?? 1) ||
         native.validUntil < new Date(grant.expires_at).getTime() ||
         !hasCapacity(row, input.inputTokens, input.outputTokens)
       )
@@ -418,6 +420,7 @@ export async function createTokenOrder(
       const native = runtime(ctx).routes.get(row.provider as InferenceProvider)!;
       if (
         input.inputTokens >= minimumInputReservation(native) &&
+        input.outputTokens >= (native.minimumOutputTokens ?? 1) &&
         native.validUntil >= new Date(grant.expires_at).getTime()
       )
         accountingCompatible = true;
@@ -426,7 +429,7 @@ export async function createTokenOrder(
       failure(
         409,
         'route_unavailable',
-        'No qualified route can supply a usable pack through this grant’s expiry. Check its minimum input reservation and qualification.',
+        'No qualified route can supply a usable pack through this grant’s expiry. Check its minimum input/output reservations and qualification.',
       );
     let quote: Row | undefined;
     if (input.mode === 'instant') {
@@ -458,6 +461,7 @@ export async function createTokenOrder(
       if (
         !offeringOpen(row, now) ||
         input.inputTokens < minimumInputReservation(native) ||
+        input.outputTokens < (native.minimumOutputTokens ?? 1) ||
         native.validUntil < new Date(grant.expires_at).getTime() ||
         !hasCapacity(row, input.inputTokens, input.outputTokens)
       )
@@ -650,6 +654,7 @@ export async function closeTokenAuction(ctx: AppContext, id: string) {
       const native = runtime(ctx).routes.get(row.provider as InferenceProvider)!;
       if (
         order.input_tokens < minimumInputReservation(native) ||
+        order.output_tokens < (native.minimumOutputTokens ?? 1) ||
         native.validUntil < new Date(grant.expires_at).getTime()
       )
         continue;

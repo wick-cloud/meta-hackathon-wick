@@ -28,6 +28,7 @@ const qualification = z
     fixedInputUpperBound: z.number().int().min(1).max(10_000_000),
     inputAccounting: z.literal('utf8-bytes-v1').optional(),
     maximumOutputTokens: z.number().int().min(1).max(8192),
+    minimumOutputTokens: z.number().int().min(1).max(8192).optional(),
     authoritativeUsage: z.literal(true),
     outputIncludesReasoning: z.literal(true),
     allAcceptedTextCovered: z.literal(true),
@@ -36,6 +37,9 @@ const qualification = z
   .strict()
   .refine((c) => !c.inputAccounting || c.fixedInputUpperBound >= 4128, {
     message: 'The UTF-8 accounting contract must cover its framing reservation.',
+  })
+  .refine((c) => (c.minimumOutputTokens ?? 1) <= c.maximumOutputTokens, {
+    message: 'The qualified output range must be nonempty.',
   });
 export interface RuntimeRoute {
   provider: InferenceProvider;
@@ -46,6 +50,7 @@ export interface RuntimeRoute {
   inputBound: number;
   inputAccounting?: 'utf8-bytes-v1';
   maximumOutputTokens: number;
+  minimumOutputTokens?: number;
   validUntil: number;
   nativeModel: string;
   baseUrl: string;
@@ -113,12 +118,23 @@ export function inputReservation(
     route.inputBound,
     4096 +
       input.messages.reduce((n, m) => {
+        // Muse's published system template expands these directive spellings.
+        // Bound the rendered form as well as Unicode normalization, not just
+        // the client bytes. The replacement changes only the byte envelope;
+        // dispatch still sends the original message unchanged.
+        const rendered =
+          m.role === 'system'
+            ? m.content.replace(
+                /Reasoning effort|Reasoning Effort|reasoning effort|REASONING EFFORT/g,
+                (directive) => `${directive.slice(0, -6)}strength`,
+              )
+            : m.content;
         // Compatibility decomposition can expand a Unicode scalar substantially.
         // Cover raw text and every standard normalization form before byte BPE.
         const bytes = Math.max(
-          Buffer.byteLength(m.content, 'utf8'),
+          Buffer.byteLength(rendered, 'utf8'),
           ...(['NFC', 'NFD', 'NFKC', 'NFKD'] as const).map((form) =>
-            Buffer.byteLength(m.content.normalize(form), 'utf8'),
+            Buffer.byteLength(rendered.normalize(form), 'utf8'),
           ),
         );
         return n + 32 + bytes;
@@ -182,6 +198,11 @@ export async function dispatchReal(
 ): Promise<AdapterResult> {
   if (!route.qualified || route.validUntil <= Date.now() || !route.apiKey)
     throw new InferenceUpstreamError('unqualified_route', true);
+  if (
+    input.max_tokens < (route.minimumOutputTokens ?? 1) ||
+    input.max_tokens > route.maximumOutputTokens
+  )
+    throw new InferenceUpstreamError('unqualified_output_limit', true);
   try {
     const response = await fetcher(`${route.baseUrl}/chat/completions`, {
       method: 'POST',
@@ -280,7 +301,7 @@ export async function createInferenceRuntime(config: Config): Promise<InferenceR
       mode === 'fixture'
         ? 'Simulated tokens and provider responses. No real inference is sold.'
         : qualified
-          ? 'Operator-qualified buffered text accounting.'
+          ? `Operator-qualified buffered text accounting.${(cert?.minimumOutputTokens ?? 1) > 1 ? ` Request output caps must be ${cert!.minimumOutputTokens}–${cert!.maximumOutputTokens} tokens.` : ''}`
           : fileError
             ? 'Accounting qualification is invalid; real purchases are disabled.'
             : !nativeModel
@@ -306,6 +327,9 @@ export async function createInferenceRuntime(config: Config): Promise<InferenceR
               inputBound: cert.fixedInputUpperBound,
               maximumOutputTokens: cert.maximumOutputTokens,
               ...(cert.inputAccounting ? { inputAccounting: cert.inputAccounting } : {}),
+              ...((cert.minimumOutputTokens ?? 1) > 1
+                ? { minimumOutputTokens: cert.minimumOutputTokens }
+                : {}),
             }
           : null,
       }),
@@ -314,6 +338,9 @@ export async function createInferenceRuntime(config: Config): Promise<InferenceR
       inputBound: cert?.fixedInputUpperBound ?? 1,
       ...(cert?.inputAccounting ? { inputAccounting: cert.inputAccounting } : {}),
       maximumOutputTokens: cert?.maximumOutputTokens ?? 8192,
+      ...((cert?.minimumOutputTokens ?? 1) > 1
+        ? { minimumOutputTokens: cert!.minimumOutputTokens }
+        : {}),
       validUntil:
         mode === 'fixture' ? Number.MAX_SAFE_INTEGER : cert ? Date.parse(cert.validUntil) : 0,
     });

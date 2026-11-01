@@ -157,6 +157,7 @@ async function modelRoutes(ctx: AppContext, until: Date) {
       native &&
       (native.mode === 'fixture' || native.inputAccounting === 'utf8-bytes-v1') &&
       native.maximumOutputTokens >= 2048 &&
+      (native.minimumOutputTokens ?? 1) <= MIN_TASK_OUTPUT_RESERVATION &&
       native.validUntil >= until.getTime() &&
       offeringOpen(row, new Date())
     )
