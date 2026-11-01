@@ -74,13 +74,14 @@ export async function listAgents(ctx: AppContext, actor: Actor, raw: unknown) {
     ? (
         await ctx.pool.query(
           `SELECT t.grant_id,sum(LEAST(
-    floor(t.available_input/GREATEST(1,CASE WHEN t.source_mode='fixture' THEN ${FIXTURE_BUYING_INPUT_BOUND} ELSE (t.snapshot->>'minimumInputReservation')::numeric END)),
+    floor(t.available_input/GREATEST(1,CASE WHEN t.source_mode='fixture' THEN ${FIXTURE_BUYING_INPUT_BOUND} ELSE COALESCE((t.snapshot->>'maximumInputReservation')::numeric,(t.snapshot->>'minimumInputReservation')::numeric) END)),
     floor(t.available_output/COALESCE(p.output_per_call,512))))::int eligible_calls
     FROM broker_token_packs t JOIN broker_inference_routes r ON r.provider=t.provider
     LEFT JOIN broker_inference_buying_policies p ON p.grant_id=t.grant_id
     WHERE t.grant_id=ANY($1::uuid[]) AND t.status='active' AND t.expires_at>statement_timestamp()
     AND (t.snapshot->>'minimumInputReservation')::numeric>0
     AND r.qualified AND r.quarantined_at IS NULL AND t.route_fingerprint=r.fingerprint
+    AND COALESCE(p.output_per_call,512)>=COALESCE((t.snapshot->>'minimumOutputTokens')::numeric,1)
     AND COALESCE(p.output_per_call,512)<=r.max_output_tokens GROUP BY t.grant_id`,
           [selected.map((r) => r.id)],
         )
@@ -271,6 +272,7 @@ export async function evaluateBuying(
       if (
         offeringOpen(row, now) &&
         rt.validUntil >= new Date(grant.expires_at).getTime() &&
+        policy.output_per_call >= (rt.minimumOutputTokens ?? 1) &&
         policy.output_per_call <= rt.maximumOutputTokens
       )
         eligible.push(row);

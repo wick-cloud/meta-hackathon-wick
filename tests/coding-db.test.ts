@@ -54,7 +54,8 @@ describe.skipIf(!url)('durable coding jobs (disposable PostgreSQL; no live provi
     loseCommand = false,
     loseModel = false,
     testExit = 0,
-    workspaceOverflow = false;
+    workspaceOverflow = false,
+    readContent = '';
   const input = () => ({
     operationKey: randomUUID(),
     repositoryUrl: 'https://github.com/example/average',
@@ -194,7 +195,7 @@ describe.skipIf(!url)('durable coding jobs (disposable PostgreSQL; no live provi
                 : data.action.action === 'read'
                   ? {
                       path: 'average.py',
-                      content: 'def average(items): return sum(items)/len(items)',
+                      content: readContent,
                     }
                   : data.action.action === 'test'
                     ? {
@@ -209,7 +210,7 @@ describe.skipIf(!url)('durable coding jobs (disposable PostgreSQL; no live provi
                           output: 'diff --git a/average.py b/average.py\n+guard empty input\n',
                           truncated: false,
                         }
-                      : { written: true },
+                      : { written: true, path: data.action.path },
           };
           journal.set(key, result);
           if (loseCommand) {
@@ -228,6 +229,7 @@ describe.skipIf(!url)('durable coding jobs (disposable PostgreSQL; no live provi
     loseModel = false;
     testExit = 0;
     workspaceOverflow = false;
+    readContent = 'def average(items): return sum(items)/len(items)';
     actions = [
       { action: 'read', path: 'average.py' },
       {
@@ -337,6 +339,30 @@ describe.skipIf(!url)('durable coding jobs (disposable PostgreSQL; no live provi
     ).rejects.toThrow('grant-bound');
     await expect(codingDetail(ctx, other, job.id)).rejects.toThrow('not found');
   });
+  it('keeps eight command results and compact write progress without duplicating old model output', async () => {
+    actions = [
+      ...Array.from({ length: 6 }, (_, i) => ({
+        action: 'write',
+        path: `test_${i}.py`,
+        content: `# ${i}`,
+      })),
+      { action: 'test' },
+      { action: 'finish', summary: 'Verified the six files.' },
+    ];
+    await buy();
+    const job = await createCodingJob(ctx, owner, input(), verify);
+    const dispatch = vi.mocked(ctx.inference!.dispatch);
+    dispatch.mockClear();
+    await processCodingJob(ctx, job.id);
+    expect((await codingDetail(ctx, owner, job.id)).job.status).toBe('ready');
+    const last = dispatch.mock.calls.at(-1)![1];
+    const context = JSON.parse(last.messages[1]!.content);
+    expect(context.writtenFiles).toEqual(expect.arrayContaining(['test_0.py', 'test_5.py']));
+    expect(context.recentSteps.filter((s: any) => s.kind === 'command')).toHaveLength(8);
+    expect(context.recentSteps.filter((s: any) => s.kind === 'model')).toHaveLength(1);
+    expect(context.recentSteps.some((s: any) => s.result?.result?.path === 'test_0.py')).toBe(true);
+    expect(JSON.stringify(context.writtenFiles)).not.toContain('#');
+  });
   it('serializes concurrent approvals on one VM and preserves the original operation', async () => {
     const outcomes = await Promise.allSettled([
       createCodingJob(ctx, owner, input(), verify),
@@ -346,6 +372,22 @@ describe.skipIf(!url)('durable coding jobs (disposable PostgreSQL; no live provi
     const row = (await pool.query('SELECT count(*) FROM broker_coding_jobs WHERE vm_id=$1', [vmId]))
       .rows[0];
     expect(Number(row.count)).toBe(1);
+  });
+  it('omits oversized escaped context as whole records and still sends valid bounded JSON', async () => {
+    readContent = '\u0000'.repeat(12000);
+    actions = [
+      { action: 'read', path: 'average.py' },
+      { action: 'finish', summary: 'Inspected.' },
+    ];
+    await buy();
+    const job = await createCodingJob(ctx, owner, input(), verify);
+    const dispatch = vi.mocked(ctx.inference!.dispatch);
+    dispatch.mockClear();
+    await processCodingJob(ctx, job.id);
+    expect((await codingDetail(ctx, owner, job.id)).job.status).toBe('ready');
+    const call = dispatch.mock.calls.at(-1)![1];
+    expect(Buffer.byteLength(JSON.stringify(call), 'utf8')).toBeLessThan(65536);
+    expect(JSON.parse(call.messages[1]!.content).contextTruncated).toBe(true);
   });
   it('pauses a command that exits zero after exceeding the workspace bound without spending model quota', async () => {
     workspaceOverflow = true;
@@ -548,6 +590,42 @@ describe.skipIf(!url)('durable coding jobs (disposable PostgreSQL; no live provi
     ).rows[0]['QUERY PLAN'][0];
     expect(JSON.stringify(plan)).toContain('broker_coding_buyer_page');
     expect(plan.Plan['Actual Rows']).toBe(26);
+    await pool.query(
+      `INSERT INTO broker_coding_steps(job_id,sequence,kind,status,payload_cipher,result_cipher,action)
+      SELECT id,0,'command','completed','opaque unrelated payload','opaque unrelated result','write'
+      FROM broker_coding_jobs WHERE environment_id='historical-fixture'`,
+    );
+    await pool.query('ANALYZE broker_coding_steps');
+    await buy();
+    const job = await createCodingJob(ctx, owner, input(), verify);
+    const spy = vi.spyOn(pool, 'query');
+    await processCodingJob(ctx, job.id);
+    const progressReads = spy.mock.calls.filter((c) =>
+      String(c[0]).includes("action='write' AND status='completed'"),
+    );
+    const contextReads = spy.mock.calls.filter((c) => String(c[0]).includes('UNION ALL'));
+    spy.mockRestore();
+    expect(progressReads).toHaveLength(4);
+    expect(contextReads).toHaveLength(4);
+    expect(progressReads.every((c) => String(c[0]).includes('LIMIT 40'))).toBe(true);
+    const progressPlan = (
+      await pool.query('EXPLAIN(ANALYZE,BUFFERS,FORMAT JSON) ' + String(progressReads[0]![0]), [
+        job.id,
+      ])
+    ).rows[0]['QUERY PLAN'][0];
+    expect(JSON.stringify(progressPlan)).toContain('broker_coding_step_action');
+    expect(progressPlan.Plan['Actual Rows']).toBe(1);
+    expect(JSON.stringify(progressPlan)).not.toContain('Seq Scan');
+    const contextPlan = (
+      await pool.query('EXPLAIN(ANALYZE,BUFFERS,FORMAT JSON) ' + String(contextReads[0]![0]), [
+        job.id,
+      ])
+    ).rows[0]['QUERY PLAN'][0];
+    expect(contextPlan.Plan['Actual Rows']).toBeLessThanOrEqual(9);
+    expect(JSON.stringify(contextPlan)).toContain('Index Scan');
+    expect(JSON.stringify(contextPlan)).not.toContain('Seq Scan');
+    if (process.env.CODING_QUERY_EVIDENCE === '1')
+      console.log('Coding progress plan', JSON.stringify(progressPlan));
   });
 });
 import { inflateSync } from 'node:zlib';

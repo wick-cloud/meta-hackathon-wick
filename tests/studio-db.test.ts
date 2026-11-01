@@ -29,7 +29,7 @@ import {
   studioPatch,
   maintainStudio,
 } from '../src/server/coding/studio.js';
-import { processCodingJob, codingDetail } from '../src/server/coding/service.js';
+import { processCodingJob, codingDetail, open } from '../src/server/coding/service.js';
 import { reserveStudioCompute } from '../src/server/coding/studio-budget.js';
 import {
   forecastUsage,
@@ -132,7 +132,7 @@ describe.skipIf(!url)('Studio task budget and lifecycle (disposable Postgres)', 
               'A small Linux VM fits the public Python task at the lowest reviewed price.',
           }
         : (actions.shift() ?? { action: 'finish', summary: 'Ready for review.' });
-      return {
+      const result = {
         id: 'fixture_' + id,
         content: JSON.stringify(data),
         finishReason: 'stop',
@@ -140,6 +140,9 @@ describe.skipIf(!url)('Studio task budget and lifecycle (disposable Postgres)', 
         outputTokens: 80,
         ...(planning ? planningReplies.shift() : undefined),
       };
+      return result.finishReason === 'length'
+        ? { ...result, outputTokens: Math.min(result.outputTokens, call.max_tokens) }
+        : result;
     });
     const command = vi.fn(async (_id: string, { command }: { command: string }) => {
       const encoded = command.match(/'([A-Za-z0-9+/=]+)'$/)![1]!;
@@ -324,6 +327,43 @@ describe.skipIf(!url)('Studio task budget and lifecycle (disposable Postgres)', 
     await cleanupVm(ctx, vmId);
     return tick(id);
   }
+  async function finishExecution(id: string) {
+    for (let round = 0; round < 20; round++) {
+      const t = await tick(id);
+      if (t.verified_at) return;
+      expect(['running', 'provisioning', 'model_auction', 'verifying']).toContain(t.status);
+      if (t.status === 'model_auction' && t.model_order_id) {
+        await pool.query(
+          "UPDATE broker_token_orders SET closes_at=clock_timestamp()-interval '1 second' WHERE id=$1",
+          [t.model_order_id],
+        );
+        await closeTokenAuction(ctx, t.model_order_id);
+      } else if (t.coding_job_id) await processCodingJob(ctx, t.coding_job_id);
+    }
+    throw Error('The fixture task did not finish within its bounded purchase rounds.');
+  }
+  it('corrects an invalid model path within the bounded action retry without sending it to the VM', async () => {
+    actions.unshift({ action: 'read', path: '/repo' });
+    const task = await create(),
+      { task: t, vm } = await ready(task.id);
+    await processCodingJob(ctx, t.coding_job_id);
+    await finishExecution(task.id);
+    await cleaned(task.id, vm.id);
+    const detail = await studioDetail(ctx, owner, task.id);
+    expect(detail.task.status).toBe('completed');
+    expect(detail.task.deadlineAt).toBe(task.deadlineAt);
+    expect(
+      (await pool.query('SELECT action_retries FROM broker_studio_tasks WHERE id=$1', [task.id]))
+        .rows[0].action_retries,
+    ).toBe(1);
+    const commands = (
+      await pool.query(
+        "SELECT payload_cipher FROM broker_coding_steps WHERE job_id=$1 AND kind='command'",
+        [t.coding_job_id],
+      )
+    ).rows;
+    expect(commands.some((r) => open(ctx, r.payload_cipher).path === '/repo')).toBe(false);
+  });
   it('runs one funded task from model auction to verified result and cleanup without manual VM or grant selection', async () => {
     const task = await create();
     expect((await pool.query('SELECT count(*)::int n FROM broker_vms')).rows[0].n).toBe(0);
@@ -331,6 +371,7 @@ describe.skipIf(!url)('Studio task budget and lifecycle (disposable Postgres)', 
     expect(t.execution_started_at).toBeNull();
     await processCodingJob(ctx, t.coding_job_id);
     await tick(task.id);
+    await finishExecution(task.id);
     expect(
       (
         await pool.query(
@@ -361,13 +402,19 @@ describe.skipIf(!url)('Studio task budget and lifecycle (disposable Postgres)', 
         `SELECT kind,count(*)::int n FROM broker_credit_ledger WHERE kind IN('token_purchase','studio_compute') GROUP BY kind`,
       )
     ).rows;
-    expect(ledger.find((r) => r.kind === 'token_purchase')?.n).toBe(1);
+    expect(ledger.find((r) => r.kind === 'token_purchase')?.n).toBe(detail.modelPurchases.length);
     expect(ledger.find((r) => r.kind === 'studio_compute')?.n).toBe(1);
     expect(
       (await pool.query('SELECT count(*)::int n FROM broker_invoices WHERE vm_id=$1', [vm.id]))
         .rows[0].n,
     ).toBe(1);
     expect(modelCalls).toBe(5);
+    const caps = (
+      await pool.query('SELECT reserved_output FROM broker_inference_requests WHERE grant_id=$1', [
+        t.grant_id,
+      ])
+    ).rows;
+    expect(caps.some((r) => r.reserved_output < 4096 && r.reserved_output >= 256)).toBe(true);
     const sample = (
       await pool.query('SELECT * FROM broker_studio_usage_samples WHERE task_id=$1', [task.id])
     ).rows[0];
@@ -502,9 +549,13 @@ describe.skipIf(!url)('Studio task budget and lifecycle (disposable Postgres)', 
     ).toBe(1);
     expect((await pool.query('SELECT count(*)::int n FROM broker_vms')).rows[0].n).toBe(0);
     const calls = vi.mocked(ctx.inference!.dispatch).mock.calls.map((c) => c[1]);
+    expect(
+      vi.mocked(ctx.inference!.dispatch).mock.calls.every((c) => c[3]?.jsonObject === true),
+    ).toBe(true);
     for (const call of calls) {
       expect(call).not.toHaveProperty('reasoning_effort');
-      expect(call.max_tokens).toBe(2048);
+      expect(call.max_tokens).toBeLessThanOrEqual(2048);
+      expect(call.max_tokens).toBeGreaterThanOrEqual(256);
     }
     expect(calls[1]!.messages[0]!.content).toContain('previous settled reply');
     expect(calls[1]!.messages[0]!.content).not.toContain('{"catalogId":');
@@ -530,14 +581,17 @@ describe.skipIf(!url)('Studio task budget and lifecycle (disposable Postgres)', 
     await closeTokenAuction(ctx, t.model_order_id);
     t = await tick(task.id);
     expect(t.status).toBe('needs_attention');
-    expect(t.blocked_reason).toContain('2,048-token planning response limit');
+    const lastCap = vi.mocked(ctx.inference!.dispatch).mock.calls.at(-1)![1].max_tokens;
+    expect(t.blocked_reason).toContain(
+      `${lastCap.toLocaleString('en-US')}-token planning response limit`,
+    );
     expect(t.blocked_reason).toContain('single planning repair has been used');
     expect(modelCalls).toBe(2);
     expect((await studioDetail(ctx, owner, task.id)).planning).toMatchObject({
       attempt: 2,
       failureCode: 'truncated',
       finishReason: 'length',
-      outputTokens: 2048,
+      outputTokens: lastCap,
       canRetry: false,
     });
     await expect(controlStudio(ctx, owner, task.id, 'retry-plan')).rejects.toThrow(
@@ -554,7 +608,7 @@ describe.skipIf(!url)('Studio task budget and lifecycle (disposable Postgres)', 
       ).rows[0].n,
     ).toBe(1);
   });
-  it('completes coding and cleanup after a capped planning reply, without changing model reasoning policy', async () => {
+  it('completes coding and cleanup after a capped planning reply through metered task calls', async () => {
     planningReplies = [{ content: '', finishReason: 'length', outputTokens: 2048 }];
     const task = await create(),
       { task: t, vm } = await ready(task.id);
@@ -957,13 +1011,17 @@ describe.skipIf(!url)('Studio task budget and lifecycle (disposable Postgres)', 
   it('replenishes model allowance after owner funding without buying another VM or extending the deadline', async () => {
     const routes = (await pool.query(OFFER_SELECT)).rows;
     const forecast = forecastUsage(usageFeatures(input().goal, await repo()), []);
-    const sized = sizeUsagePurchase(forecast, { input: 0, output: 0, calls: 0 }, 64000, 4096, 0);
+    const sized = sizeUsagePurchase(forecast, { input: 0, output: 0, calls: 0 }, 1, 256, 0);
     const pack = Math.min(
       ...routes.map((r) => packPrice(r, sized.inputTokens, sized.outputTokens).priceCents),
     );
     const task = await create({ budgetCents: addCents(pack, 12.51) }),
       { task: t, vm } = await ready(task.id);
     const deadline = task.deadlineAt;
+    // A later seller price increase can require owner funding; accepted pack terms stay frozen.
+    await pool.query(
+      'UPDATE broker_token_offerings SET minimum_price_cents=10,revision=revision+1',
+    );
     await pool.query(
       'UPDATE broker_token_packs SET available_output=0,consumed_output=output_tokens WHERE grant_id=$1',
       [t.grant_id],
@@ -985,11 +1043,12 @@ describe.skipIf(!url)('Studio task budget and lifecycle (disposable Postgres)', 
     await tick(task.id);
     await processCodingJob(ctx, t.coding_job_id);
     await tick(task.id);
+    await finishExecution(task.id);
     await cleaned(task.id, vm.id);
     const d = await studioDetail(ctx, owner, task.id);
     expect(d.task.status, d.task.blockedReason ?? '').toBe('completed');
     expect(d.task.deadlineAt).toBe(deadline);
-    expect(d.modelPurchases).toHaveLength(2);
+    expect(d.modelPurchases.length).toBeGreaterThanOrEqual(2);
     expect((await pool.query('SELECT count(*)::int n FROM broker_vms')).rows[0].n).toBe(1);
     expect(modelCalls).toBe(5);
   });

@@ -72,12 +72,13 @@ export async function allowance(
     const bound =
       p.source_mode === 'fixture'
         ? FIXTURE_BUYING_INPUT_BOUND
-        : Number(p.snapshot.minimumInputReservation);
+        : Number(p.snapshot.maximumInputReservation ?? p.snapshot.minimumInputReservation);
     if (
       p.qualified &&
       !p.quarantined_at &&
       p.route_fingerprint === p.fingerprint &&
       bound > 0 &&
+      outputPerCall >= Number(p.snapshot.minimumOutputTokens ?? 1) &&
       outputPerCall <= p.max_output_tokens
     )
       result.eligibleCalls += Math.min(

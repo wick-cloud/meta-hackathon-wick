@@ -28,8 +28,12 @@ import {
   closeGrantLocked,
   offeringOpen,
 } from '../inference/market.js';
-import { completeStudioTask } from '../inference/gateway.js';
-import { boundedJson } from '../inference/runtime.js';
+import { completeStudioTask, completionSchema } from '../inference/gateway.js';
+import {
+  boundedJson,
+  inputReservation,
+  MIN_TASK_OUTPUT_RESERVATION,
+} from '../inference/runtime.js';
 import {
   MAX_PLAN_ATTEMPT,
   planOperation,
@@ -75,6 +79,22 @@ type Candidate = {
   memoryGb: number;
   maximumCents: number;
 };
+/** The exact saved next request survives refill, restart and auction fallback. */
+async function nextModelMessages(ctx: AppContext, t: Row) {
+  if (!t.coding_job_id) return planMessages(t.goal, t.test_command, open(ctx, t.plan_input_cipher));
+  const step = (
+    await ctx.pool.query(
+      `SELECT payload_cipher FROM broker_coding_steps WHERE job_id=$1 AND kind='model' AND status='pending' ORDER BY sequence LIMIT 1`,
+      [t.coding_job_id],
+    )
+  ).rows[0];
+  if (!step?.payload_cipher)
+    throw new HttpError(
+      409,
+      'The saved next model request is required before buying more allowance.',
+    );
+  return completionSchema.shape.messages.parse(open(ctx, step.payload_cipher).messages);
+}
 const iso = (v: unknown) => (v ? new Date(v as string).toISOString() : null);
 const LIST_COLUMNS = `t.id,left(t.goal,160) goal,t.repository_url,t.commit_sha,t.status,t.source_mode,t.compute_charged_cents,
  t.blocked_reason,t.plan_cipher,t.artifacts_expire_at,t.deadline_at,t.created_at,t.execution_started_at,t.verified_at,
@@ -135,7 +155,9 @@ async function modelRoutes(ctx: AppContext, until: Date) {
     // Capability qualification stays server-side; the customer buys a task budget.
     if (
       native &&
+      (native.mode === 'fixture' || native.inputAccounting === 'utf8-bytes-v1') &&
       native.maximumOutputTokens >= 2048 &&
+      (native.minimumOutputTokens ?? 1) <= MIN_TASK_OUTPUT_RESERVATION &&
       native.validUntil >= until.getTime() &&
       offeringOpen(row, new Date())
     )
@@ -564,8 +586,35 @@ async function buyModelAllowance(ctx: AppContext, t: Row, actor: Actor, instant 
     );
     return;
   }
+  const messages = await nextModelMessages(ctx, t);
+  if (t.coding_job_id) {
+    const packs = (
+      await ctx.pool.query(
+        `SELECT provider,route_fingerprint,available_input,available_output FROM broker_token_packs
+       WHERE grant_id=$1 AND status='active' AND expires_at>clock_timestamp() ORDER BY expires_at,id LIMIT 10`,
+        [t.grant_id],
+      )
+    ).rows;
+    if (
+      packs.some((p) => {
+        const route = routes.find((r) => r.provider === p.provider);
+        const native = ctx.inference!.routes.get(p.provider);
+        return (
+          route &&
+          native &&
+          p.route_fingerprint === native.fingerprint &&
+          Number(p.available_input) >= inputReservation(native, { messages }) &&
+          Number(p.available_output) >= Math.min(t.model_output, MIN_TASK_OUTPUT_RESERVATION)
+        );
+      })
+    ) {
+      await controlCoding(ctx, actor, t.coding_job_id, 'resume');
+      await stage(ctx, t, 'running');
+      return;
+    }
+  }
   const bound = Math.max(
-    ...routes.map((r) => (r.source_mode === 'fixture' ? 64000 : Number(r.input_bound))),
+    ...routes.map((r) => inputReservation(ctx.inference!.routes.get(r.provider)!, { messages })),
   );
   const estimate = await ensureUsageEstimate(ctx, t, bound),
     inputTokens = estimate.input_tokens,
@@ -578,6 +627,10 @@ async function buyModelAllowance(ctx: AppContext, t: Row, actor: Actor, instant 
   ).rows[0];
   const available = Math.min(Number(g.available_cents), Number(g.max_purchase_cents)),
     asks = routes
+      .filter(
+        (r) =>
+          inputReservation(ctx.inference!.routes.get(r.provider)!, { messages }) <= inputTokens,
+      )
       .filter((r) => instant || r.auto_bid)
       .map((r) => packPrice(r, inputTokens, outputTokens, instant).priceCents);
   if (!asks.length) {
@@ -782,9 +835,10 @@ export async function processStudioTask(
         }
         const context = await repoContext(t);
         t.usage_features = usageFeatures(t.goal, context);
+        t.plan_input_cipher = seal(ctx, { candidates, context });
         await ctx.pool.query(
           'UPDATE broker_studio_tasks SET plan_input_cipher=$3,usage_features=$4 WHERE id=$1 AND lease_token=$2',
-          [id, token, seal(ctx, { candidates, context }), JSON.stringify(t.usage_features)],
+          [id, token, t.plan_input_cipher, JSON.stringify(t.usage_features)],
         );
         await reserveStudioCompute(
           ctx,
@@ -979,7 +1033,7 @@ export async function processStudioTask(
             `plan-invalid:${t.plan_attempt}`,
             'meta',
             repair ? 'Muse is repairing its plan' : 'Planning needs review',
-            planFailureMessage(checked.failure, t.model_output) +
+            planFailureMessage(checked.failure, attempt.reserved_output ?? t.model_output) +
               (repair
                 ? ' The call settled; one shorter attempt will use existing prepaid quota.'
                 : ''),
@@ -1004,7 +1058,7 @@ export async function processStudioTask(
             ctx,
             t,
             'needs_attention',
-            planFailureMessage(checked.failure, t.model_output) +
+            planFailureMessage(checked.failure, attempt.reserved_output ?? t.model_output) +
               (t.plan_attempt === MAX_PLAN_ATTEMPT
                 ? ' The single planning repair has been used.'
                 : ''),

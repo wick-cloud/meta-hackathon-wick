@@ -7,7 +7,7 @@ import {
   listAgents,
   purchaseReceipt,
 } from '../src/server/inference/buying.js';
-import { FIXTURE_BUYING_INPUT_BOUND } from '../src/server/inference/buying-guard.js';
+import { FIXTURE_BUYING_INPUT_BOUND, allowance } from '../src/server/inference/buying-guard.js';
 import { proposeTokenSupply } from '../src/server/inference/supply.js';
 import { createMuseAdapter } from '../src/server/integrations/muse.js';
 import { randomUUID } from 'node:crypto';
@@ -110,11 +110,12 @@ describe.skipIf(!url)(
       max_tokens: 64,
     };
     const inputBound = fixtureInputTokens(call);
-    async function grant(budgetCents = 1000) {
+    async function grant(budgetCents = 1000, extra: Record<string, unknown> = {}) {
       return createGrant(ctx, owner, {
         operationKey: randomUUID(),
         name: 'Agent task',
         budgetCents,
+        ...extra,
       });
     }
     async function agent(grantId: string) {
@@ -260,6 +261,155 @@ describe.skipIf(!url)(
         ...extra,
       });
     }
+    it('buys a small qualified real-mode pack and reserves request bytes while public output caps stay exact', async () => {
+      const oldConfig = ctx.config;
+      const certificates = ['baseten', 'modal'].map((provider) => ({
+        provider,
+        contract: 'muse-spark-open-text-v1',
+        nativeModel:
+          provider === 'baseten' ? 'meta-models/muse-spark-open-1026' : 'offline-modal-model',
+        revision: 'offline-utf8-contract',
+        evidence: 'Offline contract fixture only; no native qualification or live request.',
+        validUntil: new Date(Date.now() + 86400000).toISOString(),
+        fixedInputUpperBound: 1048576,
+        inputAccounting: 'utf8-bytes-v1',
+        maximumOutputTokens: 2048,
+        ...(provider === 'modal' ? { minimumOutputTokens: 256 } : {}),
+        authoritativeUsage: true,
+        outputIncludesReasoning: true,
+        allAcceptedTextCovered: true,
+        rejectionHasNoUsage: true,
+      }));
+      try {
+        ctx.config = {
+          ...oldConfig,
+          inferenceBasetenProviderEmail: providers[0].email,
+          inferenceModalProviderEmail: providers[1].email,
+        };
+        ctx.inference = await createInferenceRuntime(
+          loadConfig({
+            DATABASE_URL: url!,
+            WICK_MODE: 'fixture',
+            MUSE_MODE: 'fixture',
+            INFERENCE_MARKET_MODE: 'real',
+            BASETEN_API_KEY: 'offline-test-key',
+            INFERENCE_MODAL_MODEL: 'offline-modal-model',
+            INFERENCE_MODAL_PROXY_TOKEN: 'offline-modal-token',
+            INFERENCE_QUALIFICATION_JSON: JSON.stringify(certificates),
+            BETTER_AUTH_SECRET: oldConfig.authSecret,
+          }),
+        );
+        ctx.inference.dispatch = vi.fn(async () => ({
+          id: 'offline-native-receipt',
+          content: 'OK',
+          finishReason: 'stop',
+          inputTokens: 20,
+          outputTokens: 12,
+        }));
+        await initializeInference(ctx);
+        await pool.query('UPDATE broker_token_offerings SET active=true,auto_bid=true');
+        const g = await grant(1000, { allowedProviders: ['baseten'] }),
+          key = await agent(g.id),
+          pack = await buy(g.id, { inputTokens: 10000, outputTokens: 1000 });
+        const operationKey = randomUUID();
+        await complete(ctx, key.actor, { ...call, operationKey });
+        const receipt = (
+          await pool.query(
+            'SELECT reserved_input,reserved_output FROM broker_inference_requests WHERE grant_id=$1',
+            [g.id],
+          )
+        ).rows[0];
+        expect(receipt).toEqual({ reserved_input: 4133, reserved_output: 64 });
+        const remaining = (await grantDetail(ctx, owner, g.id)).packs.find(
+          (p) => p.id === pack.id,
+        )!;
+        expect(remaining.availableInputTokens).toBe(9980);
+        expect(remaining.availableOutputTokens).toBe(988);
+        await expect(
+          complete(ctx, key.actor, {
+            ...call,
+            operationKey: randomUUID(),
+            response_format: { type: 'json_object' },
+          }),
+        ).rejects.toThrow();
+        await expect(
+          complete(ctx, key.actor, { ...call, operationKey: randomUUID(), max_tokens: 2048 }),
+        ).rejects.toMatchObject({ code: 'token_allowance_exceeded' });
+        await expect(complete(ctx, key.actor, { ...call, operationKey })).rejects.toMatchObject({
+          code: 'completed_without_result',
+        });
+        expect(ctx.inference.dispatch).toHaveBeenCalledTimes(1);
+        const modalGrant = await grant(1000, { allowedProviders: ['modal'] });
+        expect(
+          (
+            await quotes(ctx, owner, {
+              grantId: modalGrant.id,
+              inputTokens: 1048576,
+              outputTokens: 128,
+            })
+          ).items,
+        ).toEqual([]);
+        await expect(
+          createTokenOrder(ctx, owner, {
+            operationKey: randomUUID(),
+            grantId: modalGrant.id,
+            mode: 'auction',
+            inputTokens: 1048576,
+            outputTokens: 128,
+            maxTotalCents: 500,
+          }),
+        ).rejects.toMatchObject({ code: 'route_unavailable' });
+        const modalKey = await agent(modalGrant.id),
+          modalPack = await buy(modalGrant.id, { inputTokens: 1048576, outputTokens: 256 });
+        expect(
+          (await transaction(pool, (db) => allowance(db, { id: modalGrant.id }, 128)))
+            .eligibleCalls,
+        ).toBe(0);
+        expect(
+          (await transaction(pool, (db) => allowance(db, { id: modalGrant.id }, 256)))
+            .eligibleCalls,
+        ).toBe(1);
+        await buyingPolicy(modalGrant.id, { outputPerCall: 128 });
+        expect(
+          (await listAgents(ctx, owner, {})).items.find((a) => a.id === modalGrant.id)!
+            .eligibleCalls,
+        ).toBe(0);
+        expect((await evaluateBuying(ctx, owner, modalGrant.id)).modelCalled).toBe(false);
+        await expect(
+          complete(ctx, modalKey.actor, { ...call, operationKey: randomUUID(), max_tokens: 8 }),
+        ).rejects.toMatchObject({ code: 'output_limit_unqualified' });
+        expect(ctx.inference.dispatch).toHaveBeenCalledTimes(1);
+        expect(
+          (
+            await pool.query(
+              'SELECT count(*)::int n FROM broker_inference_requests WHERE grant_id=$1',
+              [modalGrant.id],
+            )
+          ).rows[0].n,
+        ).toBe(0);
+        await complete(ctx, modalKey.actor, {
+          ...call,
+          operationKey: randomUUID(),
+          max_tokens: 256,
+        });
+        const retired = (await grantDetail(ctx, owner, modalGrant.id)).packs.find(
+          (p) => p.id === modalPack.id,
+        )!;
+        expect(retired.status).toBe('settled');
+        expect(retired.availableOutputTokens).toBe(0);
+        expect(retired.consumedOutputTokens).toBe(12);
+        expect(retired.retiredOutputTokens).toBe(244);
+        expect(
+          (
+            await pool.query(
+              "SELECT outstanding_input,outstanding_output FROM broker_inference_routes WHERE provider='modal'",
+            )
+          ).rows[0],
+        ).toEqual({ outstanding_input: '0', outstanding_output: '0' });
+      } finally {
+        ctx.config = oldConfig;
+      }
+    });
     it('defaults new grants to two hours and keeps buying policies owner-only', async () => {
       const g = await grant();
       expect(Date.parse(g.expiresAt) - Date.parse(g.createdAt)).toBeGreaterThan(7199000);

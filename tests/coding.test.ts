@@ -9,6 +9,21 @@ import {
 import { seal, open, ownerOnly } from '../src/server/coding/service.js';
 import type { AppContext } from '../src/server/context.js';
 describe('public coding contracts', () => {
+  it.each([
+    '/repo/secret',
+    '../secret',
+    'a/../secret',
+    '.git/config',
+    'a/.git/config',
+    '.',
+    './',
+    'bad\u0000file',
+  ])('rejects invalid action paths before guest execution: %j', (path) => {
+    expect(parseCodingResponse(JSON.stringify({ action: 'read', path }))).toBeNull();
+    expect(
+      parseCodingResponse(JSON.stringify({ action: 'write', path, content: 'text' })),
+    ).toBeNull();
+  });
   it('accepts the observed Muse commentary envelope and still requires one strict action', () => {
     const prefix = '<|start|>assistant to=commentary<|message|>';
     const frame =

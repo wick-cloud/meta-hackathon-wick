@@ -88,11 +88,14 @@ export async function ensureUsageEstimate(ctx: AppContext, t: Row, inputFloor: n
       calls: Number(r.model_calls),
     })),
   );
-  const sized = sizeUsagePurchase(forecast, progress, inputFloor, t.model_output, t.purchase_round);
+  // New packs leave room for a useful coding response; existing residual quota
+  // may still serve a smaller call through the gateway's hard native cap.
+  const outputFloor = Math.min(t.model_output, 1024);
+  const sized = sizeUsagePurchase(forecast, progress, inputFloor, outputFloor, t.purchase_round);
   const inserted = (
     await ctx.pool.query(
       `INSERT INTO broker_studio_usage_estimates(task_id,purchase_round,forecast,input_tokens,output_tokens,input_floor,output_floor,reservation_limited)
-     SELECT id,$3,$4,$5,$6,$7,model_output,$8 FROM broker_studio_tasks WHERE id=$1 AND lease_token=$2 AND lease_until>clock_timestamp()
+     SELECT id,$3,$4,$5,$6,$7,$8,$9 FROM broker_studio_tasks WHERE id=$1 AND lease_token=$2 AND lease_until>clock_timestamp()
      ON CONFLICT(task_id,purchase_round) DO NOTHING RETURNING *`,
       [
         t.id,
@@ -102,6 +105,7 @@ export async function ensureUsageEstimate(ctx: AppContext, t: Row, inputFloor: n
         sized.inputTokens,
         sized.outputTokens,
         inputFloor,
+        outputFloor,
         sized.reservationLimited,
       ],
     )

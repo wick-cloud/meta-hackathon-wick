@@ -42,13 +42,13 @@ is available at `/studio/legacy`.
 
 ## Planning recovery
 
-Planning sends no reasoning-effort override; Muse's serving endpoint controls
-reasoning for both the initial task and repair. It uses a compact repository summary: at most
+Planning uses Meta's documented `Reasoning strength: 8.` system setting;
+coding uses 32 for its bounded JSON actions. No provider-specific reasoning
+parameter is sent. Planning uses a compact repository summary: at most
 50 root entries and two 4,000-character manifest excerpts, marked when truncated.
 This keeps VM selection and offline verification planning separate from coding.
-The existing qualified per-call input/output bounds stay in force. Omitting an
-override does not guarantee adaptive reasoning or prevent response truncation;
-provider defaults still apply. Recovery therefore handles a capped response
+The existing qualified per-call input/output bounds stay in force. This
+setting does not prevent response truncation. Recovery handles a capped response
 explicitly instead of assuming every task will fit on its first attempt.
 
 Each task has at most two planning attempts. A settled truncated or malformed
@@ -103,9 +103,10 @@ native rental expiries are never automatically extended.
 Studio automatically sizes model allowance within the budget. There is no
 customer-facing token-limit control. Provider accounting bounds remain mandatory
 server-side. A route unsuitable for coding is rejected **before budget funding
-or purchases**. The narrow production routes from the earlier coding diagnostic
-need a larger output contract qualified before this automatic workflow can be
-enabled live; this implementation does not silently widen their certificates.
+or purchases**. Automatic Studio now requires a separately qualified request-sized input contract
+and at least 2,048 output tokens. Legacy fixed-context routes cannot start new
+automatic tasks; existing manual packs and their accepted terms remain intact.
+Certificates and outstanding quota must be reconciled before a production change.
 
 Python 3 must already exist in the guest. A task-owned fresh Debian/Ubuntu VM
 may install only fixed OS packages (`git`, `bubblewrap`, `ca-certificates`)
@@ -165,7 +166,7 @@ The opt-in Linux runner executes actual public Git cloning, source edits,
 sandboxed tests and patch export. It waits for both real 30-second fixture
 auctions, injects one capped planning response, repairs it using existing quota,
 then performs automatic verification and funding release. It verifies that
-planning, repair and coding calls have no Broker reasoning override, and removes
+planning, repair and coding calls omit provider-specific reasoning parameters, and removes
 its own container/database. Model decisions, prices, allocations and money are
 explicit fixtures; this is not live Meta/Wick-provider qualification. The
 test container has no host-directory mounts or SSH-agent forwarding. A browser
@@ -176,5 +177,6 @@ Provider scope: E2B, Daytona, Modal and Blaxel retain the same public Wick SDK
 transport. Existing lifecycle, terminal, copy, Git, snapshots, pause/resume,
 retention, profiles and other native methods are unchanged. Debian/Ubuntu setup
 is shared guest behavior and is tested separately from native route claims.
-The other Wick providers are not exposed by Broker and are unaffected. Current
-automatic-task native provider and live-model verification has not been run.
+The other Wick providers are not exposed by Broker and are unaffected. See the
+[small-pack verification record](studio-small-pack-verification.md) for bounded real-model and native-VM diagnostics;
+local fixtures are not proof of native support.

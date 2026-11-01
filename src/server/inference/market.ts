@@ -17,6 +17,7 @@ import { applyCreditEntry } from '../agreements/credits.js';
 import { enqueue, transaction } from '../marketplace/db.js';
 import type { Row } from '../marketplace/data.js';
 import { operationFingerprint, withOperation } from '../operations.js';
+import { minimumInputReservation, type RuntimeRoute } from './runtime.js';
 import {
   activeMode,
   assertRoute,
@@ -165,7 +166,7 @@ function hasCapacity(row: Row, input: number, output: number) {
     Number(row.outstanding_output) + output <= Number(row.max_outstanding_output)
   );
 }
-function snapshot(row: Row) {
+function snapshot(row: Row, native: RuntimeRoute) {
   return {
     currencyDecimals: 4,
     provider: row.provider,
@@ -173,7 +174,11 @@ function snapshot(row: Row) {
     sourceMode: row.source_mode,
     fingerprint: row.fingerprint,
     revision: row.revision,
-    minimumInputReservation: row.source_mode === 'fixture' ? 20 : row.input_bound,
+    minimumInputReservation: minimumInputReservation(native),
+    ...(native.minimumOutputTokens ? { minimumOutputTokens: native.minimumOutputTokens } : {}),
+    ...(native.inputAccounting
+      ? { inputAccounting: native.inputAccounting, maximumInputReservation: native.inputBound }
+      : {}),
     inputRate: Number(row.input_rate),
     outputRate: Number(row.output_rate),
     costInputRate: Number(row.cost_input_rate),
@@ -230,7 +235,8 @@ export async function quotes(
       const native = runtime(ctx).routes.get(row.provider as InferenceProvider)!;
       if (
         !offeringOpen(row, now) ||
-        input.inputTokens < (native.mode === 'fixture' ? 20 : native.inputBound) ||
+        input.inputTokens < minimumInputReservation(native) ||
+        input.outputTokens < (native.minimumOutputTokens ?? 1) ||
         native.validUntil < new Date(grant.expires_at).getTime() ||
         !hasCapacity(row, input.inputTokens, input.outputTokens)
       )
@@ -413,7 +419,8 @@ export async function createTokenOrder(
       }
       const native = runtime(ctx).routes.get(row.provider as InferenceProvider)!;
       if (
-        input.inputTokens >= (native.mode === 'fixture' ? 20 : native.inputBound) &&
+        input.inputTokens >= minimumInputReservation(native) &&
+        input.outputTokens >= (native.minimumOutputTokens ?? 1) &&
         native.validUntil >= new Date(grant.expires_at).getTime()
       )
         accountingCompatible = true;
@@ -422,7 +429,7 @@ export async function createTokenOrder(
       failure(
         409,
         'route_unavailable',
-        'No qualified route can supply a usable pack through this grant’s expiry. Check its minimum input reservation and qualification.',
+        'No qualified route can supply a usable pack through this grant’s expiry. Check its minimum input/output reservations and qualification.',
       );
     let quote: Row | undefined;
     if (input.mode === 'instant') {
@@ -453,7 +460,8 @@ export async function createTokenOrder(
       const native = runtime(ctx).routes.get(row.provider as InferenceProvider)!;
       if (
         !offeringOpen(row, now) ||
-        input.inputTokens < (native.mode === 'fixture' ? 20 : native.inputBound) ||
+        input.inputTokens < minimumInputReservation(native) ||
+        input.outputTokens < (native.minimumOutputTokens ?? 1) ||
         native.validUntil < new Date(grant.expires_at).getTime() ||
         !hasCapacity(row, input.inputTokens, input.outputTokens)
       )
@@ -528,7 +536,7 @@ export async function createTokenOrder(
       const bid = (
         await db.query(
           `INSERT INTO broker_token_bids(order_id,provider,price_cents,snapshot) VALUES($1,$2,$3,$4) RETURNING *`,
-          [order.id, row.provider, price, snapshot(row)],
+          [order.id, row.provider, price, snapshot(row, runtime(ctx).routes.get(row.provider)!)],
         )
       ).rows[0];
       bids.push({ row, bid });
@@ -645,7 +653,8 @@ export async function closeTokenAuction(ctx: AppContext, id: string) {
       }
       const native = runtime(ctx).routes.get(row.provider as InferenceProvider)!;
       if (
-        order.input_tokens < (native.mode === 'fixture' ? 20 : native.inputBound) ||
+        order.input_tokens < minimumInputReservation(native) ||
+        order.output_tokens < (native.minimumOutputTokens ?? 1) ||
         native.validUntil < new Date(grant.expires_at).getTime()
       )
         continue;

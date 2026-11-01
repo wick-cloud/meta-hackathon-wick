@@ -30,6 +30,7 @@
     "test:inference-live": "npm run build:packages && tsx tests/inference-live-e2e.ts",
     "test:coding-local": "tsx tests/coding-local-e2e.ts",
     "test:studio-local": "CODING_LOCAL_STUDIO=1 tsx tests/coding-local-e2e.ts",
+    "test:studio-live": "tsx tests/studio-inference-live-e2e.ts",
     "studio:usage:evaluate": "tsx scripts/evaluate-studio-usage.ts"
   },
   "dependencies": {

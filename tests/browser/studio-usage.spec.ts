@@ -120,10 +120,39 @@ test('forecast, purchased quota and usage are distinct and the reservation limit
   await expect(card.getByRole('rowheader', { name: 'Expected task' })).toBeVisible();
   await expect(card.getByRole('rowheader', { name: 'Purchased', exact: true })).toBeVisible();
   await expect(card.getByRole('cell', { name: '1.8%', exact: true })).toBeVisible();
-  await expect(card.getByText(/90% target cannot be reached/)).toBeVisible();
+  await expect(
+    card.getByText(/provider reservation minimum increased this purchase/),
+  ).toBeVisible();
   await card.getByText('How this purchase was sized').click();
   await expect(card.getByText(/Not enough completed tasks/)).toBeVisible();
   await card.screenshot({ path: info.outputPath('usage-estimate-desktop.png') });
+  expect(writes).toEqual([]);
+});
+test('new task purchases explain the small buffer and demand-triggered refill', async ({
+  page,
+}) => {
+  const data = detail();
+  Object.assign(data.usage!.forecast, {
+    version: 'studio-usage-v3-small-packs',
+    targetUtilization: 100 / 110,
+    headroom: { inputMultiplier: 1.1, outputMultiplier: 1.1 },
+  });
+  Object.assign(data.usage!, {
+    purchaseInput: 22000,
+    purchasedInput: 22000,
+    purchaseOutput: 4950,
+    purchasedOutput: 4950,
+    inputReservationFloor: 7000,
+    outputReservationFloor: 256,
+    reservationLimited: false,
+  });
+  const writes = await fixture(page, data);
+  const card = page.getByRole('region', { name: 'Model usage estimate' });
+  await expect(card.getByText('Initial +10%', { exact: true })).toBeVisible();
+  await card.getByText('How this purchase was sized').click();
+  await expect(card.getByText(/first purchase adds 10%/)).toBeVisible();
+  await expect(card.getByText(/only when the next call cannot fit/)).toBeVisible();
+  await expect(card.getByText(/Purchase floor: 7,000 input/)).toBeVisible();
   expect(writes).toEqual([]);
 });
 test('learned diagnostics and unresolved usage remain readable on a phone', async ({

@@ -15,6 +15,8 @@ import {
 export const BASETEN_MODEL = 'meta-models/muse-spark-open-1026';
 export const BASETEN_BASE = 'https://inference.baseten.co/v1';
 export const MODAL_BASE = 'https://inference.us-west.modal.direct/v1';
+/** Internal task calls may use a smaller hard output cap before buying a refill. */
+export const MIN_TASK_OUTPUT_RESERVATION = 256;
 const qualification = z
   .object({
     provider: z.enum(INFERENCE_PROVIDERS),
@@ -24,13 +26,21 @@ const qualification = z
     evidence: z.string().min(20).max(2000),
     validUntil: z.string().datetime(),
     fixedInputUpperBound: z.number().int().min(1).max(10_000_000),
+    inputAccounting: z.literal('utf8-bytes-v1').optional(),
     maximumOutputTokens: z.number().int().min(1).max(8192),
+    minimumOutputTokens: z.number().int().min(1).max(8192).optional(),
     authoritativeUsage: z.literal(true),
     outputIncludesReasoning: z.literal(true),
     allAcceptedTextCovered: z.literal(true),
     rejectionHasNoUsage: z.literal(true),
   })
-  .strict();
+  .strict()
+  .refine((c) => !c.inputAccounting || c.fixedInputUpperBound >= 4128, {
+    message: 'The UTF-8 accounting contract must cover its framing reservation.',
+  })
+  .refine((c) => (c.minimumOutputTokens ?? 1) <= c.maximumOutputTokens, {
+    message: 'The qualified output range must be nonempty.',
+  });
 export interface RuntimeRoute {
   provider: InferenceProvider;
   mode: 'fixture' | 'real';
@@ -38,7 +48,9 @@ export interface RuntimeRoute {
   qualified: boolean;
   reason: string;
   inputBound: number;
+  inputAccounting?: 'utf8-bytes-v1';
   maximumOutputTokens: number;
+  minimumOutputTokens?: number;
   validUntil: number;
   nativeModel: string;
   baseUrl: string;
@@ -70,6 +82,7 @@ export interface InferenceRuntime {
     route: RuntimeRoute,
     input: InferenceCompletionInput,
     requestId: string,
+    options?: { jsonObject: true },
   ): Promise<AdapterResult>;
 }
 export function routeView(route: RuntimeRoute, quarantined = false): InferenceRoute {
@@ -85,12 +98,51 @@ export function routeView(route: RuntimeRoute, quarantined = false): InferenceRo
       : route.validUntil > 0 && route.validUntil <= Date.now()
         ? 'Accounting qualification has expired.'
         : route.reason,
-    minimumInputReservation: route.mode === 'fixture' ? 20 : route.inputBound,
+    minimumInputReservation: minimumInputReservation(route),
     maximumOutputTokens: route.maximumOutputTokens,
   };
 }
+/** Only enabled by an independently reviewed text/framing certificate. This is
+ * a byte upper bound, not an estimated tokenizer or a statistical usage forecast.
+ * v1 allows no tools, names, media, custom templates or hidden client fields. */
+export function minimumInputReservation(route: RuntimeRoute): number {
+  return route.mode === 'fixture' ? 20 : route.inputAccounting ? 4128 : route.inputBound;
+}
+export function inputReservation(
+  route: RuntimeRoute,
+  input: Pick<InferenceCompletionInput, 'messages'>,
+): number {
+  if (route.mode === 'fixture') return fixtureInputTokens(input);
+  if (!route.inputAccounting) return route.inputBound;
+  return Math.min(
+    route.inputBound,
+    4096 +
+      input.messages.reduce((n, m) => {
+        // Muse's published system template expands these directive spellings.
+        // Bound the rendered form as well as Unicode normalization, not just
+        // the client bytes. The replacement changes only the byte envelope;
+        // dispatch still sends the original message unchanged.
+        const rendered =
+          m.role === 'system'
+            ? m.content.replace(
+                /Reasoning effort|Reasoning Effort|reasoning effort|REASONING EFFORT/g,
+                (directive) => `${directive.slice(0, -6)}strength`,
+              )
+            : m.content;
+        // Compatibility decomposition can expand a Unicode scalar substantially.
+        // Cover raw text and every standard normalization form before byte BPE.
+        const bytes = Math.max(
+          Buffer.byteLength(rendered, 'utf8'),
+          ...(['NFC', 'NFD', 'NFKC', 'NFKD'] as const).map((form) =>
+            Buffer.byteLength(rendered.normalize(form), 'utf8'),
+          ),
+        );
+        return n + 32 + bytes;
+      }, 0),
+  );
+}
 /** Fixture tokens are fictional UTF-8 bytes plus framing; never used for a real route. */
-export function fixtureInputTokens(input: InferenceCompletionInput): number {
+export function fixtureInputTokens(input: Pick<InferenceCompletionInput, 'messages'>): number {
   return (
     8 + input.messages.reduce((n, m) => n + 8 + Buffer.byteLength(m.role + m.content, 'utf8'), 0)
   );
@@ -142,9 +194,15 @@ export async function dispatchReal(
   input: InferenceCompletionInput,
   requestId: string,
   fetcher: typeof fetch = fetch,
+  options?: { jsonObject: true },
 ): Promise<AdapterResult> {
   if (!route.qualified || route.validUntil <= Date.now() || !route.apiKey)
     throw new InferenceUpstreamError('unqualified_route', true);
+  if (
+    input.max_tokens < (route.minimumOutputTokens ?? 1) ||
+    input.max_tokens > route.maximumOutputTokens
+  )
+    throw new InferenceUpstreamError('unqualified_output_limit', true);
   try {
     const response = await fetcher(`${route.baseUrl}/chat/completions`, {
       method: 'POST',
@@ -156,7 +214,13 @@ export async function dispatchReal(
         'X-Request-Id': requestId,
         ...(route.provider === 'modal' ? { 'Modal-Routing-Affinity-Key': requestId } : {}),
       },
-      body: JSON.stringify({ ...input, model: route.nativeModel, stream: false, n: 1 }),
+      body: JSON.stringify({
+        ...input,
+        model: route.nativeModel,
+        stream: false,
+        n: 1,
+        ...(options?.jsonObject ? { response_format: { type: 'json_object' } } : {}),
+      }),
     });
     const upstreamId = response.headers.get('x-request-id')?.slice(0, 300);
     if (!response.ok) {
@@ -237,7 +301,7 @@ export async function createInferenceRuntime(config: Config): Promise<InferenceR
       mode === 'fixture'
         ? 'Simulated tokens and provider responses. No real inference is sold.'
         : qualified
-          ? 'Operator-qualified buffered text accounting.'
+          ? `Operator-qualified buffered text accounting.${(cert?.minimumOutputTokens ?? 1) > 1 ? ` Request output caps must be ${cert!.minimumOutputTokens}–${cert!.maximumOutputTokens} tokens.` : ''}`
           : fileError
             ? 'Accounting qualification is invalid; real purchases are disabled.'
             : !nativeModel
@@ -262,13 +326,21 @@ export async function createInferenceRuntime(config: Config): Promise<InferenceR
               revision: cert.revision,
               inputBound: cert.fixedInputUpperBound,
               maximumOutputTokens: cert.maximumOutputTokens,
+              ...(cert.inputAccounting ? { inputAccounting: cert.inputAccounting } : {}),
+              ...((cert.minimumOutputTokens ?? 1) > 1
+                ? { minimumOutputTokens: cert.minimumOutputTokens }
+                : {}),
             }
           : null,
       }),
       qualified,
       reason,
       inputBound: cert?.fixedInputUpperBound ?? 1,
+      ...(cert?.inputAccounting ? { inputAccounting: cert.inputAccounting } : {}),
       maximumOutputTokens: cert?.maximumOutputTokens ?? 8192,
+      ...((cert?.minimumOutputTokens ?? 1) > 1
+        ? { minimumOutputTokens: cert!.minimumOutputTokens }
+        : {}),
       validUntil:
         mode === 'fixture' ? Number.MAX_SAFE_INTEGER : cert ? Date.parse(cert.validUntil) : 0,
     });
@@ -277,8 +349,8 @@ export async function createInferenceRuntime(config: Config): Promise<InferenceR
     enabled: config.inferenceMarketMode !== 'off',
     mode,
     routes,
-    async dispatch(route, input, requestId) {
-      if (route.mode === 'real') return dispatchReal(route, input, requestId);
+    async dispatch(route, input, requestId, options) {
+      if (route.mode === 'real') return dispatchReal(route, input, requestId, fetch, options);
       const content = 'Fixture response: prepaid token access is working.';
       const outputTokens = Math.min(input.max_tokens, Buffer.byteLength(content));
       return {

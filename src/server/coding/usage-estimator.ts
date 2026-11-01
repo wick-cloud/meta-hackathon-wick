@@ -1,7 +1,8 @@
 import type { UsageFeatures, UsageForecast } from '../../shared/studio-usage.js';
 
-export const USAGE_ESTIMATOR_VERSION = 'studio-usage-v2-compact-planning';
-export const TARGET_UTILIZATION = 0.9;
+export const USAGE_ESTIMATOR_VERSION = 'studio-usage-v3-small-packs';
+export const PURCHASE_BUFFER_PERCENT = 10;
+export const TARGET_UTILIZATION = 100 / (100 + PURCHASE_BUFFER_PERCENT);
 export const MAX_TRAINING_SAMPLES = 200;
 const MIN_TRAINING_SAMPLES = 12;
 const clamp = (n: number, low: number, high: number) => Math.max(low, Math.min(high, n));
@@ -144,9 +145,6 @@ export function forecastUsage(features: UsageFeatures, history: UsageSample[]): 
     predict = predictor(samples),
     expected = predict(features);
   let validation: UsageForecast['validation'] = null;
-  // Conservative cold-start interval; learned one-sided errors replace it once measurable.
-  let inputMultiplier = samples.length >= MIN_TRAINING_SAMPLES ? 1.25 : 1.5,
-    outputMultiplier = inputMultiplier;
   // Chronological holdout, never random train/test mixing. No score from fitted examples.
   if (samples.length >= 20) {
     const cut = Math.floor(samples.length * 0.8),
@@ -156,26 +154,18 @@ export function forecastUsage(features: UsageFeatures, history: UsageSample[]): 
       outputError = 0,
       inputTotal = 0,
       outputTotal = 0;
-    const inputRatios: number[] = [],
-      outputRatios: number[] = [];
     for (const s of heldOut) {
       const p = baseline(s.features);
       inputError += Math.abs(s.input - p.input);
       outputError += Math.abs(s.output - p.output);
       inputTotal += s.input;
       outputTotal += s.output;
-      inputRatios.push(s.input / p.input);
-      outputRatios.push(s.output / p.output);
     }
     validation = {
       samples: heldOut.length,
       inputError: inputError / inputTotal,
       outputError: outputError / outputTotal,
     };
-    const upper = (ratios: number[]) =>
-      clamp(ratios.sort((a, b) => a - b)[Math.ceil(ratios.length * 0.9) - 1]!, 1, 3);
-    inputMultiplier = upper(inputRatios);
-    outputMultiplier = upper(outputRatios);
   }
   return {
     version: USAGE_ESTIMATOR_VERSION,
@@ -185,7 +175,7 @@ export function forecastUsage(features: UsageFeatures, history: UsageSample[]): 
     expectedInput: Math.ceil(expected.input),
     expectedOutput: Math.ceil(expected.output),
     expectedCalls: Math.ceil(expected.calls),
-    headroom: { inputMultiplier, outputMultiplier },
+    headroom: { inputMultiplier: 1.1, outputMultiplier: 1.1 },
     validation,
   };
 }
@@ -233,8 +223,13 @@ export function sizeUsagePurchase(
   )
     throw new Error('Invalid usage purchase bounds.');
   // A missed forecast buys a bounded remaining chunk, not the entire original allowance again.
+  const predictedCallsLeft = forecast.expectedCalls - progress.calls;
   const remainingCalls =
-    round === 0 ? forecast.expectedCalls : clamp(forecast.expectedCalls - progress.calls, 2, 6);
+    round === 0
+      ? forecast.expectedCalls
+      : predictedCallsLeft > 0
+        ? Math.min(predictedCallsLeft, 2)
+        : 2;
   const inputPerCall = Math.max(
     forecast.expectedInput / forecast.expectedCalls,
     progress.calls ? progress.input / progress.calls : 0,
@@ -245,33 +240,16 @@ export function sizeUsagePurchase(
   );
   const input = round === 0 ? forecast.expectedInput : inputPerCall * remainingCalls;
   const output = round === 0 ? forecast.expectedOutput : outputPerCall * remainingCalls;
-  const targetInput = Math.ceil(input / TARGET_UTILIZATION),
-    targetOutput = Math.ceil(output / TARGET_UTILIZATION);
-  // When a hard reservation dominates, a refill repeats that costly reservation.
-  // Include calibrated demand headroom plus one complete final call; never shrink
-  // the certified bound to make an attractive statistical estimate fit.
-  const inputTokens = Math.min(
-    10_000_000,
-    Math.max(
-      targetInput,
-      Math.ceil(
-        inputFloor > targetInput
-          ? inputFloor + input * forecast.headroom.inputMultiplier
-          : inputFloor + input - inputPerCall,
-      ),
-    ),
-  );
-  const outputTokens = Math.min(
-    10_000_000,
-    Math.max(
-      targetOutput,
-      Math.ceil(
-        inputFloor > targetInput
-          ? outputFloor + output * forecast.headroom.outputMultiplier
-          : outputFloor + output - outputPerCall,
-      ),
-    ),
-  );
+  const buffered = (amount: number) =>
+    Math.ceil((Math.ceil(amount) * (100 + PURCHASE_BUFFER_PERCENT)) / 100);
+  const targetInput = buffered(input),
+    targetOutput = buffered(output);
+  // The reservation is released down to actual usage after each call. Keep enough
+  // admission headroom to make the other call in this small refill usable too.
+  const admissionInput =
+    round === 0 ? inputFloor : inputFloor + buffered(inputPerCall * (remainingCalls - 1));
+  const inputTokens = Math.min(10_000_000, Math.max(targetInput, admissionInput));
+  const outputTokens = Math.min(1_000_000, Math.max(targetOutput, outputFloor));
   return {
     inputTokens,
     outputTokens,
