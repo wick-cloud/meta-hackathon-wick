@@ -205,7 +205,7 @@ async function computeCandidates(ctx: AppContext, duration: number): Promise<Can
              AND (p.cloud_provider IS NULL OR p.cloud_provider=c.item->>'provider')
              AND (p.policy->'allowedCatalogIds' IS NULL OR p.policy->'allowedCatalogIds'='null'::jsonb
                   OR p.policy->'allowedCatalogIds' ? c.id)
-             ORDER BY (p.cloud_provider IS NOT NULL) DESC,p.id LIMIT 32
+             ORDER BY (p.cloud_provider IS NOT NULL) DESC,p.id LIMIT 8
            ) supply ON true
            WHERE c.id=ANY($1::text[]) AND c.approved AND c.source_mode=$2`,
           [rows.map((r) => r.id), ctx.wick.mode],

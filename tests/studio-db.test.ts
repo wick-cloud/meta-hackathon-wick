@@ -33,6 +33,7 @@ import {
 } from '../src/server/coding/studio.js';
 import { processCodingJob, codingDetail, open } from '../src/server/coding/service.js';
 import { reserveStudioCompute } from '../src/server/coding/studio-budget.js';
+import { QUEUES } from '../src/server/marketplace/db.js';
 import {
   forecastUsage,
   usageFeatures,
@@ -357,6 +358,75 @@ describe.skipIf(!url)('Studio task budget and lifecycle (disposable Postgres)', 
       policies,
     );
     expect((await pool.query('SELECT count(*)::int n FROM broker_vms')).rows[0].n).toBe(0);
+  });
+  it('budgets for the first eight automatic bidders rather than a cheaper ninth seller', async () => {
+    const real = await realCompute();
+    const pricing = (await pool.query('SELECT pricing FROM broker_offerings LIMIT 1')).rows[0]
+      .pricing;
+    await pool.query(
+      "UPDATE broker_providers SET policy=jsonb_set(policy,'{autoBid}','false'::jsonb)",
+    );
+    const bidders = Array.from({ length: 9 }, (_, i) => ({
+      id: `00000000-0000-4000-8000-${String(i + 1).padStart(12, '0')}`,
+      user_id: randomUUID(),
+      email: `compute-${i}@studio.invalid`,
+      name: `Compute ${i}`,
+      policy: {
+        autoBid: true,
+        minimumPriceCents: 1,
+        basePriceCents: i === 8 ? 5 : 20,
+        maxPriceCents: 1000,
+        allowedCatalogIds: [catalog.id],
+      },
+    }));
+    await pool.query(
+      `INSERT INTO "user"(id,email,name,role)
+      SELECT user_id,email,name,'provider' FROM jsonb_to_recordset($1::jsonb) AS x(user_id text,email text,name text)`,
+      [JSON.stringify(bidders)],
+    );
+    await pool.query(
+      `INSERT INTO broker_providers(id,user_id,name,cloud_provider,total_capacity,policy)
+      SELECT id,user_id,name,'daytona',5,policy FROM jsonb_to_recordset($1::jsonb) AS x(id uuid,user_id text,name text,policy jsonb)`,
+      [JSON.stringify(bidders)],
+    );
+    await pool.query(
+      `INSERT INTO broker_offerings(provider_id,catalog_id,name,description,price_cents,pricing)
+      SELECT id,$2,'Published','Synthetic fanout',5,$3 FROM broker_providers WHERE id=ANY($1::uuid[])`,
+      [bidders.map((p) => p.id), catalog.id, pricing],
+    );
+    const task = await createStudioTask(real, owner, input({ durationMinutes: 15 }), verify);
+    await processStudioTask(real, task.id, repo);
+    let t = (await pool.query('SELECT * FROM broker_studio_tasks WHERE id=$1', [task.id])).rows[0];
+    expect(open(real, t.plan_input_cipher).candidates[0].maximumCents).toBe(25);
+    await pool.query(
+      "UPDATE broker_token_orders SET closes_at=clock_timestamp()-interval '1 second' WHERE id=$1",
+      [t.model_order_id],
+    );
+    await closeTokenAuction(real, t.model_order_id);
+    await pool.query(
+      "UPDATE broker_studio_tasks SET next_tick_at=clock_timestamp()-interval '1 second' WHERE id=$1",
+      [task.id],
+    );
+    await processStudioTask(real, task.id, repo);
+    t = (await pool.query('SELECT * FROM broker_studio_tasks WHERE id=$1', [task.id])).rows[0];
+    expect(t.status, t.blocked_reason).toBe('compute_auction');
+    const queued = vi
+      .mocked(ctx.boss.send)
+      .mock.calls.map(([queue, data]) => ({
+        queue,
+        data: data as { requestId?: string; providerId?: string },
+      }))
+      .filter(({ queue, data }) => queue === QUEUES.auto && data.requestId === t.vm_request_id);
+    expect(queued.map(({ data }) => data.providerId)).toEqual(bidders.slice(0, 8).map((p) => p.id));
+    expect(
+      Number(
+        (
+          await pool.query('SELECT max_price_cents FROM broker_requests WHERE id=$1', [
+            t.vm_request_id,
+          ])
+        ).rows[0].max_price_cents,
+      ),
+    ).toBe(25);
   });
   it('requires execution qualification and published eligible compute before reserving real Studio credit', async () => {
     const real = await realCompute([]);

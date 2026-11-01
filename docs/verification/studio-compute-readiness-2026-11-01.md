@@ -11,7 +11,7 @@ Automatic compute bidding accepts or declines a deterministic server quote. That
 
 Studio now reads active published offerings and their provider policies for the selected catalog page. It applies the same provider identity, allowed configurations, automatic-bid selection and price-cap rules, and rejects stale or missing managed pricing snapshots. A five-cent base quote therefore gets a 6.25-cent ceiling under the existing 25% reservation buffer, rather than the insufficient 3.75-cent ceiling. The final charge still comes from the binding auction bid. Provider prices, accepted commitments and billing semantics are unchanged.
 
-The read uses at most sixteen selected catalog IDs and thirty-two eligible provider/listing pairs per configuration in one batched query. Historical duplicate listings do not grow the returned page. Current availability, calendar commitments and final auction eligibility remain authoritative at bid submission; this estimate promises no future capacity.
+The read uses at most sixteen selected catalog IDs and eight eligible provider/listing pairs per configuration in one batched query, matching the auction's actual automatic-bid fanout and ordering. A cheaper ninth seller cannot lower the ceiling when it will not receive an automatic-bid job. Historical duplicate listings do not grow the returned page. Current availability, calendar commitments and final auction eligibility remain authoritative at bid submission; this estimate promises no future capacity.
 
 ## Execution qualification
 
