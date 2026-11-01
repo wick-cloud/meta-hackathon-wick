@@ -3,8 +3,19 @@ import { z } from 'zod';
 import type { Actor, CatalogItem } from '../../shared/types.js';
 import type { StudioDetail, StudioTask, StudioStatus, StudioPlan } from '../../shared/studio.js';
 import { INFERENCE_MODEL_ID, type InferenceProvider } from '../../shared/inference.js';
-import { addCents, subtractCents, moneyUnits, centsFromUnits } from '../../shared/money.js';
-import { fixedQuote, managedPricing, requireFreshManagedRate } from '../../shared/pricing.js';
+import {
+  addCents,
+  subtractCents,
+  moneyUnits,
+  centsFromUnits,
+  MIN_ORDER_PRICE_CENTS,
+} from '../../shared/money.js';
+import {
+  fixedQuote,
+  managedPricing,
+  requireFreshManagedRate,
+  requireCurrentRate,
+} from '../../shared/pricing.js';
 import type { AppContext } from '../context.js';
 import { HttpError } from '../context.js';
 import { transaction } from '../db.js';
@@ -46,6 +57,8 @@ import {
 import { usageFeatures } from './usage-estimator.js';
 import { ensureUsageEstimate, recordUsageSample, studioUsage } from './usage-data.js';
 import { createRequest, cancelRequest } from '../marketplace/auction.js';
+import { assertManagedCustomerRoute } from '../marketplace/matching.js';
+import { availableForBids } from '../marketplace/policy.js';
 import { terminateVm } from '../marketplace/lifecycle.js';
 import { createCodingJob, controlCoding, wakeCoding, seal, open, ownerOnly } from './service.js';
 import { verifyPublicRepository, publicRepository, baseRefSchema } from './contracts.js';
@@ -166,31 +179,75 @@ async function modelRoutes(ctx: AppContext, until: Date) {
   return eligible;
 }
 async function computeCandidates(ctx: AppContext, duration: number): Promise<Candidate[]> {
+  if (ctx.wick.mode === 'real' && !ctx.config.studioApprovedComputeCatalogIds.length) return [];
   const rows = (
     await ctx.pool.query(
-      `SELECT id,item FROM broker_catalog WHERE approved AND source_mode=$1 AND item->'durationMinutes' @> $2::jsonb ORDER BY (item->>'cpu')::numeric,(item->>'memoryGb')::numeric,id LIMIT 16`,
-      [ctx.wick.mode, JSON.stringify([duration])],
+      `SELECT id,item FROM broker_catalog WHERE approved AND source_mode=$1 AND item->'durationMinutes' @> $2::jsonb
+       AND ($1<>'real' OR id=ANY($3::text[]))
+       ORDER BY (item->>'cpu')::numeric,(item->>'memoryGb')::numeric,id LIMIT 16`,
+      [ctx.wick.mode, JSON.stringify([duration]), ctx.config.studioApprovedComputeCatalogIds],
     )
   ).rows;
-  const fixture =
-    ctx.wick.mode === 'fixture' && rows.length
-      ? (
-          await ctx.pool.query(
-            `SELECT catalog_id,min(price_cents) price FROM broker_offerings WHERE active AND catalog_id=ANY($1::text[]) GROUP BY catalog_id`,
-            [rows.map((r) => r.id)],
-          )
-        ).rows
-      : [];
-  const prices = new Map(fixture.map((r) => [r.catalog_id, Number(r.price)]));
+  // Match the auction's bounded automatic-bid fanout. A catalog cost floor is
+  // not a seller's quote: its minimum/base policy can be higher, including for
+  // shorter rentals than the published offering's 30-minute baseline.
+  const published = rows.length
+    ? (
+        await ctx.pool.query(
+          `SELECT c.id catalog_id,supply.policy,supply.total_capacity,supply.pricing
+           FROM broker_catalog c JOIN LATERAL (
+             SELECT p.policy,p.total_capacity,o.pricing FROM broker_providers p
+             JOIN LATERAL (
+               SELECT o.pricing FROM broker_offerings o WHERE o.provider_id=p.id
+               AND o.catalog_id=c.id AND o.active ORDER BY o.price_cents,o.id LIMIT 1
+             ) o ON true
+             WHERE p.policy->>'autoBid'='true'
+             AND (p.cloud_provider IS NULL OR p.cloud_provider=c.item->>'provider')
+             AND (p.policy->'allowedCatalogIds' IS NULL OR p.policy->'allowedCatalogIds'='null'::jsonb
+                  OR p.policy->'allowedCatalogIds' ? c.id)
+             ORDER BY (p.cloud_provider IS NOT NULL) DESC,p.id LIMIT 8
+           ) supply ON true
+           WHERE c.id=ANY($1::text[]) AND c.approved AND c.source_mode=$2`,
+          [rows.map((r) => r.id), ctx.wick.mode],
+        )
+      ).rows
+    : [];
   return rows.flatMap(({ id, item }: { id: string; item: CatalogItem }) => {
     try {
       if (item.gpu) return [];
-      if (ctx.wick.mode === 'real') requireFreshManagedRate(item);
-      const price =
+      if (ctx.wick.mode === 'real') {
+        assertManagedCustomerRoute(item);
+        requireFreshManagedRate(item);
+      }
+      const floor =
         ctx.wick.mode === 'real'
           ? fixedQuote(managedPricing(item), duration).totalPriceCents
-          : prices.get(id);
-      if (!price) return [];
+          : MIN_ORDER_PRICE_CENTS;
+      const prices = published.flatMap((offer) => {
+        if (offer.catalog_id !== id || availableForBids(offer.total_capacity, 0, offer.policy) < 1)
+          return [];
+        try {
+          if (ctx.wick.mode === 'real') {
+            if (!offer.pricing) return [];
+            requireCurrentRate(offer.pricing, item);
+          }
+          const price = Math.max(
+            MIN_ORDER_PRICE_CENTS,
+            floor,
+            offer.policy.minimumPriceCents,
+            offer.policy.basePriceCents,
+          );
+          if (offer.policy.maxPriceCents !== undefined && price > offer.policy.maxPriceCents)
+            return [];
+          // Use the same money validation as the subsequent budget reservation.
+          moneyUnits(price);
+          return [price];
+        } catch {
+          return [];
+        }
+      });
+      if (!prices.length) return [];
+      const price = Math.min(...prices);
       return [
         {
           id,
@@ -208,13 +265,18 @@ async function computeCandidates(ctx: AppContext, duration: number): Promise<Can
   });
 }
 export async function studioOptions(ctx: AppContext) {
-  const routes = await modelRoutes(ctx, new Date(Date.now() + 30 * 60000));
+  const [routes, candidates] = await Promise.all([
+    modelRoutes(ctx, new Date(Date.now() + 30 * 60000)),
+    computeCandidates(ctx, 30),
+  ]);
   return {
     mode: ctx.wick.mode,
-    available: !!ctx.wick.runCommand && routes.length > 0,
-    reason: routes.length
-      ? ''
-      : 'The configured model routes are not qualified for automatic coding yet. No purchases will be made.',
+    available: !!ctx.wick.runCommand && routes.length > 0 && candidates.length > 0,
+    reason: !routes.length
+      ? 'The configured model routes are not qualified for automatic coding yet. No purchases will be made.'
+      : !candidates.length
+        ? 'No execution-qualified published compute configuration is available for Studio. No credit will be reserved.'
+        : '',
   };
 }
 export async function createStudioTask(
@@ -248,7 +310,10 @@ export async function createStudioTask(
       'A model route must be qualified for coding before Studio can accept this task. No resources were purchased.',
     );
   if (!candidates.length)
-    throw new HttpError(409, 'No approved compute configuration is available for this task.');
+    throw new HttpError(
+      409,
+      'No execution-qualified published compute configuration supports this rental. No credit was reserved.',
+    );
   const verified = await verify(repo.url, input.baseRef),
     id = randomUUID();
   const task = await transaction(ctx.pool, async (db) => {

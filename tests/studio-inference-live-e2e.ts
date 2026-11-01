@@ -155,6 +155,7 @@ try {
   const catalog = (await native.catalog())
     .filter(
       (c) =>
+        config.studioApprovedComputeCatalogIds.includes(c.id) &&
         c.provider === 'e2b' &&
         c.durationMinutes.includes(15) &&
         !c.gpu &&
@@ -165,7 +166,10 @@ try {
         fixedQuote(managedPricing(a), 15).totalPriceCents -
         fixedQuote(managedPricing(b), 15).totalPriceCents,
     );
-  assert(catalog[0], 'An approved low-cost E2B route is required for this bounded test.');
+  assert(
+    catalog[0],
+    'Set STUDIO_APPROVED_COMPUTE_CATALOG_IDS to an execution-qualified low-cost E2B route for this bounded test.',
+  );
   await configureProviderMarketplace(pool, catalog, {
     providers: [
       {
@@ -180,12 +184,6 @@ try {
     ],
     retireSupplierEmails: [],
   });
-  // This test sells a 15-minute rental; setup's generic base defaults to 30 minutes.
-  await pool.query(
-    `UPDATE broker_providers SET policy=jsonb_set(policy,'{basePriceCents}',$2::jsonb)
-    WHERE user_id=(SELECT id FROM "user" WHERE email=$1)`,
-    [computeEmail, JSON.stringify(fixedQuote(managedPricing(catalog[0]), 15).totalPriceCents)],
-  );
   await transaction(pool, (client) =>
     applyCreditEntry(client, owner.id, {
       operationKey: randomUUID(),
