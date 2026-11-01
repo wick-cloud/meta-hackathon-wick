@@ -260,6 +260,87 @@ describe.skipIf(!url)(
         ...extra,
       });
     }
+    it('buys a small qualified real-mode pack and reserves request bytes while public output caps stay exact', async () => {
+      const oldConfig = ctx.config;
+      const certificates = ['baseten', 'modal'].map((provider) => ({
+        provider,
+        contract: 'muse-spark-open-text-v1',
+        nativeModel:
+          provider === 'baseten' ? 'meta-models/muse-spark-open-1026' : 'offline-modal-model',
+        revision: 'offline-utf8-contract',
+        evidence: 'Offline contract fixture only; no native qualification or live request.',
+        validUntil: new Date(Date.now() + 86400000).toISOString(),
+        fixedInputUpperBound: 1048576,
+        inputAccounting: 'utf8-bytes-v1',
+        maximumOutputTokens: 2048,
+        authoritativeUsage: true,
+        outputIncludesReasoning: true,
+        allAcceptedTextCovered: true,
+        rejectionHasNoUsage: true,
+      }));
+      try {
+        ctx.config = {
+          ...oldConfig,
+          inferenceBasetenProviderEmail: providers[0].email,
+          inferenceModalProviderEmail: providers[1].email,
+        };
+        ctx.inference = await createInferenceRuntime(
+          loadConfig({
+            DATABASE_URL: url!,
+            WICK_MODE: 'fixture',
+            MUSE_MODE: 'fixture',
+            INFERENCE_MARKET_MODE: 'real',
+            BASETEN_API_KEY: 'offline-test-key',
+            INFERENCE_MODAL_MODEL: 'offline-modal-model',
+            INFERENCE_MODAL_PROXY_TOKEN: 'offline-modal-token',
+            INFERENCE_QUALIFICATION_JSON: JSON.stringify(certificates),
+            BETTER_AUTH_SECRET: oldConfig.authSecret,
+          }),
+        );
+        ctx.inference.dispatch = vi.fn(async () => ({
+          id: 'offline-native-receipt',
+          content: 'OK',
+          finishReason: 'stop',
+          inputTokens: 20,
+          outputTokens: 12,
+        }));
+        await initializeInference(ctx);
+        await pool.query('UPDATE broker_token_offerings SET active=true,auto_bid=true');
+        const g = await grant(),
+          key = await agent(g.id),
+          pack = await buy(g.id, { inputTokens: 10000, outputTokens: 1000 });
+        const operationKey = randomUUID();
+        await complete(ctx, key.actor, { ...call, operationKey });
+        const receipt = (
+          await pool.query(
+            'SELECT reserved_input,reserved_output FROM broker_inference_requests WHERE grant_id=$1',
+            [g.id],
+          )
+        ).rows[0];
+        expect(receipt).toEqual({ reserved_input: 4133, reserved_output: 64 });
+        const remaining = (await grantDetail(ctx, owner, g.id)).packs.find(
+          (p) => p.id === pack.id,
+        )!;
+        expect(remaining.availableInputTokens).toBe(9980);
+        expect(remaining.availableOutputTokens).toBe(988);
+        await expect(
+          complete(ctx, key.actor, {
+            ...call,
+            operationKey: randomUUID(),
+            response_format: { type: 'json_object' },
+          }),
+        ).rejects.toThrow();
+        await expect(
+          complete(ctx, key.actor, { ...call, operationKey: randomUUID(), max_tokens: 2048 }),
+        ).rejects.toMatchObject({ code: 'token_allowance_exceeded' });
+        await expect(complete(ctx, key.actor, { ...call, operationKey })).rejects.toMatchObject({
+          code: 'completed_without_result',
+        });
+        expect(ctx.inference.dispatch).toHaveBeenCalledTimes(1);
+      } finally {
+        ctx.config = oldConfig;
+      }
+    });
     it('defaults new grants to two hours and keeps buying policies owner-only', async () => {
       const g = await grant();
       expect(Date.parse(g.expiresAt) - Date.parse(g.createdAt)).toBeGreaterThan(7199000);

@@ -72,7 +72,7 @@ export async function allowance(
     const bound =
       p.source_mode === 'fixture'
         ? FIXTURE_BUYING_INPUT_BOUND
-        : Number(p.snapshot.minimumInputReservation);
+        : Number(p.snapshot.maximumInputReservation ?? p.snapshot.minimumInputReservation);
     if (
       p.qualified &&
       !p.quarantined_at &&

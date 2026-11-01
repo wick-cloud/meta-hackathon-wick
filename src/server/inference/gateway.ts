@@ -23,7 +23,12 @@ import {
   receiptView,
   runtime,
 } from './data.js';
-import { fixtureInputTokens, InferenceUpstreamError, type AdapterResult } from './runtime.js';
+import {
+  inputReservation,
+  InferenceUpstreamError,
+  MIN_TASK_OUTPUT_RESERVATION,
+  type AdapterResult,
+} from './runtime.js';
 import { retirePackLocked } from './market.js';
 import { studioAuthority } from '../coding/studio-budget.js';
 import { seal } from '../coding/artifacts.js';
@@ -360,7 +365,7 @@ async function completeInternal(
   const { operationKey, ...input } = completionSchema.parse(raw),
     grantId = source?.grantId ?? requireGrantKey(actor),
     rt = runtime(ctx);
-  // Leave reasoning policy with Muse's serving endpoint for every task and repair.
+  // Public request parameters remain unchanged; task prompts choose their own bounded reasoning policy.
   const fingerprint = operationFingerprint(input);
   const reservation = await transaction(ctx.pool, async (db) => {
     await authority(db, actor, 'inference:use');
@@ -441,18 +446,23 @@ async function completeInternal(
       } catch {
         continue;
       }
-      const inputBound = native.mode === 'fixture' ? fixtureInputTokens(input) : native.inputBound;
+      const inputBound = inputReservation(native, input);
+      const outputBound = source
+        ? Math.min(input.max_tokens, Number(pack.available_output))
+        : input.max_tokens;
       if (
         input.max_tokens > native.maximumOutputTokens ||
         Number(pack.available_input) < inputBound ||
-        Number(pack.available_output) < input.max_tokens
+        Number(pack.available_output) < outputBound ||
+        outputBound <
+          Math.min(input.max_tokens, source ? MIN_TASK_OUTPUT_RESERVATION : input.max_tokens)
       )
         continue;
       const now = await clock(db);
       if (new Date(grant.expires_at) <= now || new Date(pack.expires_at) <= now) break;
       await db.query(
         'UPDATE broker_token_packs SET available_input=available_input-$2,available_output=available_output-$3,held_input=held_input+$2,held_output=held_output+$3 WHERE id=$1',
-        [pack.id, inputBound, input.max_tokens],
+        [pack.id, inputBound, outputBound],
       );
       await db.query(
         'UPDATE broker_inference_routes SET held_calls=held_calls+1 WHERE provider=$1',
@@ -472,7 +482,7 @@ async function completeInternal(
             operationKey,
             fingerprint,
             inputBound,
-            input.max_tokens,
+            outputBound,
             source?.kind === 'coding' ? source.id : null,
             source?.kind === 'studio' ? source.id : null,
           ],
@@ -492,7 +502,7 @@ async function completeInternal(
       }
       await event(db, grantId, `reserve:${request.id}`, 'usage_reserved', request.id, actor.id, {
         inputTokens: inputBound,
-        outputTokens: input.max_tokens,
+        outputTokens: outputBound,
       });
       return { request, native, pack };
     }
@@ -541,7 +551,12 @@ async function completeInternal(
   }
   let result: AdapterResult;
   try {
-    result = await rt.dispatch(native, input, request.id);
+    result = await rt.dispatch(
+      native,
+      { ...input, max_tokens: request.reserved_output },
+      request.id,
+      source ? { jsonObject: true } : undefined,
+    );
   } catch (error) {
     const upstream =
       error instanceof InferenceUpstreamError

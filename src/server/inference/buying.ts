@@ -74,7 +74,7 @@ export async function listAgents(ctx: AppContext, actor: Actor, raw: unknown) {
     ? (
         await ctx.pool.query(
           `SELECT t.grant_id,sum(LEAST(
-    floor(t.available_input/GREATEST(1,CASE WHEN t.source_mode='fixture' THEN ${FIXTURE_BUYING_INPUT_BOUND} ELSE (t.snapshot->>'minimumInputReservation')::numeric END)),
+    floor(t.available_input/GREATEST(1,CASE WHEN t.source_mode='fixture' THEN ${FIXTURE_BUYING_INPUT_BOUND} ELSE COALESCE((t.snapshot->>'maximumInputReservation')::numeric,(t.snapshot->>'minimumInputReservation')::numeric) END)),
     floor(t.available_output/COALESCE(p.output_per_call,512))))::int eligible_calls
     FROM broker_token_packs t JOIN broker_inference_routes r ON r.provider=t.provider
     LEFT JOIN broker_inference_buying_policies p ON p.grant_id=t.grant_id

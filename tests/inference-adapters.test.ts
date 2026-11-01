@@ -126,6 +126,40 @@ afterEach(() => {
 });
 
 describe('inference runtime enablement and qualification', () => {
+  it('keeps fixed contracts unchanged and requires explicit qualification for request-sized UTF-8 reservations', async () => {
+    const fixed = await certifiedRuntime();
+    const dynamic = await certifiedRuntime([
+      certificate('baseten', { fixedInputUpperBound: 1048576, inputAccounting: 'utf8-bytes-v1' }),
+    ]);
+    const old = fixed.routes.get('baseten')!,
+      next = dynamic.routes.get('baseten')!;
+    expect(routeView(old).minimumInputReservation).toBe(32768);
+    expect(routeView(next).minimumInputReservation).toBe(4128);
+    expect(next.fingerprint).not.toBe(old.fingerprint);
+    const { inputReservation } = await import('../src/server/inference/runtime.js');
+    expect(inputReservation(old, input)).toBe(32768);
+    const unicode = { messages: [{ role: 'user' as const, content: '修复 🧪 e\u0301' }] };
+    expect(inputReservation(next, unicode)).toBe(
+      4128 + Buffer.byteLength(unicode.messages[0].content, 'utf8'),
+    );
+    expect(inputReservation(next, unicode)).toBeLessThan(4200);
+    const many = {
+      messages: Array.from({ length: 64 }, () => ({
+        role: 'user' as const,
+        content: '🧪'.repeat(200),
+      })),
+    };
+    expect(inputReservation(next, many)).toBe(4096 + 64 * (32 + 800));
+    const compatibility = { messages: [{ role: 'user' as const, content: '\uFDFA'.repeat(1000) }] };
+    expect(inputReservation(next, compatibility)).toBeGreaterThan(
+      4128 + Buffer.byteLength(compatibility.messages[0].content),
+    );
+    const invalid = await certifiedRuntime([
+      certificate('baseten', { fixedInputUpperBound: 4000, inputAccounting: 'utf8-bytes-v1' }),
+    ]);
+    expect(invalid.routes.get('baseten')!.qualified).toBe(false);
+    expect(fetch).not.toHaveBeenCalled();
+  });
   it('defaults to an off marketplace and does not call a provider', async () => {
     const config = loadConfig(env);
     expect(config.inferenceMarketMode).toBe('off');
@@ -300,7 +334,24 @@ describe('inference runtime enablement and qualification', () => {
 
 describe('single-attempt provider requests and authoritative usage', () => {
   it.each(['baseten', 'modal'] as const)(
-    'leaves reasoning policy to %s without changing planning accounting bounds',
+    'requests native JSON only for opted-in internal %s calls',
+    async (provider) => {
+      const fetcher = vi.fn<typeof fetch>().mockResolvedValue(response(completion()));
+      await dispatchReal(
+        (await certifiedRuntime()).routes.get(provider)!,
+        input,
+        'internal-json',
+        fetcher,
+        { jsonObject: true },
+      );
+      expect(JSON.parse(fetcher.mock.calls[0]![1]!.body as string).response_format).toEqual({
+        type: 'json_object',
+      });
+      expect(fetcher).toHaveBeenCalledTimes(1);
+    },
+  );
+  it.each(['baseten', 'modal'] as const)(
+    'omits provider-specific reasoning parameters for %s and preserves accounting bounds',
     async (provider) => {
       const fetcher = vi.fn<typeof fetch>().mockResolvedValue(response(completion()));
       const native = (await certifiedRuntime()).routes.get(provider)!;

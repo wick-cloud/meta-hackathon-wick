@@ -532,7 +532,9 @@ function UsageEstimate({ usage }: { usage: StudioUsage }) {
     <section className="studio-card studio-usage" aria-label="Model usage estimate">
       <div className="studio-section-head">
         <h2>Model usage</h2>
-        <span className="studio-tag">90% target</span>
+        <span className="studio-tag">
+          {f.version === 'studio-usage-v3-small-packs' ? 'Initial +10%' : '90% target'}
+        </span>
       </div>
       <p>
         {f.basis === 'learned'
@@ -575,20 +577,22 @@ function UsageEstimate({ usage }: { usage: StudioUsage }) {
       )}
       {usage.reservationLimited && (
         <p className="studio-usage-floor">
-          Provider reservation requirements increase the allowance above the forecast. The 90%
-          target cannot be reached while those requirements dominate.
+          A provider reservation minimum increased this purchase above the buffered usage estimate.
+          Refills include input headroom for a short chunk of work.
         </p>
       )}
       <details>
         <summary>How this purchase was sized</summary>
         <p>
           Allowance {usage.purchaseRound + 1}: {count(usage.purchaseInput)} input /{' '}
-          {count(usage.purchaseOutput)} output tokens. It includes room for a final call and targets
-          90% utilization where provider requirements permit. This is a forecast, not a token limit
-          or a spending guarantee.
+          {count(usage.purchaseOutput)} output tokens.{' '}
+          {f.version === 'studio-usage-v3-small-packs'
+            ? 'The first purchase adds 10% to the task estimate. Later auctions buy a small refill only when the next call cannot fit the remaining allowance.'
+            : 'This saved purchase used the earlier reservation policy.'}{' '}
+          Additional purchases never increase your spending ceiling.
         </p>
         <p>
-          Per-call reservation: {count(usage.inputReservationFloor)} input /{' '}
+          Purchase floor: {count(usage.inputReservationFloor)} input /{' '}
           {count(usage.outputReservationFloor)} output tokens. Additional purchases must fit your
           remaining task budget.
         </p>

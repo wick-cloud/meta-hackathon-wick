@@ -39,12 +39,25 @@ export const baseRefSchema = z
     (s) => !s.includes('..') && !s.includes('//') && !s.endsWith('/') && !s.endsWith('.lock'),
     'Use a branch or commit, not a Git expression.',
   );
+const filePath = z
+  .string()
+  .min(1)
+  .max(240)
+  .refine((path) => {
+    const parts = path.split('/');
+    return (
+      !path.startsWith('/') &&
+      !path.includes('\u0000') &&
+      parts.some((p) => p && p !== '.') &&
+      !parts.some((p) => p === '..' || p === '.git')
+    );
+  }, 'Use a file path relative to the repository, outside .git.');
 export const codingAction = z.discriminatedUnion('action', [
-  z.object({ action: z.literal('read'), path: z.string().min(1).max(240) }).strict(),
+  z.object({ action: z.literal('read'), path: filePath }).strict(),
   z
     .object({
       action: z.literal('write'),
-      path: z.string().min(1).max(240),
+      path: filePath,
       content: z.string().max(12000),
     })
     .strict(),

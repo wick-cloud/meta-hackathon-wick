@@ -4,6 +4,7 @@ import {
   priorUsage,
   sizeUsagePurchase,
   usageFeatures,
+  TARGET_UTILIZATION,
   type UsageSample,
 } from '../src/server/coding/usage-estimator.js';
 
@@ -39,7 +40,7 @@ describe('Studio token usage estimator', () => {
     );
     expect(small.basis).toBe('cold_start');
     expect(small.validation).toBeNull();
-    expect(small.targetUtilization).toBe(0.9);
+    expect(small.targetUtilization).toBe(TARGET_UTILIZATION);
     expect(small.expectedInput).toBeLessThan(30000);
     expect(small.expectedOutput).toBeLessThan(6000);
     expect(large.expectedInput).toBeGreaterThan(small.expectedInput);
@@ -57,8 +58,8 @@ describe('Studio token usage estimator', () => {
     expect(after.validation!.inputError).toBeLessThan(0.1);
     expect(after.validation!.outputError).toBeLessThan(0.1);
     const purchase = sizeUsagePurchase(after, { input: 0, output: 0, calls: 0 }, 1, 1, 0);
-    expect(after.expectedInput / purchase.inputTokens).toBeCloseTo(0.9, 3);
-    expect(after.expectedOutput / purchase.outputTokens).toBeCloseTo(0.9, 3);
+    expect(after.expectedInput / purchase.inputTokens).toBeCloseTo(TARGET_UTILIZATION, 3);
+    expect(after.expectedOutput / purchase.outputTokens).toBeCloseTo(TARGET_UTILIZATION, 3);
   });
   it('does not pretend a one-million-token provider minimum achieves 90% utilization', () => {
     const estimate = forecastUsage(usageFeatures('Fix a typo and add a regression test.'), []);
@@ -72,42 +73,57 @@ describe('Studio token usage estimator', () => {
   it('uses actual per-call consumption to size a bounded refill after an underestimate', () => {
     const f = forecastUsage(usageFeatures('Add an average utility and tests.'), []);
     const p = sizeUsagePurchase(f, { input: 50000, output: 10000, calls: 10 }, 1048576, 2048, 1);
-    expect(p.inputTokens).toBe(1063576);
-    expect(p.outputTokens).toBe(5048);
+    expect(p.inputTokens).toBe(1054076);
+    expect(p.outputTokens).toBe(2200);
     expect(p.outputTokens).toBeLessThan(8192);
   });
-  it('replays a settled small Python task without a second costly input-floor pack', () => {
-    // Sanitized historical receipt counts; this is offline replay, not a new live test
-    // or held-out evidence that the cold-start prior generalizes to other tasks.
-    const goal =
-      'Add a dependency-free greeting utility and tests. Create broker_greeting.py at the repository root with greet(name): trim surrounding whitespace, return a greeting and raise ValueError for an empty or whitespace-only name. Create broker_tests/test_greeting.py using stdlib unittest to check a normal name, trimming, and empty-name rejection. Run python3 -m unittest discover -s broker_tests. Keep the change small and return the verified patch.';
-    const f = forecastUsage(usageFeatures(goal), []);
-    const p = sizeUsagePurchase(f, { input: 0, output: 0, calls: 0 }, 1048576, 2048, 0);
-    let input = p.inputTokens,
-      output = p.outputTokens;
-    const receipts = [
-      [2480, 1343],
-      [895, 116],
-      [2683, 1106],
-      [2894, 233],
-      [3102, 682],
-      [2723, 150],
-      [1041, 441],
-      [1123, 100],
-      [1124, 57],
-      [1136, 275],
-    ];
-    for (const [usedInput, usedOutput] of receipts) {
-      expect(input).toBeGreaterThanOrEqual(1048576);
-      expect(output).toBeGreaterThanOrEqual(2048);
-      input -= usedInput!;
-      output -= usedOutput!;
-    }
-    expect(p.inputTokens).toBeLessThan(1179648);
-    const newPrice = (p.inputTokens * 1.7 + p.outputTokens * 5.6) / 1000000;
-    const oldPrice = (1179648 * 1.7 + 8192 * 5.6) / 1000000;
-    expect(newPrice).toBeLessThan(oldPrice);
-    expect(p.reservationLimited).toBe(true);
+  it('keeps a two-call refill usable after its first input reservation settles', () => {
+    const f = {
+      ...forecastUsage(usageFeatures('Add a utility.'), []),
+      expectedInput: 9000,
+      expectedOutput: 1800,
+      expectedCalls: 9,
+    };
+    const refill = sizeUsagePurchase(f, { input: 15000, output: 1500, calls: 15 }, 8000, 1024, 3);
+    expect(refill.inputTokens).toBe(9100);
+    expect(refill.inputTokens - 1000).toBeGreaterThanOrEqual(8000);
+    expect(refill.outputTokens).toBe(1024);
+    expect(
+      sizeUsagePurchase(f, { input: 8000, output: 800, calls: 8 }, 8000, 1024, 1).inputTokens,
+    ).toBe(8000);
+  });
+  it('buys near the reported task estimate rather than an extra full-context pack', () => {
+    const f = {
+      ...forecastUsage(usageFeatures('Add a small utility and test it.'), []),
+      expectedInput: 13443,
+      expectedOutput: 3346,
+      expectedCalls: 8,
+    };
+    const p = sizeUsagePurchase(f, { input: 0, output: 0, calls: 0 }, 7000, 2048, 0);
+    expect(p).toEqual({ inputTokens: 14788, outputTokens: 3681, reservationLimited: false });
+    const refill = sizeUsagePurchase(f, { input: 13000, output: 3200, calls: 8 }, 8000, 2048, 1);
+    expect(refill.inputTokens).toBeLessThan(p.inputTokens);
+    expect(refill.outputTokens).toBe(2048);
+    expect(refill.inputTokens).toBeGreaterThanOrEqual(8000);
+    expect(p.inputTokens).toBeLessThan(1048576 / 50);
+  });
+  it('only expands a small pack when the exact next request needs more, without integer rounding drift', () => {
+    const f = {
+      ...forecastUsage(usageFeatures('Fix a typo.'), []),
+      expectedInput: 100,
+      expectedOutput: 20,
+      expectedCalls: 2,
+    };
+    expect(sizeUsagePurchase(f, { input: 0, output: 0, calls: 0 }, 1, 1, 0)).toEqual({
+      inputTokens: 110,
+      outputTokens: 22,
+      reservationLimited: false,
+    });
+    expect(sizeUsagePurchase(f, { input: 0, output: 0, calls: 0 }, 5000, 2048, 0)).toEqual({
+      inputTokens: 5000,
+      outputTokens: 2048,
+      reservationLimited: true,
+    });
   });
   it('bounds training, rejects malformed observations and keeps singular histories stable', () => {
     const s = history(1)[0]!;
