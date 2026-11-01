@@ -29,6 +29,7 @@ const qualification = z
     inputAccounting: z.literal('utf8-bytes-v1').optional(),
     maximumOutputTokens: z.number().int().min(1).max(8192),
     minimumOutputTokens: z.number().int().min(1).max(8192).optional(),
+    usagePolicy: z.literal('modal-generated-token-ids-v1').optional(),
     authoritativeUsage: z.literal(true),
     outputIncludesReasoning: z.literal(true),
     allAcceptedTextCovered: z.literal(true),
@@ -40,7 +41,13 @@ const qualification = z
   })
   .refine((c) => (c.minimumOutputTokens ?? 1) <= c.maximumOutputTokens, {
     message: 'The qualified output range must be nonempty.',
-  });
+  })
+  .refine(
+    (c) => !c.usagePolicy || (c.provider === 'modal' && (c.minimumOutputTokens ?? 1) >= 256),
+    {
+      message: 'The bounded Modal policy requires its reviewed output range.',
+    },
+  );
 export interface RuntimeRoute {
   provider: InferenceProvider;
   mode: 'fixture' | 'real';
@@ -51,6 +58,7 @@ export interface RuntimeRoute {
   inputAccounting?: 'utf8-bytes-v1';
   maximumOutputTokens: number;
   minimumOutputTokens?: number;
+  usagePolicy?: 'modal-generated-token-ids-v1';
   validUntil: number;
   nativeModel: string;
   baseUrl: string;
@@ -64,6 +72,11 @@ export interface AdapterResult {
   outputTokens: number;
   /** Provider diagnostic discrepancy paid by Wick, outside the agent's quota. */
   platformOutputTokens?: 1;
+  usageVerification?: {
+    method: 'modal-generated-token-ids-v1';
+    reportedReasoningTokens?: number;
+    reportedDetailedReasoningTokens?: number;
+  };
 }
 export class InferenceUpstreamError extends Error {
   constructor(
@@ -174,6 +187,8 @@ const usageSchema = z.object({
       z.object({
         message: z.object({ content: z.string().nullable() }),
         finish_reason: z.string().max(80),
+        prompt_token_ids: z.array(z.number().int().min(0).max(2147483647)).max(1000000).nullish(),
+        response_token_ids: z.array(z.number().int().min(0).max(2147483647)).max(8192).nullish(),
       }),
     )
     .length(1),
@@ -220,6 +235,7 @@ export async function dispatchReal(
         stream: false,
         n: 1,
         ...(options?.jsonObject ? { response_format: { type: 'json_object' } } : {}),
+        ...(route.usagePolicy === 'modal-generated-token-ids-v1' ? { return_token_ids: true } : {}),
       }),
     });
     const upstreamId = response.headers.get('x-request-id')?.slice(0, 300);
@@ -238,17 +254,35 @@ export async function dispatchReal(
     const data = parsed.data;
     const reasoning = data.usage.reasoning_tokens;
     const detailedReasoning = data.usage.completion_tokens_details?.reasoning_tokens;
-    // Modal reports one extra reasoning token on some truncated completions.
-    // Wick absorbs that single token; it never increases the buyer's usage.
+    const verifiedIds =
+      route.provider === 'modal' && route.usagePolicy === 'modal-generated-token-ids-v1';
+    if (verifiedIds) {
+      // SGLang returns the raw generated sequence before reasoning/text parsing.
+      // Verify its primary counts independently; never persist IDs or traces.
+      const choice = data.choices[0];
+      if (!choice.prompt_token_ids || !choice.response_token_ids)
+        throw new InferenceUpstreamError('missing_authoritative_usage', false, data.id);
+      if (
+        choice.prompt_token_ids.length !== data.usage.prompt_tokens ||
+        choice.response_token_ids.length !== data.usage.completion_tokens
+      )
+        throw new InferenceUpstreamError('inconsistent_usage', false, data.id);
+    }
+    // Legacy Modal contracts preserve their exact platform-paid one-token policy.
     const reasoningCount = detailedReasoning ?? reasoning ?? 0;
     const platformOutputTokens =
-      route.provider === 'modal' && reasoningCount === data.usage.completion_tokens + 1 ? 1 : 0;
+      !verifiedIds &&
+      route.provider === 'modal' &&
+      reasoningCount === data.usage.completion_tokens + 1
+        ? 1
+        : 0;
     if (
       data.usage.total_tokens !== data.usage.prompt_tokens + data.usage.completion_tokens ||
-      reasoningCount > data.usage.completion_tokens + platformOutputTokens ||
-      (reasoning !== undefined &&
-        detailedReasoning !== undefined &&
-        reasoning !== detailedReasoning)
+      (!verifiedIds &&
+        (reasoningCount > data.usage.completion_tokens + platformOutputTokens ||
+          (reasoning !== undefined &&
+            detailedReasoning !== undefined &&
+            reasoning !== detailedReasoning)))
     )
       throw new InferenceUpstreamError('inconsistent_usage', false, data.id);
     return {
@@ -258,6 +292,17 @@ export async function dispatchReal(
       inputTokens: data.usage.prompt_tokens,
       outputTokens: data.usage.completion_tokens,
       ...(platformOutputTokens ? { platformOutputTokens } : {}),
+      ...(verifiedIds
+        ? {
+            usageVerification: {
+              method: 'modal-generated-token-ids-v1' as const,
+              ...(reasoning !== undefined ? { reportedReasoningTokens: reasoning } : {}),
+              ...(detailedReasoning !== undefined
+                ? { reportedDetailedReasoningTokens: detailedReasoning }
+                : {}),
+            },
+          }
+        : {}),
     };
   } catch (error) {
     if (error instanceof InferenceUpstreamError) throw error;
@@ -327,6 +372,7 @@ export async function createInferenceRuntime(config: Config): Promise<InferenceR
               inputBound: cert.fixedInputUpperBound,
               maximumOutputTokens: cert.maximumOutputTokens,
               ...(cert.inputAccounting ? { inputAccounting: cert.inputAccounting } : {}),
+              ...(cert.usagePolicy ? { usagePolicy: cert.usagePolicy } : {}),
               ...((cert.minimumOutputTokens ?? 1) > 1
                 ? { minimumOutputTokens: cert.minimumOutputTokens }
                 : {}),
@@ -337,6 +383,7 @@ export async function createInferenceRuntime(config: Config): Promise<InferenceR
       reason,
       inputBound: cert?.fixedInputUpperBound ?? 1,
       ...(cert?.inputAccounting ? { inputAccounting: cert.inputAccounting } : {}),
+      ...(cert?.usagePolicy ? { usagePolicy: cert.usagePolicy } : {}),
       maximumOutputTokens: cert?.maximumOutputTokens ?? 8192,
       ...((cert?.minimumOutputTokens ?? 1) > 1
         ? { minimumOutputTokens: cert!.minimumOutputTokens }

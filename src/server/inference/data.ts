@@ -189,8 +189,10 @@ export const receiptView = (r: Row): InferenceReceipt => ({
   provider: r.provider,
   mode: r.source_mode,
   status: r.status,
-  heldInputTokens: ['settled', 'rejected'].includes(r.status) ? 0 : r.reserved_input,
-  heldOutputTokens: ['settled', 'rejected'].includes(r.status) ? 0 : r.reserved_output,
+  heldInputTokens: ['settled', 'rejected', 'written_off'].includes(r.status) ? 0 : r.reserved_input,
+  heldOutputTokens: ['settled', 'rejected', 'written_off'].includes(r.status)
+    ? 0
+    : r.reserved_output,
   inputTokens: r.input_tokens,
   outputTokens: r.output_tokens,
   failureCode: r.failure_code,

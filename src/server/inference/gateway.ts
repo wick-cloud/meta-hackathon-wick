@@ -90,7 +90,7 @@ async function settleLocked(
   evidence?: string,
   actorId?: string,
 ) {
-  if (['settled', 'rejected'].includes(request.status)) return;
+  if (['settled', 'rejected', 'written_off'].includes(request.status)) return;
   if (inputTokens > request.reserved_input || outputTokens > request.reserved_output)
     failure(
       409,
@@ -160,7 +160,7 @@ async function settleLocked(
     await retirePackLocked(db, updated, 'quota_exhausted');
   await db.query(
     `UPDATE broker_inference_grants g SET status='closed' WHERE g.id=$1 AND g.status='closing'
-    AND held_cents=0 AND NOT EXISTS(SELECT 1 FROM broker_inference_requests WHERE grant_id=g.id AND status NOT IN('settled','rejected'))`,
+    AND held_cents=0 AND NOT EXISTS(SELECT 1 FROM broker_inference_requests WHERE grant_id=g.id AND status NOT IN('settled','rejected','written_off'))`,
     [request.grant_id],
   );
 }
@@ -178,7 +178,7 @@ export async function settleRequest(
   if (!meta) return;
   await transaction(ctx.pool, async (db) => {
     const { pack, request } = await lockRequest(db, meta);
-    if (['settled', 'rejected'].includes(request.status)) return;
+    if (['settled', 'rejected', 'written_off'].includes(request.status)) return;
     if (
       result &&
       (result.inputTokens > request.reserved_input || result.outputTokens > request.reserved_output)
@@ -240,6 +240,29 @@ export async function settleRequest(
           provider: pack.provider,
           outputTokens: result.platformOutputTokens,
           policy: 'modal-reasoning-one-token',
+        },
+      );
+    if (result?.usageVerification)
+      await event(
+        db,
+        request.grant_id,
+        `verified-token-ids:${request.id}`,
+        'usage_token_ids_verified',
+        request.id,
+        undefined,
+        {
+          method: result.usageVerification.method,
+          inputTokens: result.inputTokens,
+          outputTokens: result.outputTokens,
+          ...(result.usageVerification.reportedReasoningTokens !== undefined
+            ? { reportedReasoningTokens: result.usageVerification.reportedReasoningTokens }
+            : {}),
+          ...(result.usageVerification.reportedDetailedReasoningTokens !== undefined
+            ? {
+                reportedDetailedReasoningTokens:
+                  result.usageVerification.reportedDetailedReasoningTokens,
+              }
+            : {}),
         },
       );
   });
@@ -393,11 +416,13 @@ async function completeInternal(
           'This operation key belongs to a different inference request.',
         );
       inferenceFailure(
-        prior.status === 'settled'
-          ? 'completed_without_result'
-          : prior.status === 'rejected'
-            ? 'inference_rejected'
-            : 'inference_pending',
+        prior.status === 'written_off'
+          ? 'inference_written_off'
+          : prior.status === 'settled'
+            ? 'completed_without_result'
+            : prior.status === 'rejected'
+              ? 'inference_rejected'
+              : 'inference_pending',
         prior.id,
         `Request ${prior.id} is ${prior.status}. Read /api/inference/requests/${prior.id}; it will never be automatically resent.`,
       );
@@ -416,7 +441,7 @@ async function completeInternal(
       );
     const pending = (
       await db.query(
-        `SELECT 1 FROM broker_inference_requests WHERE grant_id=$1 AND status NOT IN('settled','rejected') LIMIT 2`,
+        `SELECT 1 FROM broker_inference_requests WHERE grant_id=$1 AND status NOT IN('settled','rejected','written_off') LIMIT 2`,
         [grantId],
       )
     ).rowCount;
@@ -664,7 +689,7 @@ export async function recoverRequest(ctx: AppContext, id: string) {
     const { pack, request } = await lockRequest(db, meta);
     if (
       new Date(request.deadline_at) > (await clock(db)) ||
-      ['settled', 'rejected', 'needs_reconciliation'].includes(request.status)
+      ['settled', 'rejected', 'written_off', 'needs_reconciliation'].includes(request.status)
     )
       return;
     if (request.status === 'reserved') {
@@ -734,6 +759,127 @@ export async function resolveRequest(ctx: AppContext, actor: Actor, id: string, 
       id,
       actor.id,
       { fingerprint: operationFingerprint(input), evidence: input.evidence },
+    );
+    return receiptView(
+      (await db.query('SELECT * FROM broker_inference_requests WHERE id=$1', [id])).rows[0],
+    );
+  });
+}
+
+/** Explicit operator loss acceptance, never authoritative usage reconciliation.
+ * Limited to manual calls whose owner has already closed/expired their pack.
+ * The retired reservation cannot be reused, billed as consumption, or refunded.
+ */
+export async function writeOffRequest(ctx: AppContext, actor: Actor, id: string, raw: unknown) {
+  if (actor.role !== 'admin' || actor.apiKey)
+    failure(403, 'operator_required', 'Only a signed-in operator can accept platform liability.');
+  const input = z
+    .object({
+      operationKey: operationSchema,
+      evidence: z.string().trim().min(20).max(2000),
+      acceptPlatformLiability: z.literal(true),
+    })
+    .strict()
+    .parse(raw);
+  const meta = (
+    await ctx.pool.query('SELECT id,grant_id,pack_id FROM broker_inference_requests WHERE id=$1', [
+      id,
+    ])
+  ).rows[0];
+  if (!meta) failure(404, 'not_found', 'Inference request not found.');
+  return transaction(ctx.pool, async (db) => {
+    await authority(db, actor);
+    const { grant, pack, request } = await lockRequest(db, meta);
+    const operation = `write-off:${id}:${input.operationKey}`;
+    const prior = (
+      await db.query(
+        'SELECT details FROM broker_inference_events WHERE grant_id=$1 AND operation_key=$2',
+        [grant.id, operation],
+      )
+    ).rows[0];
+    if (prior) {
+      if (prior.details.fingerprint !== operationFingerprint(input))
+        failure(
+          409,
+          'operation_conflict',
+          'This write-off key was already used with other evidence.',
+        );
+      return receiptView(request);
+    }
+    if (
+      !['outcome_unknown', 'needs_reconciliation'].includes(request.status) ||
+      new Date(request.deadline_at) > (await clock(db)) ||
+      !request.source_key_id ||
+      request.source_job_id ||
+      request.source_task_id ||
+      request.input_tokens !== null ||
+      request.output_tokens !== null ||
+      grant.status !== 'closing' ||
+      pack.status !== 'retiring' ||
+      !['owner_closed', 'expired'].includes(pack.retirement_reason)
+    )
+      failure(
+        409,
+        'write_off_unavailable',
+        'Only an overdue unresolved manual call in an owner-closed or expired retiring pack can be written off.',
+      );
+    const inputRate = pack.snapshot.costInputRate,
+      outputRate = pack.snapshot.costOutputRate;
+    if (
+      !Number.isSafeInteger(inputRate) ||
+      !Number.isSafeInteger(outputRate) ||
+      inputRate < 0 ||
+      outputRate < 0
+    )
+      failure(
+        409,
+        'write_off_cost_unknown',
+        'Frozen native cost rates are required for write-off.',
+      );
+    const reservedCost =
+      BigInt(request.reserved_input) * BigInt(inputRate) +
+      BigInt(request.reserved_output) * BigInt(outputRate);
+    await db.query(
+      `UPDATE broker_token_packs SET held_input=held_input-$2,held_output=held_output-$3,
+       retired_input=retired_input+$2,retired_output=retired_output+$3 WHERE id=$1`,
+      [pack.id, request.reserved_input, request.reserved_output],
+    );
+    await db.query(
+      `UPDATE broker_inference_routes SET held_calls=held_calls-1,
+       outstanding_input=outstanding_input-$2,outstanding_output=outstanding_output-$3 WHERE provider=$1`,
+      [pack.provider, request.reserved_input, request.reserved_output],
+    );
+    await db.query(
+      `UPDATE broker_inference_requests SET status='written_off',usage_evidence=$2,
+       resolution_actor=$3,completed_at=clock_timestamp() WHERE id=$1`,
+      [id, input.evidence, actor.id],
+    );
+    await event(db, grant.id, operation, 'platform_usage_written_off', id, actor.id, {
+      fingerprint: operationFingerprint(input),
+      evidence: input.evidence,
+      provider: pack.provider,
+      providerRequestId: request.provider_request_id,
+      routeFingerprint: pack.route_fingerprint,
+      originalFailureCode: request.failure_code,
+      originalUsageEvidence: request.usage_evidence,
+      reservedInputTokens: request.reserved_input,
+      reservedOutputTokens: request.reserved_output,
+      costInputRateMicrosPerMillion: inputRate,
+      costOutputRateMicrosPerMillion: outputRate,
+      reservedCostExposureMicros: ((reservedCost + 999999n) / 1000000n).toString(),
+      actualUsageKnown: false,
+      nativeInvoiceKnown: false,
+      liabilityOwner: 'platform',
+      buyerMoneyChanged: false,
+    });
+    const updated = (await db.query('SELECT * FROM broker_token_packs WHERE id=$1', [pack.id]))
+      .rows[0];
+    await retirePackLocked(db, updated, pack.retirement_reason);
+    await db.query(
+      `UPDATE broker_inference_grants g SET status='closed' WHERE id=$1 AND status='closing'
+       AND held_cents=0 AND NOT EXISTS(SELECT 1 FROM broker_inference_requests
+       WHERE grant_id=g.id AND status NOT IN('settled','rejected','written_off'))`,
+      [grant.id],
     );
     return receiptView(
       (await db.query('SELECT * FROM broker_inference_requests WHERE id=$1', [id])).rows[0],

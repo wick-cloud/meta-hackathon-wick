@@ -56,11 +56,13 @@ import {
   receipt,
   recoverRequest,
   resolveRequest,
+  writeOffRequest,
   settleRequest,
 } from '../src/server/inference/gateway.js';
 import { registerInference, maintainInference } from '../src/server/inference/index.js';
 import { transaction } from '../src/server/marketplace/db.js';
 import { applyCreditEntry, creditWalletView } from '../src/server/agreements/credits.js';
+import { taskUsage } from '../src/server/coding/usage-data.js';
 import { listOrders, ORDERS_QUERY, registerOrders } from '../src/server/orders.js';
 import { registerOpenApi } from '../src/server/openapi.js';
 import { BrokerClient } from '../packages/sdk/src/index.js';
@@ -1495,6 +1497,259 @@ describe.skipIf(!url)(
         ).rows[0].held_calls,
       ).toBe(0);
       expect(ctx.inference!.dispatch).toHaveBeenCalledTimes(1);
+    });
+    it('records generated-token verification atomically once without storing token IDs or charging diagnostic reasoning', async () => {
+      const g = await grant(),
+        key = await agent(g.id);
+      await buy(g.id);
+      const native = {
+        id: 'verified-native-response',
+        content: 'OK',
+        finishReason: 'stop',
+        inputTokens: 10,
+        outputTokens: 5,
+        usageVerification: {
+          method: 'modal-generated-token-ids-v1' as const,
+          reportedReasoningTokens: 7,
+          responseTokenIds: [123, 456],
+          privateText: 'Synthetic privacy canary: never persist provider payload fields',
+        },
+      };
+      ctx.inference!.dispatch = vi.fn(async () => native);
+      const result = await complete(ctx, key.actor, { ...call, operationKey: randomUUID() });
+      await settleRequest(ctx, result.broker.requestId, native);
+      const detail = await grantDetail(ctx, owner, g.id);
+      expect(detail.packs[0]).toMatchObject({
+        consumedInputTokens: 10,
+        consumedOutputTokens: 5,
+        heldInputTokens: 0,
+        heldOutputTokens: 0,
+      });
+      const events = (
+        await pool.query(
+          "SELECT details FROM broker_inference_events WHERE kind='usage_token_ids_verified' AND resource_id=$1",
+          [result.broker.requestId],
+        )
+      ).rows;
+      expect(events).toHaveLength(1);
+      expect(events[0].details).toEqual({
+        method: 'modal-generated-token-ids-v1',
+        inputTokens: 10,
+        outputTokens: 5,
+        reportedReasoningTokens: 7,
+      });
+      expect(
+        (
+          await pool.query(
+            "SELECT count(*)::int n FROM broker_inference_events WHERE kind='platform_output_absorbed'",
+          )
+        ).rows[0].n,
+      ).toBe(0);
+      expect(
+        (
+          await pool.query(
+            "SELECT count(*)::int n FROM broker_credit_ledger WHERE kind='token_purchase'",
+          )
+        ).rows[0].n,
+      ).toBe(1);
+      expect(ctx.inference!.dispatch).toHaveBeenCalledTimes(1);
+    });
+    it('writes off only closed manual uncertainty without inventing usage or changing buyer money', async () => {
+      const g = await grant(),
+        key = await agent(g.id);
+      const pack = await buy(g.id);
+      ctx.inference!.dispatch = vi.fn(async () => {
+        throw new InferenceUpstreamError('inconsistent_usage', false, 'fixture-native-request');
+      });
+      const operationKey = randomUUID();
+      await expect(complete(ctx, key.actor, { ...call, operationKey })).rejects.toMatchObject({
+        code: 'inference_outcome_unknown',
+      });
+      const request = (
+        await pool.query('SELECT * FROM broker_inference_requests WHERE grant_id=$1', [g.id])
+      ).rows[0];
+      const input = {
+        operationKey: randomUUID(),
+        evidence:
+          'Operator accepts native liability for this historical fixture call; actual usage remains unknown.',
+        acceptPlatformLiability: true,
+      };
+      await expect(writeOffRequest(ctx, owner, request.id, input)).rejects.toMatchObject({
+        code: 'operator_required',
+      });
+      const forbidden = await app.inject({
+        method: 'POST',
+        url: `/api/admin/inference/requests/${request.id}/write-off`,
+        headers: { cookie, origin },
+        payload: input,
+      });
+      expect(forbidden.statusCode).toBe(403);
+      await expect(writeOffRequest(ctx, operator, request.id, input)).rejects.toMatchObject({
+        code: 'write_off_unavailable',
+      });
+      await closeGrant(ctx, owner, g.id, { operationKey: randomUUID() });
+      await expect(writeOffRequest(ctx, operator, request.id, input)).rejects.toMatchObject({
+        code: 'write_off_unavailable',
+      });
+      await pool.query(
+        "UPDATE broker_inference_requests SET deadline_at=clock_timestamp()-interval '1 second' WHERE id=$1",
+        [request.id],
+      );
+      await recoverRequest(ctx, request.id);
+      const moneyBefore = await creditWalletView(pool, owner.id);
+      const grantBefore = (await grantDetail(ctx, owner, g.id)).grant;
+      const auditBefore = (await pool.query('SELECT count(*)::int n FROM broker_credit_ledger'))
+        .rows[0].n;
+      const [first, replay] = await Promise.all([
+        writeOffRequest(ctx, operator, request.id, input),
+        writeOffRequest(ctx, operator, request.id, input),
+      ]);
+      expect(first).toEqual(replay);
+      expect(first).toMatchObject({
+        status: 'written_off',
+        inputTokens: null,
+        outputTokens: null,
+        heldInputTokens: 0,
+        heldOutputTokens: 0,
+        failureCode: 'inconsistent_usage',
+      });
+      const detail = await grantDetail(ctx, owner, g.id);
+      expect(detail.grant).toMatchObject({
+        status: 'closed',
+        fundedCents: grantBefore.fundedCents,
+        spentCents: grantBefore.spentCents,
+        returnedCents: grantBefore.returnedCents,
+        availableCents: 0,
+        heldCents: 0,
+      });
+      expect(detail.packs[0]).toMatchObject({
+        id: pack.id,
+        status: 'settled',
+        heldInputTokens: 0,
+        heldOutputTokens: 0,
+        consumedInputTokens: 0,
+        consumedOutputTokens: 0,
+        retiredInputTokens: pack.inputTokens,
+        retiredOutputTokens: pack.outputTokens,
+        refundCents: 0,
+        priceCents: pack.priceCents,
+      });
+      expect(await creditWalletView(pool, owner.id)).toEqual(moneyBefore);
+      expect((await pool.query('SELECT count(*)::int n FROM broker_credit_ledger')).rows[0].n).toBe(
+        auditBefore,
+      );
+      const native = (
+        await pool.query('SELECT * FROM broker_inference_routes WHERE provider=$1', [
+          request.provider,
+        ])
+      ).rows[0];
+      expect(native).toMatchObject({
+        held_calls: 0,
+        outstanding_input: '0',
+        outstanding_output: '0',
+        qualified: false,
+      });
+      expect(native.quarantined_at).not.toBeNull();
+      const saved = (
+        await pool.query('SELECT * FROM broker_inference_requests WHERE id=$1', [request.id])
+      ).rows[0];
+      expect(saved).toMatchObject({
+        provider_request_id: 'fixture-native-request',
+        reserved_input: inputBound,
+        reserved_output: 64,
+        resolution_actor: operator.id,
+        input_tokens: null,
+        output_tokens: null,
+      });
+      const events = (
+        await pool.query(
+          "SELECT * FROM broker_inference_events WHERE kind='platform_usage_written_off' AND resource_id=$1",
+          [request.id],
+        )
+      ).rows;
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({
+        actor_id: operator.id,
+        amount_cents: 0,
+        details: {
+          actualUsageKnown: false,
+          nativeInvoiceKnown: false,
+          liabilityOwner: 'platform',
+          buyerMoneyChanged: false,
+          reservedInputTokens: inputBound,
+          reservedOutputTokens: 64,
+          providerRequestId: 'fixture-native-request',
+        },
+      });
+      expect(BigInt(events[0].details.reservedCostExposureMicros)).toBeGreaterThan(0n);
+      // Operational retirement must not train the estimator on invented zero usage.
+      expect(
+        await taskUsage(pool, { grant_id: g.id, buyer_id: owner.id, id: randomUUID() }),
+      ).toMatchObject({ unresolved: 1, calls: 0, input: 0, output: 0 });
+      // A delayed native response or recovery cannot change the loss decision.
+      await settleRequest(ctx, request.id, {
+        id: 'late-provider-id',
+        content: '',
+        finishReason: 'stop',
+        inputTokens: 10,
+        outputTokens: 5,
+      });
+      await recoverRequest(ctx, request.id);
+      expect(await receipt(ctx, owner, request.id)).toEqual(first);
+      await expect(
+        writeOffRequest(ctx, operator, request.id, {
+          ...input,
+          evidence: 'Different evidence cannot replay the same operator operation key.',
+        }),
+      ).rejects.toMatchObject({ code: 'operation_conflict' });
+      await expect(
+        writeOffRequest(ctx, operator, request.id, { ...input, operationKey: randomUUID() }),
+      ).rejects.toMatchObject({ code: 'write_off_unavailable' });
+      await expect(
+        resolveRequest(ctx, operator, request.id, {
+          operationKey: randomUUID(),
+          providerRequestId: 'invented',
+          evidence: 'A write-off must never be converted into fabricated settled usage.',
+          inputTokens: 0,
+          outputTokens: 0,
+          rejected: false,
+        }),
+      ).rejects.toMatchObject({ code: 'request_not_unresolved' });
+      expect(ctx.inference!.dispatch).toHaveBeenCalledTimes(1);
+    });
+    it('does not turn provider-failure retirement into a platform write-off or refund', async () => {
+      const g = await grant(),
+        key = await agent(g.id);
+      await buy(g.id);
+      ctx.inference!.dispatch = async () => {
+        throw new InferenceUpstreamError('transport_outcome_unknown', false);
+      };
+      await expect(
+        complete(ctx, key.actor, { ...call, operationKey: randomUUID() }),
+      ).rejects.toMatchObject({ code: 'inference_outcome_unknown' });
+      const request = (
+        await pool.query('SELECT * FROM broker_inference_requests WHERE grant_id=$1', [g.id])
+      ).rows[0];
+      await closeGrant(ctx, owner, g.id, { operationKey: randomUUID() });
+      await pool.query(
+        "UPDATE broker_inference_requests SET deadline_at=clock_timestamp()-interval '1 second' WHERE id=$1",
+        [request.id],
+      );
+      await pool.query(
+        "UPDATE broker_token_packs SET retirement_reason='provider_failure',refund_evidence='Fixture verified provider outage' WHERE id=$1",
+        [request.pack_id],
+      );
+      const before = await creditWalletView(pool, owner.id);
+      await expect(
+        writeOffRequest(ctx, operator, request.id, {
+          operationKey: randomUUID(),
+          evidence:
+            'Provider-failure refund must retain unknown usage until truthfully reconciled.',
+          acceptPlatformLiability: true,
+        }),
+      ).rejects.toMatchObject({ code: 'write_off_unavailable' });
+      expect(await creditWalletView(pool, owner.id)).toEqual(before);
+      expect((await receipt(ctx, owner, request.id)).heldOutputTokens).toBe(64);
     });
     it('releases definite rejections but quarantines missing or out-of-bounds accounting', async () => {
       const g = await grant(),

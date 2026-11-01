@@ -358,6 +358,7 @@ export const BROKER_API_SCHEMAS: Record<string, JsonSchema> = {
         'rejected',
         'outcome_unknown',
         'needs_reconciliation',
+        'written_off',
       ],
     },
     heldInputTokens: tokens,

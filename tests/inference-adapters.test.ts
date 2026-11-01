@@ -253,6 +253,10 @@ describe('inference runtime enablement and qualification', () => {
     ['excessive output bound', { maximumOutputTokens: 8193 }],
     ['zero output minimum', { minimumOutputTokens: 0 }],
     ['inverted output range', { minimumOutputTokens: 512, maximumOutputTokens: 256 }],
+    [
+      'Modal policy on Baseten',
+      { usagePolicy: 'modal-generated-token-ids-v1', minimumOutputTokens: 256 },
+    ],
     ['unexpected field', { undocumentedFallback: true }],
   ])('fails closed for %s', async (_name, patch) => {
     const runtime = await certifiedRuntime([certificate('baseten', patch)]);
@@ -518,6 +522,137 @@ describe('single-attempt provider requests and authoritative usage', () => {
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
 
+  it.each(['modal', 'baseten'] as const)(
+    'accepts null token-ID extensions on legacy %s',
+    async (provider) => {
+      const fetcher = vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(
+          response(
+            completion({
+              choices: [
+                {
+                  message: { content: 'OK' },
+                  finish_reason: 'stop',
+                  prompt_token_ids: null,
+                  response_token_ids: null,
+                },
+              ],
+            }),
+          ),
+        );
+      expect(
+        await dispatchReal(route(provider), input, 'legacy-null-extensions', fetcher),
+      ).toMatchObject({ inputTokens: 20, outputTokens: 12 });
+    },
+  );
+  it('requires a fingerprinted Modal token-ID contract and verifies primary usage independently', async () => {
+    const legacy = (
+      await certifiedRuntime([certificate('modal', { minimumOutputTokens: 256 })])
+    ).routes.get('modal')!;
+    const native = (
+      await certifiedRuntime([
+        certificate('modal', {
+          minimumOutputTokens: 256,
+          usagePolicy: 'modal-generated-token-ids-v1',
+        }),
+      ])
+    ).routes.get('modal')!;
+    expect(native.fingerprint).not.toBe(legacy.fingerprint);
+    const invalid = await certifiedRuntime([
+      certificate('modal', { usagePolicy: 'modal-generated-token-ids-v1' }),
+    ]);
+    expect(invalid.routes.get('modal')!.qualified).toBe(false);
+    const data = completion({
+      choices: [
+        {
+          message: { content: 'OK' },
+          finish_reason: 'stop',
+          prompt_token_ids: [1, 2, 3],
+          response_token_ids: [4, 5, 6, 7, 8],
+        },
+      ],
+      usage: {
+        prompt_tokens: 3,
+        completion_tokens: 5,
+        total_tokens: 8,
+        reasoning_tokens: 7,
+        completion_tokens_details: { reasoning_tokens: 6 },
+      },
+    });
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async () => response(data));
+    const result = await dispatchReal(
+      native,
+      { ...input, max_tokens: 256 },
+      'verified-modal',
+      fetcher,
+    );
+    expect(result).toMatchObject({
+      inputTokens: 3,
+      outputTokens: 5,
+      usageVerification: { method: 'modal-generated-token-ids-v1', reportedReasoningTokens: 7 },
+    });
+    expect(result).not.toHaveProperty('platformOutputTokens');
+    expect(result).not.toHaveProperty('prompt_token_ids');
+    expect(JSON.parse(String(fetcher.mock.calls[0][1]?.body)).return_token_ids).toBe(true);
+    await expect(
+      dispatchReal(legacy, { ...input, max_tokens: 256 }, 'legacy-unchanged', fetcher),
+    ).rejects.toMatchObject({ code: 'inconsistent_usage', definite: false });
+    expect(JSON.parse(String(fetcher.mock.calls[1][1]?.body))).not.toHaveProperty(
+      'return_token_ids',
+    );
+  });
+  it.each([
+    { prompt_token_ids: undefined, response_token_ids: [4, 5] },
+    { prompt_token_ids: null, response_token_ids: null },
+    { prompt_token_ids: [1, 2, 3], response_token_ids: undefined },
+    { prompt_token_ids: [1, 2], response_token_ids: [4, 5] },
+    { prompt_token_ids: [1, 2, 3], response_token_ids: [4] },
+    { prompt_token_ids: [1, 2, 3], response_token_ids: [4, 5.5] },
+    { prompt_token_ids: [1, 2, 3], response_token_ids: [4, -1] },
+  ])('rejects missing, malformed or mismatched raw token evidence: %j', async (ids) => {
+    const native = {
+      ...route('modal'),
+      minimumOutputTokens: 256,
+      usagePolicy: 'modal-generated-token-ids-v1' as const,
+    };
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+      response(
+        completion({
+          choices: [{ message: { content: 'OK' }, finish_reason: 'stop', ...ids }],
+          usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 },
+        }),
+      ),
+    );
+    await expect(
+      dispatchReal(native, { ...input, max_tokens: 256 }, 'bad-token-evidence', fetcher),
+    ).rejects.toMatchObject({ definite: false });
+  });
+  it('never accepts inconsistent primary totals even with matching raw token lengths', async () => {
+    const native = {
+      ...route('modal'),
+      minimumOutputTokens: 256,
+      usagePolicy: 'modal-generated-token-ids-v1' as const,
+    };
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+      response(
+        completion({
+          choices: [
+            {
+              message: { content: 'OK' },
+              finish_reason: 'stop',
+              prompt_token_ids: [1, 2, 3],
+              response_token_ids: [4, 5],
+            },
+          ],
+          usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 6, reasoning_tokens: 8 },
+        }),
+      ),
+    );
+    await expect(
+      dispatchReal(native, { ...input, max_tokens: 256 }, 'bad-primary-totals', fetcher),
+    ).rejects.toMatchObject({ code: 'inconsistent_usage', definite: false });
+  });
   it.each(['top-level', 'nested', 'both'] as const)(
     'absorbs exactly one extra Modal reasoning token reported %s without charging agent quota',
     async (location) => {

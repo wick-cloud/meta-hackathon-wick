@@ -37,7 +37,7 @@ import {
   tokenOrderDetail,
   updateOffering,
 } from './market.js';
-import { complete, receipt, recoverRequest, resolveRequest } from './gateway.js';
+import { complete, receipt, recoverRequest, resolveRequest, writeOffRequest } from './gateway.js';
 import { proposeTokenSupply } from './supply.js';
 import { issuePackKey, tokenPack } from './pack-access.js';
 import {
@@ -182,6 +182,9 @@ export async function registerInference(app: FastifyInstance, ctx: AppContext) {
   }
   app.post('/api/admin/inference/requests/:id/resolve', async (r) =>
     resolveRequest(ctx, await operator(r), id(r), r.body),
+  );
+  app.post('/api/admin/inference/requests/:id/write-off', async (r) =>
+    writeOffRequest(ctx, await operator(r), id(r), r.body),
   );
   app.post('/api/admin/inference/packs/:id/provider-failure', async (r) => {
     const actor = await operator(r),

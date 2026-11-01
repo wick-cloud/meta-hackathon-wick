@@ -138,7 +138,7 @@ export async function settleStudioCompute(
     );
     await db.query(
       `UPDATE broker_inference_grants g SET status='closed' WHERE id=$1 AND status='closing' AND held_cents=0
-    AND NOT EXISTS(SELECT 1 FROM broker_inference_requests WHERE grant_id=g.id AND status NOT IN('settled','rejected'))`,
+    AND NOT EXISTS(SELECT 1 FROM broker_inference_requests WHERE grant_id=g.id AND status NOT IN('settled','rejected','written_off'))`,
       [grant.id],
     );
     return true;
