@@ -152,7 +152,9 @@ export async function recordUsageSample(db: PoolClient, t: Row) {
   if (u.unresolved || u.foreign || u.calls < 2 || u.input <= 0 || u.output <= 0) return;
   await db.query(
     `INSERT INTO broker_studio_usage_samples(task_id,buyer_id,source_mode,model_output,estimator_version,features,input_tokens,output_tokens,model_calls,completed_at)
-     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,clock_timestamp()) ON CONFLICT(task_id) DO NOTHING`,
+     SELECT $1,$2,$3,$4,COALESCE(e.forecast->>'version',$5),$6,$7,$8,$9,clock_timestamp()
+     FROM broker_studio_usage_estimates e WHERE e.task_id=$1 AND e.purchase_round=0
+     ON CONFLICT(task_id) DO NOTHING`,
     [
       t.id,
       t.buyer_id,

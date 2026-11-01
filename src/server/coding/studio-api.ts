@@ -34,7 +34,7 @@ export function registerStudio(app: FastifyInstance, ctx: AppContext) {
   app.get('/api/studio/tasks', async (r) => listStudioTasks(ctx, await owner(r), r.query));
   app.post('/api/studio/tasks', async (r) => createStudioTask(ctx, await owner(r), r.body));
   app.get('/api/studio/tasks/:id', async (r) => studioDetail(ctx, await owner(r), id(r)));
-  for (const action of ['stop', 'resume', 'fund'] as const)
+  for (const action of ['stop', 'resume', 'fund', 'retry-plan'] as const)
     app.post(`/api/studio/tasks/:id/${action}`, async (r) =>
       controlStudio(ctx, await owner(r), id(r), action, r.body),
     );

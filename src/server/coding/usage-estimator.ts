@@ -1,6 +1,6 @@
 import type { UsageFeatures, UsageForecast } from '../../shared/studio-usage.js';
 
-export const USAGE_ESTIMATOR_VERSION = 'studio-usage-v1';
+export const USAGE_ESTIMATOR_VERSION = 'studio-usage-v2-compact-planning';
 export const TARGET_UTILIZATION = 0.9;
 export const MAX_TRAINING_SAMPLES = 200;
 const MIN_TRAINING_SAMPLES = 12;

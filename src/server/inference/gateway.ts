@@ -26,6 +26,7 @@ import {
 import { fixtureInputTokens, InferenceUpstreamError, type AdapterResult } from './runtime.js';
 import { retirePackLocked } from './market.js';
 import { studioAuthority } from '../coding/studio-budget.js';
+import { seal } from '../coding/artifacts.js';
 
 function inferenceFailure(code: string, id: string, message: string): never {
   try {
@@ -206,6 +207,22 @@ export async function settleRequest(
       code ?? null,
       result?.id ?? null,
     );
+    if (result && request.source_task_id)
+      // Preserve the response in the same commit as usage settlement. Recovery
+      // reads it; it never repeats a paid provider POST after losing its result.
+      await db.query(
+        `UPDATE broker_studio_plan_attempts a SET response_cipher=$2,finish_reason=$3,failure_code=NULL,completed_at=clock_timestamp()
+         FROM broker_studio_tasks t WHERE a.request_id=$1 AND t.id=a.task_id
+         AND t.artifacts_expire_at>clock_timestamp() AND t.artifacts_purged_at IS NULL`,
+        [
+          request.id,
+          seal(ctx, {
+            content: result.content.length <= 16000 ? result.content : '',
+            oversized: result.content.length > 16000,
+          }),
+          result.finishReason,
+        ],
+      );
     if (result?.platformOutputTokens)
       await event(
         db,
@@ -286,6 +303,7 @@ export async function completeStudioTask(
   raw: unknown,
   taskId: string,
   leaseToken: string,
+  planAttempt = 0,
 ) {
   if (actor.apiKey || actor.role !== 'buyer')
     failure(403, 'owner_required', 'Studio requires owner authority.');
@@ -301,6 +319,7 @@ export async function completeStudioTask(
     id: taskId,
     grantId: task.grant_id,
     leaseToken,
+    planAttempt,
   });
 }
 async function codingAuthority(
@@ -330,18 +349,28 @@ async function completeInternal(
   ctx: AppContext,
   actor: Actor,
   raw: unknown,
-  source?: { kind: 'coding' | 'studio'; id: string; grantId: string; leaseToken: string },
+  source?: {
+    kind: 'coding' | 'studio';
+    id: string;
+    grantId: string;
+    leaseToken: string;
+    planAttempt?: number;
+  },
 ): Promise<InferenceCompletion> {
   const { operationKey, ...input } = completionSchema.parse(raw),
     grantId = source?.grantId ?? requireGrantKey(actor),
     rt = runtime(ctx);
+  // Leave reasoning policy with Muse's serving endpoint for every task and repair.
   const fingerprint = operationFingerprint(input);
   const reservation = await transaction(ctx.pool, async (db) => {
     await authority(db, actor, 'inference:use');
     const grant = await lockedGrant(db, actor, grantId);
     if (source) {
-      if (source.kind === 'studio') await studioAuthority(db, source, actor);
-      else await codingAuthority(db, source, actor);
+      if (source.kind === 'studio') {
+        const task = await studioAuthority(db, source, actor);
+        if (task.plan_attempt !== source.planAttempt)
+          failure(409, 'planning_attempt_changed', 'The planning attempt changed.');
+      } else await codingAuthority(db, source, actor);
     }
     const prior = (
       await db.query(
@@ -449,6 +478,18 @@ async function completeInternal(
           ],
         )
       ).rows[0];
+      if (source?.kind === 'studio') {
+        const linked = await db.query(
+          `UPDATE broker_studio_plan_attempts SET request_id=$3,failure_code=NULL WHERE task_id=$1 AND attempt=$2 AND request_id IS NULL`,
+          [source.id, source.planAttempt, request.id],
+        );
+        if (!linked.rowCount)
+          failure(
+            409,
+            'planning_attempt_changed',
+            'The planning attempt is already dispatched or was not prepared.',
+          );
+      }
       await event(db, grantId, `reserve:${request.id}`, 'usage_reserved', request.id, actor.id, {
         inputTokens: inputBound,
         outputTokens: input.max_tokens,
@@ -467,8 +508,11 @@ async function completeInternal(
       await authority(db, actor, 'inference:use');
       const grant = await lockedGrant(db, actor, grantId, true);
       if (source) {
-        if (source.kind === 'studio') await studioAuthority(db, source, actor);
-        else await codingAuthority(db, source, actor);
+        if (source.kind === 'studio') {
+          const task = await studioAuthority(db, source, actor);
+          if (task.plan_attempt !== source.planAttempt)
+            failure(409, 'planning_attempt_changed', 'The planning attempt changed.');
+        } else await codingAuthority(db, source, actor);
       }
       activeMode(ctx, grant);
       const route = (

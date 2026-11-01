@@ -121,6 +121,7 @@ try {
     },
   ];
   const nextDecision = new Map<string, number>(),
+    planningCalls = new Map<string, number>(),
     nativeActions: string[] = [];
   const studioEnvironments = new Set<string>();
   let environmentId = '',
@@ -155,6 +156,8 @@ try {
     wrapInference: (runtime) => ({
       ...runtime,
       async dispatch(_route, input, requestId) {
+        assert.equal(Object.hasOwn(input, 'reasoning_effort'), false);
+        assert.equal(Object.hasOwn(input, 'reasoning'), false);
         const row = (
           await built.ctx.pool.query(
             'SELECT source_job_id,source_task_id FROM broker_inference_requests WHERE id=$1',
@@ -162,6 +165,25 @@ try {
           )
         ).rows[0];
         if (row.source_task_id) {
+          const count = (planningCalls.get(row.source_task_id) ?? 0) + 1;
+          planningCalls.set(row.source_task_id, count);
+          assert(count <= 2, 'A planning failure permits at most one new generation.');
+          assert.equal(input.max_tokens, 2048);
+          const task = (
+            await built.ctx.pool.query(
+              'SELECT vm_request_id FROM broker_studio_tasks WHERE id=$1',
+              [row.source_task_id],
+            )
+          ).rows[0];
+          assert.equal(task.vm_request_id, null, 'Neither planning attempt may buy a VM.');
+          if (count === 1)
+            return {
+              id: 'fixture-' + requestId,
+              content: '{"catalogId":',
+              finishReason: 'length',
+              inputTokens: fixtureInputTokens(input),
+              outputTokens: input.max_tokens,
+            };
           const plan = JSON.parse(input.messages[1]!.content);
           return {
             id: 'fixture-' + requestId,
@@ -226,6 +248,8 @@ try {
   await ctx.pool.query(
     'UPDATE "user" u SET "providerId"=p.id FROM broker_providers p WHERE p.user_id=u.id',
   );
+  // Match the qualified planning cap while keeping providers and billing fictional.
+  for (const route of ctx.inference!.routes.values()) route.maximumOutputTokens = 2048;
   await initializeInference(ctx);
   await transaction(ctx.pool, (db) =>
     applyCreditEntry(db, owner.id, {
@@ -557,6 +581,9 @@ try {
     assert.equal(exported.statusCode, 200);
     assert.match(exported.body, /broker_average/);
     assert(studio.modelActivity.every((r) => r.status === 'settled'));
+    assert.equal(planningCalls.get(task.id), 2);
+    assert.equal(studio.modelPurchases.length, 1, 'Planning repair must reuse the purchased pack.');
+    assert(studio.events.some((event) => event.title === 'Muse is repairing its plan'));
     await docker(['exec', container, 'bwrap', '--version']);
     checks.push('task-owned Debian guest installs its missing sandbox package before cloning');
     report.studio = {
@@ -569,6 +596,8 @@ try {
       modelChargedCents: studio.task.modelChargedCents,
       returnedCents: studio.task.returnedCents,
       modelReceipts: studio.modelActivity.length,
+      planningAttempts: planningCalls.get(task.id),
+      reasoningPolicy: 'No Broker override in planning, repair, or coding requests',
       testOutput: studio.tests?.output,
       patchExport: 'passed',
       vmCleanup: 'fixture acknowledgement; actual container removed at test teardown',
@@ -581,6 +610,9 @@ try {
     );
     checks.push(
       'automatic verification, retained patch, task VM cleanup and unspent funding release',
+    );
+    checks.push(
+      'one settled capped planning reply is repaired using existing quota before VM purchase',
     );
   }
   report.repositoryUrl = job.repositoryUrl;

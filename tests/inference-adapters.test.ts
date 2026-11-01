@@ -300,6 +300,27 @@ describe('inference runtime enablement and qualification', () => {
 
 describe('single-attempt provider requests and authoritative usage', () => {
   it.each(['baseten', 'modal'] as const)(
+    'leaves reasoning policy to %s without changing planning accounting bounds',
+    async (provider) => {
+      const fetcher = vi.fn<typeof fetch>().mockResolvedValue(response(completion()));
+      const native = (await certifiedRuntime()).routes.get(provider)!;
+      const result = await dispatchReal(
+        native,
+        { ...input, max_tokens: 2048 },
+        'planning-provider-reasoning',
+        fetcher,
+      );
+      const body = JSON.parse(fetcher.mock.calls[0]![1]!.body as string);
+      expect(body.max_tokens).toBe(2048);
+      expect(body).not.toHaveProperty('reasoning_effort');
+      expect(body).not.toHaveProperty('reasoning');
+      expect(result.inputTokens).toBe(20);
+      expect(result.outputTokens).toBe(12);
+      expect(fetcher).toHaveBeenCalledTimes(1);
+      expect(native.inputBound).toBe(32768);
+    },
+  );
+  it.each(['baseten', 'modal'] as const)(
     'dispatches %s to its fixed URL with its actual model and private authentication',
     async (provider) => {
       const fetcher = vi.fn<typeof fetch>().mockResolvedValue(response(completion()));
