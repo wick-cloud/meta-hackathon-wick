@@ -1,4 +1,5 @@
 import { closeGrant } from '../src/server/inference/grants.js';
+import { managedPricing } from '../src/shared/pricing.js';
 import { addCents } from '../src/shared/money.js';
 import { randomUUID } from 'node:crypto';
 import { inflateSync } from 'node:zlib';
@@ -28,6 +29,7 @@ import {
   listStudioTasks,
   studioPatch,
   maintainStudio,
+  studioOptions,
 } from '../src/server/coding/studio.js';
 import { processCodingJob, codingDetail, open } from '../src/server/coding/service.js';
 import { reserveStudioCompute } from '../src/server/coding/studio-budget.js';
@@ -276,6 +278,214 @@ describe.skipIf(!url)('Studio task budget and lifecycle (disposable Postgres)', 
   async function create(overrides: Record<string, unknown> = {}) {
     return createStudioTask(ctx, owner, input(overrides), verify);
   }
+  // Synthetic real-mode pricing/eligibility validation; no native API or VM is used.
+  async function realCompute(ids: string[] = [catalog.id]) {
+    const item: CatalogItem = {
+      ...catalog,
+      provider: 'daytona',
+      pricingMode: 'managed',
+      rateMicrosPerSecond: 20,
+      rateSource: 'wick-customer-catalog',
+      rateRetrievedAt: new Date().toISOString(),
+      managedRouteVerification: 'organization-catalog-byok-disabled',
+    };
+    await pool.query("UPDATE broker_catalog SET source_mode='real',item=$1 WHERE id=$2", [
+      item,
+      item.id,
+    ]);
+    await pool.query(
+      "UPDATE broker_providers SET cloud_provider='daytona',policy=jsonb_set(policy,'{basePriceCents}','5'::jsonb)",
+    );
+    await pool.query('UPDATE broker_offerings SET pricing=$1', [managedPricing(item)]);
+    await pool.query("UPDATE broker_inference_routes SET source_mode='real'");
+    return {
+      ...ctx,
+      config: { ...ctx.config, studioApprovedComputeCatalogIds: ids },
+      wick: { ...ctx.wick, mode: 'real' as const },
+      inference: {
+        ...ctx.inference!,
+        mode: 'real' as const,
+        routes: new Map(
+          [...ctx.inference!.routes].map(([provider, route]) => [
+            provider,
+            {
+              ...route,
+              mode: 'real' as const,
+              inputBound: 1048576,
+              inputAccounting: 'utf8-bytes-v1' as const,
+            },
+          ]),
+        ),
+      },
+    };
+  }
+  it('reserves the published provider quote for a 15-minute real-mode rental, not just the lower cost floor', async () => {
+    const real = await realCompute();
+    const policies = (await pool.query('SELECT id,policy FROM broker_providers ORDER BY id')).rows;
+    const task = await createStudioTask(real, owner, input({ durationMinutes: 15 }), verify);
+    await processStudioTask(real, task.id, repo);
+    let t = (await pool.query('SELECT * FROM broker_studio_tasks WHERE id=$1', [task.id])).rows[0];
+    const candidates = open(real, t.plan_input_cipher).candidates;
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0].maximumCents).toBe(6.25); // Actual base 5, retained 25% reserve buffer.
+    expect(Number(t.compute_reserved_cents)).toBe(6.25);
+    await pool.query(
+      "UPDATE broker_token_orders SET closes_at=clock_timestamp()-interval '1 second' WHERE id=$1",
+      [t.model_order_id],
+    );
+    await closeTokenAuction(real, t.model_order_id);
+    await pool.query(
+      "UPDATE broker_studio_tasks SET next_tick_at=clock_timestamp()-interval '1 second' WHERE id=$1",
+      [task.id],
+    );
+    await processStudioTask(real, task.id, repo);
+    t = (await pool.query('SELECT * FROM broker_studio_tasks WHERE id=$1', [task.id])).rows[0];
+    expect(t.status, t.blocked_reason).toBe('compute_auction');
+    expect(
+      Number(
+        (
+          await pool.query('SELECT max_price_cents FROM broker_requests WHERE id=$1', [
+            t.vm_request_id,
+          ])
+        ).rows[0].max_price_cents,
+      ),
+    ).toBe(6.25);
+    await expect(
+      submitBid(real, suppliers[0]!, t.vm_request_id, { totalPriceCents: 5 }),
+    ).resolves.toMatchObject({ totalPriceCents: 5 });
+    expect((await pool.query('SELECT id,policy FROM broker_providers ORDER BY id')).rows).toEqual(
+      policies,
+    );
+    expect((await pool.query('SELECT count(*)::int n FROM broker_vms')).rows[0].n).toBe(0);
+  });
+  it('requires execution qualification and published eligible compute before reserving real Studio credit', async () => {
+    const real = await realCompute([]);
+    const wallet = await creditWalletView(pool, owner.id);
+    expect(await studioOptions(real)).toMatchObject({
+      available: false,
+      reason: expect.stringContaining('execution-qualified'),
+    });
+    await expect(createStudioTask(real, owner, input(), verify)).rejects.toThrow(
+      'No credit was reserved',
+    );
+    expect(await creditWalletView(pool, owner.id)).toEqual(wallet);
+    expect(
+      (await pool.query('SELECT count(*)::int n FROM broker_inference_grants')).rows[0].n,
+    ).toBe(0);
+    real.config.studioApprovedComputeCatalogIds = [catalog.id];
+    await pool.query('UPDATE broker_offerings SET active=false');
+    await expect(createStudioTask(real, owner, input(), verify)).rejects.toThrow(
+      'No credit was reserved',
+    );
+    expect(await creditWalletView(pool, owner.id)).toEqual(wallet);
+  });
+  it.each([
+    'policy exclusion',
+    'provider identity',
+    'disabled auto bidding',
+    'stale published rate',
+    'price cap',
+  ])('excludes real Studio compute with %s before funding', async (problem) => {
+    const real = await realCompute();
+    if (problem === 'policy exclusion')
+      await pool.query(
+        "UPDATE broker_providers SET policy=jsonb_set(policy,'{allowedCatalogIds}','[]'::jsonb)",
+      );
+    if (problem === 'provider identity')
+      await pool.query("UPDATE broker_providers SET cloud_provider='modal'");
+    if (problem === 'disabled auto bidding')
+      await pool.query(
+        "UPDATE broker_providers SET policy=jsonb_set(policy,'{autoBid}','false'::jsonb)",
+      );
+    if (problem === 'stale published rate')
+      await pool.query(
+        "UPDATE broker_offerings SET pricing=jsonb_set(pricing,'{rateMicrosPerSecond}','1'::jsonb)",
+      );
+    if (problem === 'price cap')
+      await pool.query(
+        "UPDATE broker_providers SET policy=jsonb_set(policy,'{maxPriceCents}','6'::jsonb)",
+      );
+    await expect(
+      createStudioTask(
+        real,
+        owner,
+        input({ durationMinutes: problem === 'price cap' ? 60 : 15 }),
+        verify,
+      ),
+    ).rejects.toThrow('No credit was reserved');
+    expect(
+      (await pool.query('SELECT count(*)::int n FROM broker_inference_grants')).rows[0].n,
+    ).toBe(0);
+  });
+  it('filters execution-qualified IDs before the bounded catalog page', async () => {
+    const real = await realCompute();
+    await pool.query(
+      `INSERT INTO broker_catalog(id,item,approved,source_mode)
+      SELECT 'unqualified-'||n,item||jsonb_build_object('id','unqualified-'||n,'cpu',1),true,'real'
+      FROM broker_catalog CROSS JOIN generate_series(1,20) n WHERE id=$1`,
+      [catalog.id],
+    );
+    expect(await studioOptions(real)).toMatchObject({ available: true });
+    const task = await createStudioTask(real, owner, input(), verify);
+    expect(task.mode).toBe('real');
+    expect((await pool.query('SELECT count(*)::int n FROM broker_vms')).rows[0].n).toBe(0);
+  });
+  it('bounds published compute reads by the selected catalogs and bidders rather than offering history', async () => {
+    const real = await realCompute();
+    await pool.query(
+      `INSERT INTO broker_offerings(provider_id,catalog_id,name,description,price_cents,pricing)
+      SELECT p.id,$1,'Historical duplicate '||n,'Synthetic history',10,$2 FROM broker_providers p
+      CROSS JOIN generate_series(1,1000) n`,
+      [
+        catalog.id,
+        managedPricing({
+          ...catalog,
+          provider: 'daytona',
+          pricingMode: 'managed',
+          rateMicrosPerSecond: 20,
+          rateSource: 'wick-customer-catalog',
+          rateRetrievedAt: new Date().toISOString(),
+          managedRouteVerification: 'organization-catalog-byok-disabled',
+        }),
+      ],
+    );
+    const reads = vi.spyOn(pool, 'query');
+    try {
+      await createStudioTask(real, owner, input(), verify);
+      const selected = reads.mock.calls
+        .map((args, index) => ({ args, index }))
+        .filter(({ args }) => String(args[0]).includes('SELECT c.id catalog_id,supply.policy'));
+      expect(selected).toHaveLength(1);
+      expect(selected[0]!.args[1]).toEqual([[catalog.id], 'real']);
+      const result = await reads.mock.results[selected[0]!.index]!.value;
+      expect(result.rows).toHaveLength(2);
+    } finally {
+      reads.mockRestore();
+    }
+  });
+  it('parses a bounded explicit execution-qualified catalog list without changing fixture availability', async () => {
+    const env = {
+      DATABASE_URL: url!,
+      WICK_MODE: 'fixture',
+      MUSE_MODE: 'fixture',
+      BETTER_AUTH_SECRET: 'studio-config-fixture-secret-at-least-32-chars',
+    };
+    expect(
+      loadConfig({ ...env, STUDIO_APPROVED_COMPUTE_CATALOG_IDS: ' e2b:micro:us , e2b:micro:us ' })
+        .studioApprovedComputeCatalogIds,
+    ).toEqual(['e2b:micro:us']);
+    expect(() => loadConfig({ ...env, STUDIO_APPROVED_COMPUTE_CATALOG_IDS: 'a,,b' })).toThrow();
+    expect(() =>
+      loadConfig({
+        ...env,
+        STUDIO_APPROVED_COMPUTE_CATALOG_IDS: Array.from(
+          { length: 17 },
+          (_, i) => 'route-' + i,
+        ).join(','),
+      }),
+    ).toThrow();
+    expect(await studioOptions(ctx)).toMatchObject({ available: true });
+  });
   async function planned(id: string) {
     let t = await tick(id);
     expect(t.status).toBe('model_auction');

@@ -26,6 +26,13 @@ const envSchema = z.object({
   INFERENCE_MODAL_MODEL: z.string().optional(),
   INFERENCE_MODAL_PROXY_TOKEN: z.string().optional(),
   MAX_CONCURRENT_VMS: z.coerce.number().int().min(1).max(20).default(20),
+  STUDIO_APPROVED_COMPUTE_CATALOG_IDS: z
+    .string()
+    .max(2575)
+    .default('')
+    .transform((value) => (value.trim() ? value.split(',').map((id) => id.trim()) : []))
+    .pipe(z.array(z.string().min(1).max(160)).max(16))
+    .transform((ids) => [...new Set(ids)]),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
 });
 export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
@@ -80,6 +87,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     inferenceModalModel: e.INFERENCE_MODAL_MODEL,
     inferenceModalProxyToken: e.INFERENCE_MODAL_PROXY_TOKEN,
     maxConcurrentVms: e.MAX_CONCURRENT_VMS,
+    studioApprovedComputeCatalogIds: e.STUDIO_APPROVED_COMPUTE_CATALOG_IDS,
     logLevel: e.LOG_LEVEL,
   };
 }
