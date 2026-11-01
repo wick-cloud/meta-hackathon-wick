@@ -82,6 +82,7 @@ const labels: Record<string, string> = {
   rejected: 'Rejected',
   outcome_unknown: 'Outcome unknown',
   needs_reconciliation: 'Needs review',
+  written_off: 'Written off by Wick',
   retiring: 'Retiring',
 };
 function State({ value }: { value: string }) {
@@ -975,7 +976,9 @@ export function AgentDetail({ id, search = '' }: { id: string; search?: string }
                             <td className="numeric-cell">
                               {request.inputTokens !== null
                                 ? `${count(request.inputTokens)} / ${count(request.outputTokens ?? 0)} used`
-                                : `${count(request.heldInputTokens)} / ${count(request.heldOutputTokens)} held`}
+                                : request.status === 'written_off'
+                                  ? 'Usage unknown · Wick covers provider liability'
+                                  : `${count(request.heldInputTokens)} / ${count(request.heldOutputTokens)} held`}
                             </td>
                           </tr>
                         ))}

@@ -844,7 +844,7 @@ export async function closeGrantLocked(db: PoolClient, grant: Row, reason: strin
     });
   const held = (
     await db.query(
-      "SELECT 1 FROM broker_inference_requests WHERE grant_id=$1 AND status NOT IN('settled','rejected') LIMIT 1",
+      "SELECT 1 FROM broker_inference_requests WHERE grant_id=$1 AND status NOT IN('settled','rejected','written_off') LIMIT 1",
       [grant.id],
     )
   ).rowCount;

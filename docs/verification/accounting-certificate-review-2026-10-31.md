@@ -2,6 +2,8 @@
 
 This operator review covers PR #32's `utf8-bytes-v1` text envelope, native JSON-object output and a 256–2,048-token request-output range. It supplements the [two real Studio flows](../studio-small-pack-verification.md); those runs alone did not qualify a new accounting contract.
 
+The subsequent [Modal accounting recovery review](modal-accounting-recovery-2026-10-31.md) adds per-call generated-token verification and an explicit audited platform write-off. The decisions below record the original review before that follow-up.
+
 ## Decision
 
 - **Baseten: approved for the reviewed range**, using the existing hackathon model mapping and original certificate expiry. The rollout must first stop new sales and verify zero outstanding quota/calls before changing its fingerprint. Existing purchased terms must not be rewritten.

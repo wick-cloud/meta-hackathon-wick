@@ -202,7 +202,8 @@ export interface InferenceReceipt {
     | 'settled'
     | 'rejected'
     | 'outcome_unknown'
-    | 'needs_reconciliation';
+    | 'needs_reconciliation'
+    | 'written_off';
   heldInputTokens: number;
   heldOutputTokens: number;
   inputTokens: number | null;
