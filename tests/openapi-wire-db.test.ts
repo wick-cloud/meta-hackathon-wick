@@ -270,46 +270,9 @@ describe.skipIf(!databaseUrl)(
       await provider.provider.agreementCharges();
       await provider.provider.policy.propose('Keep one slot spare without changing prices');
       await buyer.muse.translate('2 CPU, 4 GiB, 30 minutes');
-      const startDate = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
-      const agreementInput = {
-        description: 'Wire nightly capacity',
-        startDate,
-        timeZone: 'UTC',
-        windowStart: '00:00',
-        windowEnd: '01:00',
-        minimumQuantity: 1,
-        targetQuantity: 2,
-        requirements: { cpu: 2, memoryGb: 4 },
-        region: 'us-east',
-        maxDiscountRateCentsPerHour: 20,
-      };
-      await provider.provider.scheduledOfferings.create(
-        {
-          catalogId: 'dev-small',
-          name: 'Wire capacity',
-          kind: 'discount_schedule',
-          timeZone: 'UTC',
-          weekdays: [0, 1, 2, 3, 4, 5, 6],
-          windowStart: '00:00',
-          windowEnd: '01:00',
-          availableUntil: '02:00',
-          capacityQuantity: 2,
-          discountRateCentsPerHour: 10,
-          normalRateCentsPerHour: 20,
-        },
-        { operationKey: 'wire-scheduled-create' },
-      );
-      await buyer.agreements.preview({ ...agreementInput, operationKey: 'wire-agreement-create' });
-      const agreement = await buyer.agreements.create(agreementInput, {
-        operationKey: 'wire-agreement-create',
-      });
-      await buyer.agreements.get(agreement.agreement.id);
+      // Historical billing remains readable after scheduled creation retires.
       await provider.provider.scheduledOfferings.list();
-      await provider.provider.demand();
       await provider.provider.commitments();
-      await buyer.agreements.cancelUnmatched(agreement.agreement.id, {
-        operationKey: 'wire-agreement-cancel',
-      });
       const intent = await buyer.alternatives.create(
         {
           description: 'Wire intent',
@@ -335,7 +298,16 @@ describe.skipIf(!databaseUrl)(
         expect(template, `${request.method} ${request.path}`).toBeDefined();
         validate(template![1].output, request.value);
       }
-      expect(requests.length).toBeGreaterThan(30);
+      expect(requests.map((request) => `${request.method} ${request.path}`)).toEqual(
+        expect.arrayContaining([
+          'POST /api/requests',
+          'GET /api/orders',
+          'GET /api/vms',
+          'GET /api/credits',
+          'GET /api/agreement-charges',
+          'GET /api/provider/agreement-charges',
+        ]),
+      );
       expect(ctx.wick.create).not.toHaveBeenCalled();
     });
   },

@@ -11,7 +11,6 @@ import type {
 import type { MuseAdapter } from './types.js';
 import { parseExplicitBuyerDescription } from '../../shared/muse-contracts.js';
 import { catalogSatisfiesRequest } from '../marketplace/matching.js';
-import { scheduledDraftSchema, scheduledDraft } from './scheduled-muse.js';
 import { MUSE_API_BASE, MUSE_MODEL } from '../../shared/muse.js';
 export { MUSE_MODEL } from '../../shared/muse.js';
 
@@ -606,39 +605,6 @@ export function createMuseAdapter(config: MuseConfig, options: MuseOptions = {})
         modelCalled: true,
         mode,
       };
-    },
-    async draftSchedule(input) {
-      const description = descriptionInput(input.description);
-      const catalog = catalogItems(input.catalog);
-      if (mode === 'fixture')
-        return {
-          draft: {},
-          mode,
-          modelCalled: false,
-          explanation:
-            'Fixture draft only. Review the schedule manually; no credit, booking or VM was created.',
-        };
-      const value = await complete(
-        'wick_scheduled_draft',
-        scheduledDraftSchema,
-        'Extract only explicitly stated facts into an editable scheduled capacity draft. Unknown values MUST be null. Prices use USD cents with hundredths-of-a-cent precision ($0.0001) per VM-hour. Do not invent approved configurations, regions, dates, quantities or prices. Never enable normal-rate continuation unless explicitly requested. No authority, credit, booking or VM is created. Only return fields in the schema; the customer must review before submission.',
-        { kind: input.kind, description, catalog: modelCatalog(catalog) },
-      );
-      try {
-        return {
-          draft: scheduledDraft(value, input.kind, catalog, description),
-          mode,
-          modelCalled: true,
-          explanation:
-            'Muse prepared an editable draft. Review all prices, dates, credit limits and restrictions before placing or publishing. No capacity or credit was reserved.',
-        };
-      } catch {
-        throw new MuseError(
-          422,
-          'invalid_schedule_draft',
-          'Muse returned an invalid schedule draft. Manual controls remain available.',
-        );
-      }
     },
     async proposeCapacityPolicy(input: CapacityInput) {
       const strategy = descriptionInput(input.strategy);

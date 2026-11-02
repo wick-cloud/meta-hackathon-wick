@@ -161,6 +161,20 @@ export const BROKER_PUBLIC_ROUTES: readonly BrokerPublicRoute[] = [
   route('POST', '/api/provider/offerings/propose', 'muse:propose'),
   route('POST', '/api/provider/scheduled-offerings/draft', 'muse:propose'),
 ];
+/** Retired routes stay authorized for explicit retirement errors and legacy records.
+ * New clients discover only the current VM-auction and AI-token marketplace.
+ */
+export const BROKER_ADVERTISED_ROUTES: readonly BrokerPublicRoute[] = BROKER_PUBLIC_ROUTES.filter(
+  ({ path }) =>
+    !path.startsWith('/api/agreements') &&
+    !path.startsWith('/api/provider/scheduled-offerings') &&
+    ![
+      '/api/agreement-charges',
+      '/api/provider/agreement-charges',
+      '/api/provider/agreement-demand',
+      '/api/provider/commitments',
+    ].includes(path),
+);
 export function publicRoute(
   method: string,
   path: string | undefined,

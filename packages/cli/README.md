@@ -27,7 +27,7 @@ Supply an exact approved catalog configuration in `order.json`. Noninteractive m
 
 Terminal access requires a TTY. Ctrl-] detaches, while Ctrl-C reaches the guest. Detaching does not terminate the VM. Terminal input is a stream and is **never automatically replayed** after a connection failure.
 
-Run `wick-broker --help` for buyer, agreement, billing, provider and Muse commands. Payload-bearing commands use `--file` (maximum 64 KiB); Muse commands also accept `--description`, `--strategy` or `--prompt`. List commands support bounded pagination with `--limit` and `--cursor`. `--json` keeps results on stdout and diagnostics off stdout.
+Run `wick-broker --help` for VM auction, AI token, billing, provider and Muse commands. Payload-bearing commands use `--file` (maximum 64 KiB); Muse commands also accept `--description`, `--strategy` or `--prompt`. List commands support bounded pagination with `--limit` and `--cursor`. `--json` keeps results on stdout and diagnostics off stdout.
 
 See the repository’s [developer access guide](https://github.com/wick-cloud/meta-hackathon-wick/blob/main/docs/developer-access.md) for examples and the public HTTP contract.
 
@@ -54,3 +54,5 @@ wick-broker inference receipt <request-id> --json
 Completion JSON errors expose `inferenceRequestId` for `inference receipt`; `requestId` remains the HTTP correlation ID. If a transport timeout has no receipt ID, explicitly repeat the exact payload with its original `--operation-key` to recover that identifier without redispatching an existing invocation.
 
 Providers use `provider inference get`, `provider inference update --file offering.json --operation-key offering-001`, and `provider inference packs`. Updating supply requires its current `expectedRevision` and never rewrites accepted packs.
+
+Version `0.4.0` omits retired scheduled VM commands from help and command routing. Existing versioned downloads remain unchanged.

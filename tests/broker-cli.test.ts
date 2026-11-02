@@ -217,7 +217,7 @@ describe('Broker CLI machine operations', () => {
       '--version',
       '--json',
     ]);
-    expect(JSON.parse(result.stdout)).toEqual({ version: '0.3.0' });
+    expect(JSON.parse(result.stdout)).toEqual({ version: '0.4.0' });
     expect(result.stderr).toBe('');
   });
   it('provides help and version without a credential', async () => {
@@ -226,7 +226,28 @@ describe('Broker CLI machine operations', () => {
     expect(help.stdout()).toContain('WICK_BROKER_API_KEY');
     const version = io();
     expect(await runCli(['--version'], version)).toBe(0);
-    expect(version.stdout().trim()).toBe('0.3.0');
+    expect(version.stdout().trim()).toBe('0.4.0');
+  });
+  it('removes scheduled VM commands and never dispatches a retired operation', async () => {
+    const help = io();
+    expect(await runCli(['--help'], help)).toBe(0);
+    expect(help.stdout()).not.toMatch(
+      /agreements|provider schedules|provider commitments|provider calendar|muse schedule/,
+    );
+    expect(help.stdout()).toContain('orders create');
+    expect(help.stdout()).toContain('tokens create');
+    const request = vi.fn();
+    for (const command of [
+      ['agreements', 'create'],
+      ['agreements', 'activate', 'old-agreement'],
+      ['provider', 'schedules', 'create'],
+      ['muse', 'schedule'],
+    ]) {
+      const output = io({ request } as unknown as BrokerClient);
+      expect(await runCli([...command, '--json'], output)).toBe(1);
+      expect(JSON.parse(output.stdout()).error).toContain('Unknown command');
+    }
+    expect(request).not.toHaveBeenCalled();
   });
   it('rejects noninteractive mutations before any request without a stable key', async () => {
     const request = vi.fn();

@@ -1,14 +1,7 @@
-import { moneyUnits } from '../../shared/money.js';
-import { clientOperationKey, recordKeyAction, withOperation } from '../operations.js';
 import type { FastifyInstance } from 'fastify';
 import { HttpError, type AppContext } from '../context.js';
-import { transaction } from '../marketplace/db.js';
-import { encodeCursor, getProvider, integer, pagination, uuid } from '../marketplace/data.js';
-import { assertProviderCatalog } from '../marketplace/provider-identity.js';
-import { managedPricing, requireFreshManagedRate } from '../../shared/pricing.js';
-import { fingerprint } from './credits.js';
-import { bookingView, globalLock, offeringView, deadlineEligible } from './data.js';
-import { validateOffering } from './recurrence.js';
+import { encodeCursor, getProvider, pagination } from '../marketplace/data.js';
+import { bookingView, offeringView } from './data.js';
 
 export async function registerProviderAgreementRoutes(app: FastifyInstance, ctx: AppContext) {
   app.get('/api/provider/scheduled-offerings', async (request) => {
@@ -25,157 +18,19 @@ export async function registerProviderAgreementRoutes(app: FastifyInstance, ctx:
       ...(rows.length > p.limit ? { nextCursor: encodeCursor(rows[p.limit - 1]) } : {}),
     };
   });
-  app.post('/api/provider/scheduled-offerings', async (request) => {
-    const actor = await ctx.requireActor(request, ['provider']);
-    const provider = await getProvider(ctx.pool, actor),
-      input = validateOffering(request.body),
-      digest = fingerprint(input);
-    return transaction(ctx.pool, async (db) => {
-      await globalLock(db);
-      const p = (
-        await db.query('SELECT * FROM broker_providers WHERE id=$1 FOR UPDATE', [provider.id])
-      ).rows[0];
-      const prior = (
-        await db.query(
-          'SELECT s.*,c.item FROM broker_scheduled_offerings s JOIN broker_catalog c ON c.id=s.catalog_id WHERE s.provider_id=$1 AND s.operation_key=$2',
-          [p.id, input.operationKey],
-        )
-      ).rows[0];
-      if (prior) {
-        if (prior.input_fingerprint !== digest)
-          throw new HttpError(409, 'This operation key was used for another scheduled offering.');
-        return offeringView(ctx, prior);
-      }
-      if (
-        input.capacityQuantity > Math.max(0, p.total_capacity - Number(p.policy.reserveSlots ?? 0))
-      )
-        throw new HttpError(409, 'Scheduled quantity exceeds this provider’s usable capacity.');
-      const catalog = (
-        await db.query('SELECT * FROM broker_catalog WHERE id=$1 AND approved AND source_mode=$2', [
-          input.catalogId,
-          ctx.wick.mode,
-        ])
-      ).rows[0];
-      if (!catalog) throw new HttpError(409, 'Choose a currently approved configuration.');
-      if (!deadlineEligible(ctx, catalog.item))
-        throw new HttpError(
-          409,
-          'This route does not attest native hard-deadline enforcement. It cannot publish strict scheduled availability.',
-        );
-      assertProviderCatalog(p, catalog.item);
-      if (
-        Array.isArray(p.policy.allowedCatalogIds) &&
-        !p.policy.allowedCatalogIds.includes(input.catalogId)
-      )
-        throw new HttpError(
-          409,
-          'The provider policy excludes this configuration for new offerings.',
-        );
-      if (input.normalRateCentsPerHour < input.discountRateCentsPerHour)
-        throw new HttpError(400, 'The published normal rate cannot be below the discounted rate.');
-      if (ctx.wick.mode === 'real') {
-        try {
-          requireFreshManagedRate(catalog.item);
-          const rate = managedPricing(catalog.item).rateMicrosPerSecond;
-          for (const price of [input.discountRateCentsPerHour, input.normalRateCentsPerHour])
-            if (moneyUnits(price) * 85n < BigInt(rate) * 3600n)
-              throw new Error('The provider’s 85% must cover the published Wick compute rate.');
-        } catch (error) {
-          throw new HttpError(
-            409,
-            error instanceof Error ? error.message : 'Refresh managed pricing.',
-          );
-        }
-      }
-      const r = (
-        await db.query(
-          `INSERT INTO broker_scheduled_offerings(provider_id,operation_key,input_fingerprint,catalog_id,name,kind,time_zone,weekdays,window_start,window_end,available_until,capacity_quantity,discount_rate_cents_per_hour,normal_rate_cents_per_hour) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *`,
-          [
-            p.id,
-            input.operationKey,
-            digest,
-            input.catalogId,
-            input.name,
-            input.kind,
-            input.timeZone,
-            input.weekdays,
-            input.windowStart,
-            input.windowEnd,
-            input.availableUntil,
-            input.capacityQuantity,
-            input.discountRateCentsPerHour,
-            input.normalRateCentsPerHour,
-          ],
-        )
-      ).rows[0];
-      await recordKeyAction(
-        db,
-        actor,
-        'provider.scheduledOfferings.create',
-        input.operationKey,
-        r.id,
-      );
-      return offeringView(ctx, { ...r, item: catalog.item });
+  for (const [method, path] of [
+    ['POST', '/api/provider/scheduled-offerings'],
+    ['PATCH', '/api/provider/scheduled-offerings/:id'],
+    ['POST', '/api/provider/scheduled-offerings/draft'],
+  ] as const)
+    app.route({
+      method,
+      url: path,
+      handler: async (request) => {
+        await ctx.requireActor(request, ['provider']);
+        throw new HttpError(410, 'Scheduled VM supply has been removed. Use instant VM offerings.');
+      },
     });
-  });
-  app.patch('/api/provider/scheduled-offerings/:id', async (request) => {
-    const actor = await ctx.requireActor(request, ['provider']);
-    const provider = await getProvider(ctx.pool, actor),
-      id = uuid((request.params as { id: string }).id),
-      b = request.body as { active?: unknown; expectedRevision?: unknown };
-    if (typeof b?.active !== 'boolean') throw new HttpError(400, 'Set active to true or false.');
-    const revision = integer(b.expectedRevision, 'Offering revision', 1);
-    return transaction(ctx.pool, async (db) =>
-      withOperation(
-        db,
-        actor,
-        'provider.scheduledOfferings.update',
-        clientOperationKey(
-          (request.body as Record<string, unknown>)?.operationKey ??
-            request.headers['idempotency-key'],
-          Boolean(actor.apiKey),
-        ),
-        { id, active: b.active, revision },
-        async () => {
-          await globalLock(db);
-          await db.query('SELECT id FROM broker_providers WHERE id=$1 FOR UPDATE', [provider.id]);
-          if (b.active) {
-            const route = (
-              await db.query(
-                'SELECT c.item,c.approved,c.source_mode FROM broker_scheduled_offerings s JOIN broker_catalog c ON c.id=s.catalog_id WHERE s.id=$1 AND s.provider_id=$2',
-                [id, provider.id],
-              )
-            ).rows[0];
-            if (
-              !route ||
-              !route.approved ||
-              route.source_mode !== ctx.wick.mode ||
-              !deadlineEligible(ctx, route.item)
-            )
-              throw new HttpError(
-                409,
-                'This route does not attest native hard-deadline enforcement. It cannot publish strict scheduled availability.',
-              );
-          }
-          const r = (
-            await db.query(
-              'UPDATE broker_scheduled_offerings SET active=$3,revision=revision+1 WHERE id=$1 AND provider_id=$2 AND revision=$4 RETURNING *',
-              [id, provider.id, b.active, revision],
-            )
-          ).rows[0];
-          if (!r)
-            throw new HttpError(
-              409,
-              'This offering changed or is unavailable. Reload before editing.',
-            );
-          const catalog = (
-            await db.query('SELECT item FROM broker_catalog WHERE id=$1', [r.catalog_id])
-          ).rows[0];
-          return offeringView(ctx, { ...r, item: catalog.item });
-        },
-      ),
-    );
-  });
   app.get('/api/provider/agreement-demand', async (request) => {
     await getProvider(ctx.pool, await ctx.requireActor(request, ['provider']));
     const p = pagination(request.query);

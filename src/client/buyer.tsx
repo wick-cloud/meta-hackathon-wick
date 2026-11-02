@@ -233,23 +233,6 @@ export function NewEnvironment() {
         title="Launch a VM"
         description="Choose your compute and rental time. Providers compete to host your environment."
       />
-      <div className="market-mode-picker" aria-label="Choose order type">
-        <div className="market-mode selected">
-          <Radio size={20} />
-          <div>
-            <strong>Single VM · 30-second auction</strong>
-            <p>One environment, a fixed rental and a live provider auction.</p>
-          </div>
-        </div>
-        <Link href="/agreements/new" className="market-mode">
-          <Layers3 size={20} />
-          <div>
-            <strong>Scheduled VMs · bulk agreement</strong>
-            <p>Book capacity for seven days. Start your VMs when you need them.</p>
-          </div>
-          <ArrowRight size={17} />
-        </Link>
-      </div>
       <Steps active={0} />
       <div className="new-environment-grid">
         <section className="card request-composer">
@@ -1038,7 +1021,7 @@ export function VMDetail({ id }: { id: string }) {
       <PageHeader
         eyebrow={`ENVIRONMENT ${vm.id.slice(0, 8)}`}
         title={vm.catalogName || 'Your environment'}
-        description={`${vm.region} · ${scheduled ? 'Booked scheduled capacity' : `${vm.durationMinutes}-minute rental`} · Private visibility`}
+        description={`${vm.region} · ${scheduled ? 'Historical capacity booking' : `${vm.durationMinutes}-minute rental`} · Private visibility`}
       >
         <StatusPill status={vm.status} />
         {active && (
@@ -1107,10 +1090,10 @@ export function VMDetail({ id }: { id: string }) {
       {scheduled && (
         <section className="card market-panel">
           <div className="section-heading">
-            <h2>Scheduled capacity · separate clocks</h2>
+            <h2>Historical booking · access deadlines</h2>
             {vm.agreementId && (
               <Link className="text-link" href={`/orders/${vm.agreementId}`}>
-                View agreement <ArrowRight size={14} />
+                View historical booking <ArrowRight size={14} />
               </Link>
             )}
           </div>
@@ -1208,7 +1191,7 @@ export function VMDetail({ id }: { id: string }) {
             {scheduled ? (
               vm.agreementId && (
                 <ArrowLink to={`/orders/${vm.agreementId}`}>
-                  View scheduled agreement & bookings
+                  View booking details &amp; billing
                 </ArrowLink>
               )
             ) : (
@@ -1290,7 +1273,7 @@ export function Invoices() {
       <PageHeader
         eyebrow="BUYER BILLING"
         title="Billing"
-        description="Instant rental invoices and scheduled capacity charges, with no added buyer fee."
+        description="Instant VM rental invoices, with no added buyer fee."
       >
         {items.length > 0 && (
           <button className="button secondary" onClick={download}>

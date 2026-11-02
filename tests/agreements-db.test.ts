@@ -451,7 +451,7 @@ describe.skipIf(!url)('funded manual agreements (real disposable PostgreSQL)', (
     ).toBe('running');
     expect((await creditWalletView(pool, buyer)).balanceCents).toBe(20000);
   });
-  it('returns private buyer-only details and truthful fixture draft metadata over HTTP', async () => {
+  it('retains private historical details while refusing new schedule drafts over HTTP', async () => {
     const app = Fastify();
     app.setErrorHandler((err, _req, reply) =>
       reply
@@ -473,11 +473,8 @@ describe.skipIf(!url)('funded manual agreements (real disposable PostgreSQL)', (
       url: '/api/agreements/draft',
       payload: { prompt: '12 VMs 00:00 to 06:00 for seven days' },
     });
-    expect(draft.json()).toMatchObject({
-      mode: 'fixture',
-      modelCalled: false,
-      draft: { minimumQuantity: 12 },
-    });
+    expect(draft.statusCode).toBe(410);
+    expect(draft.json().message).toContain('removed');
     await app.close();
   });
   it('reverses a pending failure adjustment when the same booked slot later delivers; later failed restarts do not refund it', async () => {
@@ -709,7 +706,11 @@ describe.skipIf(!url)('funded manual agreements (real disposable PostgreSQL)', (
       true,
     );
   });
-  it('publishes and retires provider schedules idempotently without mutating accepted commitments', async () => {
+  it('refuses new provider schedules or edits without changing accepted bookings', async () => {
+    const booked = await bookedCurrent();
+    const before = (
+      await pool.query('SELECT * FROM broker_agreement_bookings WHERE id=$1', [booked.bookingId])
+    ).rows[0];
     const app = Fastify();
     app.setErrorHandler((err, _req, reply) =>
       reply
@@ -717,68 +718,58 @@ describe.skipIf(!url)('funded manual agreements (real disposable PostgreSQL)', (
         .send({ message: err instanceof Error ? err.message : 'Request failed' }),
     );
     await registerAgreements(app, ctx);
-    const payload = {
-      operationKey: randomUUID(),
-      catalogId: 'micro',
-      name: 'New schedule',
-      kind: 'capacity_window',
-      timeZone: 'UTC',
-      weekdays: [0, 1, 2, 3, 4, 5, 6],
-      windowStart: '00:00',
-      windowEnd: '06:00',
-      availableUntil: '08:00',
-      capacityQuantity: 12,
-      discountRateCentsPerHour: 10,
-      normalRateCentsPerHour: 20,
-    };
-    const headers = { 'x-buyer': 'provider', 'x-role': 'provider' },
-      first = await app.inject({
-        method: 'POST',
-        url: '/api/provider/scheduled-offerings',
+    const headers = { 'x-buyer': 'provider', 'x-role': 'provider' };
+    for (const method of ['POST', 'PATCH'] as const) {
+      const response = await app.inject({
+        method,
+        url:
+          method === 'POST'
+            ? '/api/provider/scheduled-offerings'
+            : `/api/provider/scheduled-offerings/${scheduledId}`,
         headers,
-        payload,
+        payload: { active: true },
       });
-    expect(first.statusCode).toBe(200);
-    const second = await app.inject({
-      method: 'POST',
-      url: '/api/provider/scheduled-offerings',
-      headers,
-      payload,
-    });
-    expect(second.json().id).toBe(first.json().id);
+      expect(response.statusCode).toBe(410);
+    }
     expect(
-      (
-        await app.inject({
-          method: 'POST',
-          url: '/api/provider/scheduled-offerings',
-          headers,
-          payload: { ...payload, name: 'Changed' },
-        })
-      ).statusCode,
-    ).toBe(409);
-    const created = first.json();
-    expect(
-      (
-        await app.inject({
-          method: 'PATCH',
-          url: `/api/provider/scheduled-offerings/${created.id}`,
-          headers,
-          payload: { active: false, expectedRevision: created.revision },
-        })
-      ).statusCode,
-    ).toBe(200);
-    expect(
-      (
-        await app.inject({
-          method: 'PATCH',
-          url: `/api/provider/scheduled-offerings/${created.id}`,
-          headers,
-          payload: { active: true, expectedRevision: created.revision },
-        })
-      ).statusCode,
-    ).toBe(409);
+      (await pool.query('SELECT * FROM broker_agreement_bookings WHERE id=$1', [booked.bookingId]))
+        .rows[0],
+    ).toEqual(before);
+    expect((await pool.query('SELECT count(*) n FROM broker_scheduled_offerings')).rows[0].n).toBe(
+      '1',
+    );
     expect(ctx.wick.create).not.toHaveBeenCalled();
+    expect(ctx.boss.send).not.toHaveBeenCalled();
     await app.close();
+  });
+  it('legacy maintenance does not match new or additional capacity even when offers are available', async () => {
+    await pool.query('UPDATE broker_scheduled_offerings SET active=false');
+    const pending = await createAgreement(ctx, buyer, input());
+    expect(pending.agreement.status).toBe('open');
+    await pool.query('UPDATE broker_scheduled_offerings SET active=true');
+    await pool.query('UPDATE broker_agreements SET next_match_at=clock_timestamp() WHERE id=$1', [
+      pending.agreement.id,
+    ]);
+    const before = await creditWalletView(pool, buyer);
+    await maintainAgreements(ctx);
+    const after = await creditWalletView(pool, buyer);
+    expect(after).toEqual(before);
+    expect(
+      (
+        await pool.query('SELECT count(*) n FROM broker_agreement_bookings WHERE agreement_id=$1', [
+          pending.agreement.id,
+        ])
+      ).rows[0].n,
+    ).toBe('0');
+    expect(
+      (
+        await pool.query('SELECT status,reserved_cents FROM broker_agreements WHERE id=$1', [
+          pending.agreement.id,
+        ])
+      ).rows[0],
+    ).toMatchObject({ status: 'open', reserved_cents: 0 });
+    expect(ctx.wick.create).not.toHaveBeenCalled();
+    expect(ctx.boss.send).not.toHaveBeenCalled();
   });
   it('does not let duplicate cheap offers from one nearly full supplier hide other available capacity', async () => {
     await pool.query('UPDATE broker_providers SET total_capacity=1 WHERE id=$1', [providerId]);
@@ -1149,99 +1140,6 @@ describe.skipIf(!url)('funded manual agreements (real disposable PostgreSQL)', (
     ).toBe(100);
     expect((await pool.query('SELECT count(*) n FROM broker_vms')).rows[0].n).toBe('0');
     expect(ctx.boss.send).not.toHaveBeenCalled();
-  });
-  it('rejects uncertified real schedule publication and reactivation while retaining historical replay and allowing pauses', async () => {
-    const real = { ...ctx, wick: { ...ctx.wick, mode: 'real' } } as AppContext;
-    const managed = {
-      ...catalog,
-      provider: 'e2b',
-      pricingMode: 'managed',
-      rateMicrosPerSecond: 23,
-      rateSource: 'wick-customer-catalog',
-      rateRetrievedAt: new Date().toISOString(),
-      managedRouteVerification: 'execution-preview-managed',
-      maxTtlSeconds: 28800,
-      deadlineEnforcement: 'supervised',
-    };
-    await pool.query("UPDATE broker_catalog SET source_mode='real',item=$1 WHERE id='micro'", [
-      managed,
-    ]);
-    const app = Fastify();
-    app.setErrorHandler((err, _req, reply) =>
-      reply
-        .status(err instanceof HttpError ? err.statusCode : 500)
-        .send({ message: err instanceof Error ? err.message : 'Request failed' }),
-    );
-    await registerAgreements(app, real);
-    const headers = { 'x-buyer': 'provider', 'x-role': 'provider' },
-      payload = {
-        operationKey: randomUUID(),
-        catalogId: 'micro',
-        name: 'Certified eight-hour schedule',
-        kind: 'capacity_window',
-        timeZone: 'UTC',
-        weekdays: [0, 1, 2, 3, 4, 5, 6],
-        windowStart: '00:00',
-        windowEnd: '06:00',
-        availableUntil: '08:00',
-        capacityQuantity: 12,
-        discountRateCentsPerHour: 10,
-        normalRateCentsPerHour: 20,
-      };
-    expect(
-      (
-        await app.inject({
-          method: 'POST',
-          url: '/api/provider/scheduled-offerings',
-          headers,
-          payload,
-        })
-      ).statusCode,
-    ).toBe(409);
-    expect(
-      (
-        await app.inject({
-          method: 'PATCH',
-          url: `/api/provider/scheduled-offerings/${scheduledId}`,
-          headers,
-          payload: { active: false, expectedRevision: 1 },
-        })
-      ).statusCode,
-    ).toBe(200);
-    expect(
-      (
-        await app.inject({
-          method: 'PATCH',
-          url: `/api/provider/scheduled-offerings/${scheduledId}`,
-          headers,
-          payload: { active: true, expectedRevision: 2 },
-        })
-      ).statusCode,
-    ).toBe(409);
-    await pool.query(
-      "UPDATE broker_catalog SET item=jsonb_set(item,'{deadlineEnforcement}','\"native\"') WHERE id='micro'",
-    );
-    const published = await app.inject({
-      method: 'POST',
-      url: '/api/provider/scheduled-offerings',
-      headers,
-      payload,
-    });
-    expect(published.statusCode).toBe(200);
-    expect(published.json().deadlineEligible).toBe(true);
-    await pool.query(
-      "UPDATE broker_catalog SET item=jsonb_set(item,'{deadlineEnforcement}','\"supervised\"') WHERE id='micro'",
-    );
-    const replay = await app.inject({
-      method: 'POST',
-      url: '/api/provider/scheduled-offerings',
-      headers,
-      payload,
-    });
-    expect(replay.statusCode).toBe(200);
-    expect(replay.json()).toMatchObject({ id: published.json().id, deadlineEligible: false });
-    expect(ctx.wick.create).not.toHaveBeenCalled();
-    await app.close();
   });
   it('paginates provider commitments in chronological window order instead of transaction timestamp and random UUID order', async () => {
     const a = await createAgreement(ctx, buyer, input());

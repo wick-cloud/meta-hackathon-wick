@@ -69,7 +69,9 @@ for (const role of ['buyer', 'provider'] as const)
     await dialog.getByRole('button', { name: 'Create key', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'Save your key', exact: true })).toBeVisible();
     await expect(page.getByLabel('New Broker API key')).toHaveValue(token);
-    expect(writes[0].body.scopes).toEqual(defaultScopes(role));
+    expect(writes[0].body.scopes).toEqual(
+      defaultScopes(role).filter((scope) => !scope.startsWith('agreements:')),
+    );
     expect(writes[0].body.limits).toEqual({});
     await page.getByRole('button', { name: 'I’ve saved the key' }).click();
     await expect(page.getByLabel('New Broker API key')).toHaveCount(0);
@@ -110,9 +112,9 @@ test('key setup gives copyable direct downloads and contains mobile overflow', a
   const install = await page.locator('.key-setup > pre').innerText();
   expect(install.split('\n')).toHaveLength(4);
   expect(install).not.toContain('\\n');
-  expect(install).toContain('/downloads/0.3.0/wick-cloud-broker-sdk-0.3.0.tgz');
-  expect(install).toContain('/downloads/0.3.0/wick-cloud-broker-cli-0.3.0.tgz');
-  expect(install).toContain('/downloads/0.3.0/wick-cloud-broker-mcp-0.3.0.tgz');
+  expect(install).toContain('/downloads/0.4.0/wick-cloud-broker-sdk-0.4.0.tgz');
+  expect(install).toContain('/downloads/0.4.0/wick-cloud-broker-cli-0.4.0.tgz');
+  expect(install).toContain('/downloads/0.4.0/wick-cloud-broker-mcp-0.4.0.tgz');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
     true,
   );

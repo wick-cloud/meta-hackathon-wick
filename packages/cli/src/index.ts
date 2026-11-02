@@ -18,7 +18,7 @@ import {
   validateBrokerKey,
 } from './profile.js';
 
-const VERSION = '0.3.0';
+const VERSION = '0.4.0';
 const MAX_INPUT = 65536;
 const MAX_TERMINAL_FRAME = 32768;
 export interface CliIO {
@@ -39,7 +39,7 @@ function line(io: CliIO, value: unknown) {
   io.output.write(`${JSON.stringify(value)}\n`);
 }
 function help(): string {
-  return `Wick Broker ${VERSION}\n\nUsage: wick-broker <command> [id] [options]\n\n${OPERATIONS.map((o) => `  ${o.command}${o.path.includes(':id') ? ' <id>' : ''}`).join('\n')}\n  auth login [--stdin]\n  auth logout\n  tokens wait <id>\n  vms wait <id>\n  vms terminal <id>\n\nOptions:\n  --file <path|->       JSON request body (maximum 64 KiB)\n  --operation-key <key> Stable key for a mutation; required without a TTY\n  --json               JSON output only; errors also use JSON\n  --wait               Wait for auction outcome without creating another order\n  --timeout <seconds>  Finite wait: tokens default 30s, others 120s, maximum 900s\n  --api-url <origin>   Broker API origin; saved keys never cross origins\n  --limit/--cursor      Bounded list pagination\n  --kind/--status/--created  Orders filters\n  --from/--to          Commitment date range\n  --prompt/--strategy/--description  Muse proposal text\n\nCredentials: WICK_BROKER_API_KEY and WICK_BROKER_API_URL.\nWick keys are separate. Do not put API keys in command-line arguments.\n`;
+  return `Wick Broker ${VERSION}\n\nUsage: wick-broker <command> [id] [options]\n\n${OPERATIONS.map((o) => `  ${o.command}${o.path.includes(':id') ? ' <id>' : ''}`).join('\n')}\n  auth login [--stdin]\n  auth logout\n  tokens wait <id>\n  vms wait <id>\n  vms terminal <id>\n\nOptions:\n  --file <path|->       JSON request body (maximum 64 KiB)\n  --operation-key <key> Stable key for a mutation; required without a TTY\n  --json               JSON output only; errors also use JSON\n  --wait               Wait for auction outcome without creating another order\n  --timeout <seconds>  Finite wait: tokens default 30s, others 120s, maximum 900s\n  --api-url <origin>   Broker API origin; saved keys never cross origins\n  --limit/--cursor      Bounded list pagination\n  --kind/--status/--created  Orders filters\n  --prompt/--strategy/--description  Muse proposal text\n\nCredentials: WICK_BROKER_API_KEY and WICK_BROKER_API_URL.\nWick keys are separate. Do not put API keys in command-line arguments.\n`;
 }
 async function inputText(input: Readable, limit = MAX_INPUT): Promise<string> {
   const chunks: Buffer[] = [];
@@ -271,8 +271,6 @@ export async function runCli(args: string[], io: CliIO = defaultIO()): Promise<n
         kind: { type: 'string' },
         status: { type: 'string' },
         created: { type: 'string' },
-        from: { type: 'string' },
-        to: { type: 'string' },
         prompt: { type: 'string' },
         strategy: { type: 'string' },
         description: { type: 'string' },
@@ -378,7 +376,7 @@ export async function runCli(args: string[], io: CliIO = defaultIO()): Promise<n
       io.error.write(`Operation key: ${operationKey}. Reuse it if the result is uncertain.\n`);
     }
     const query: Record<string, string | number | undefined> = {};
-    for (const field of ['kind', 'status', 'created', 'cursor', 'from', 'to'] as const)
+    for (const field of ['kind', 'status', 'created', 'cursor'] as const)
       if (flags[field] !== undefined) query[field] = flags[field];
     if (flags.limit !== undefined) {
       const n = Number(flags.limit);

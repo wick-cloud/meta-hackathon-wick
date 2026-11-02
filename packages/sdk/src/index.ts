@@ -418,12 +418,15 @@ export class BrokerClient {
         options,
       ),
   };
+  /** Legacy scheduled-VM records remain readable; new agreement workflows are retired. */
   agreements = {
+    /** @deprecated Scheduled VM previews are retired and return HTTP 410. */
     preview: (input: A.AgreementInput, options: ReadOptions = {}) =>
       this.request<A.AgreementPreview>('POST', '/api/agreements/preview', {
         ...options,
         body: input,
       }),
+    /** @deprecated New scheduled VM agreements are retired and return HTTP 410. */
     create: (input: Omit<A.AgreementInput, 'operationKey'>, options: MutationOptions) =>
       this.#write<A.AgreementDetail>('POST', '/api/agreements', input, options),
     get: (id: string, options: ReadOptions = {}) =>
@@ -446,6 +449,7 @@ export class BrokerClient {
         {},
         options,
       ),
+    /** @deprecated Scheduled VM drafting is retired and returns HTTP 410. */
     draft: (prompt: string, options: ReadOptions = {}) =>
       this.request<A.AgreementDraftResult<A.AgreementInput>>('POST', '/api/agreements/draft', {
         ...options,
@@ -571,6 +575,7 @@ export class BrokerClient {
           ...options,
           query: { ...query },
         }),
+      /** @deprecated New scheduled supply is retired and returns HTTP 410. */
       create: (input: Omit<A.ScheduledOfferingInput, 'operationKey'>, options: MutationOptions) =>
         this.#write<A.ScheduledOffering>(
           'POST',
@@ -578,6 +583,7 @@ export class BrokerClient {
           input,
           options,
         ),
+      /** @deprecated Scheduled supply changes are retired and return HTTP 410. */
       update: (
         id: string,
         input: { active: boolean; expectedRevision: number },
@@ -589,6 +595,7 @@ export class BrokerClient {
           input,
           options,
         ),
+      /** @deprecated Scheduled VM drafting is retired and returns HTTP 410. */
       draft: (prompt: string, options: ReadOptions = {}) =>
         this.request<A.AgreementDraftResult<A.ScheduledOfferingInput>>(
           'POST',
@@ -633,8 +640,10 @@ export class BrokerClient {
         ...options,
         body: { description },
       }),
+    /** @deprecated Scheduled VM drafting is retired and returns HTTP 410. */
     draftAgreement: (prompt: string, options: ReadOptions = {}) =>
       this.agreements.draft(prompt, options),
+    /** @deprecated Scheduled VM drafting is retired and returns HTTP 410. */
     draftOffering: (prompt: string, options: ReadOptions = {}) =>
       this.provider.scheduledOfferings.draft(prompt, options),
     proposePolicy: (strategy: string, options: ReadOptions = {}) =>

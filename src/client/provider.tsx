@@ -4,7 +4,6 @@ import { useEffect, useState, type FormEvent } from 'react';
 import {
   Activity,
   ArrowRight,
-  CalendarClock,
   Check,
   CheckCircle2,
   Clock3,
@@ -133,9 +132,6 @@ export function ProviderCapacity() {
         title="Capacity"
         description={`${provider.name} · Manage runtime allocation and availability.`}
       >
-        <Link href="/provider/scheduled" className="button secondary">
-          <CalendarClock size={16} /> Scheduled capacity
-        </Link>
         <span className="quiet-badge">
           {provider.simulated ? 'Simulated demo supply' : 'Wick-managed allocation'}
         </span>
@@ -208,12 +204,6 @@ export function ProviderCapacity() {
               <p>Configured allocation; upstream capacity and Wick admission still apply.</p>
             </div>
           </dl>
-          <div className="capacity-calendar-link">
-            <Link href="/provider/scheduled">
-              <CalendarClock size={15} /> View booked windows <ArrowRight size={14} />
-            </Link>
-            <span>Future commitments are tracked separately.</span>
-          </div>
         </section>
         <section className="card">
           <div className="section-heading">

@@ -95,16 +95,6 @@ export interface MuseAdapter {
     input: import('../../shared/buying.js').MuseBuyingInput,
   ): Promise<import('../../shared/buying.js').MuseBuyingSelection>;
   mode: 'fixture' | 'real';
-  draftSchedule?(input: {
-    kind: 'agreement' | 'offering';
-    description: string;
-    catalog: CatalogItem[];
-  }): Promise<{
-    draft: Record<string, unknown>;
-    mode: 'fixture' | 'real';
-    modelCalled: boolean;
-    explanation: string;
-  }>;
   translate(
     description: string,
     catalog: CatalogItem[],

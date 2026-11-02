@@ -1,6 +1,6 @@
 # Wick Broker TypeScript SDK
 
-Customer access to Broker auctions, agreements, provider supply and owned environment terminals. Requires Node.js 22.12 or newer.
+Customer access to Broker VM auctions, prepaid AI tokens, provider supply and owned environment terminals. Requires Node.js 22.12 or newer.
 
 ```sh
 npm install @wick-cloud/broker-sdk
@@ -39,26 +39,21 @@ if (outcome.state === 'pending') console.log('Check this saved order later:', ou
 else console.log(outcome.resource);
 ```
 
-Order creation can reserve real paid infrastructure. This example requires an appropriately scoped key and a user-approved budget. SDK keys enforce per-operation maximums, not daily or lifetime spending budgets. Scheduled agreements continue to require sufficient Broker pilot credit and a certified native deadline route.
+Order creation can reserve real paid infrastructure. This example requires an appropriately scoped key and a user-approved budget. SDK keys enforce per-operation maximums, not daily or lifetime spending budgets.
 
 ## Resource groups
 
-| Group           | Operations                                                                                                           |
-| --------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `me`, `catalog` | Current account/key authority and approved configurations                                                            |
-| `orders`        | Permanent Orders listing; auction create, detail, cancel, retry and wait                                             |
-| `alternatives`  | Saved nonbinding intents, concrete proposals and explicit acceptance                                                 |
-| `agreements`    | Authoritative preview, draft, create, detail, activation and cancel-unmatched                                        |
-| `vms`           | Owned environment list/detail, readiness wait, terminal and termination                                              |
-| `billing`       | Wallet, credit history, instant invoices and agreement charges                                                       |
-| `provider`      | Dashboard, capacity, policy, requests/bids, offerings/schedules, demand, commitments/calendar, activity and earnings |
-| `muse`          | Reviewed translations, schedules, policy, bid, offering and alternative proposals                                    |
-
-`provider.calendar()` returns the same bounded commitment records as `provider.commitments()` for client calendar rendering. It does not infer unbooked native capacity.
+| Group           | Operations                                                                   |
+| --------------- | ---------------------------------------------------------------------------- |
+| `me`, `catalog` | Current account/key authority and approved configurations                    |
+| `orders`        | Permanent Orders listing; auction create, detail, cancel, retry and wait     |
+| `alternatives`  | Saved nonbinding intents, concrete proposals and explicit acceptance         |
+| `vms`           | Owned environment list/detail, readiness wait, terminal and termination      |
+| `billing`       | Wallet, credit history and instant invoices                                  |
+| `provider`      | Dashboard, capacity, policy, requests/bids, offerings, activity and earnings |
+| `muse`          | Reviewed VM translations, policy, bid, offering and alternative proposals    |
 
 All paginated methods return one page and an optional opaque `nextCursor`. Pass the cursor unchanged; the SDK never fetches full histories automatically. `alternatives.list()` currently returns the latest 30 intents, matching the existing API.
-
-`agreements.preview()` accepts a full `AgreementInput`, including the review's operation key; it creates nothing. `agreements.create()` takes the reviewed input without `operationKey`, plus `{operationKey}` as its second argument. Create and cancel-unmatched return `AgreementDetail`, containing the agreement, bookings and activations.
 
 The complete HTTP contract is served at `/api/openapi.json`. The SDK's typed resource methods call the same `/api` owners used by the UI. A low-level `request<T>(method, path, {body, query, operationKey, signal})` is available for contract-covered operations. It accepts only relative `/api/` paths on the configured origin.
 
@@ -147,3 +142,7 @@ try {
 ```
 
 If a transport timeout provides no receipt identifier, explicitly repeat the identical completion with its original operation key to recover the persisted identifier. The server never dispatches an existing invocation again. Do not replace the operation key to bypass a pending or completed result.
+
+## Legacy scheduled VM compatibility
+
+Version `0.4.0` removes scheduled VM workflows from current discovery. Deprecated SDK methods and historical types remain so existing integrations can read records, cancel unmatched capacity and honor already-approved funded bookings. New agreements, previews, scheduled drafts and supply changes return HTTP 410. Legacy billing and capacity records remain readable; this compatibility does not enable new scheduling.

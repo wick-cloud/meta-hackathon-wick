@@ -471,20 +471,23 @@ async function main() {
   assert(providerTools.includes('provider_capacity_set'));
   assert(!providerTools.includes('auction_create'));
   assert.equal((await providerMcp.tool('provider_dashboard_get')).capacity.total, 5);
-  const quote = await buyer.agreements.preview({
-    operationKey: `preview-${runId}`,
-    description: 'Nonbinding agreement preview',
-    startDate: new Date(Date.now() + 86400000).toISOString().slice(0, 10),
-    timeZone: 'UTC',
-    windowStart: '00:00',
-    windowEnd: '06:00',
-    minimumQuantity: 1,
-    targetQuantity: 2,
-    requirements: { cpu: item.cpu, memoryGb: item.memoryGb },
-    region: item.region,
-    maxDiscountRateCentsPerHour: 10,
-  });
-  assert.equal(quote.windows.length, 7);
+  await assert.rejects(
+    () =>
+      buyer.agreements.preview({
+        operationKey: `preview-${runId}`,
+        description: 'Nonbinding agreement preview',
+        startDate: new Date(Date.now() + 86400000).toISOString().slice(0, 10),
+        timeZone: 'UTC',
+        windowStart: '00:00',
+        windowEnd: '06:00',
+        minimumQuantity: 1,
+        targetQuantity: 2,
+        requirements: { cpu: item.cpu, memoryGb: item.memoryGb },
+        region: item.region,
+        maxDiscountRateCentsPerHour: 10,
+      }),
+    { status: 410 },
+  );
   assert.equal(
     (await pool.query('SELECT count(*)::int n FROM broker_agreements WHERE buyer_id=$1', [buyerId]))
       .rows[0].n,

@@ -59,8 +59,8 @@ export function AdminCreditGrant() {
       </span>
       <h2>Grant buyer wallet credit</h2>
       <p className="market-copy">
-        These grants fund scheduled Broker commitments. They do not top up Wick compute or collect a
-        payment.
+        These grants fund agent and Studio task budgets. They do not top up Wick compute or collect
+        a payment.
       </p>
       <ErrorBox error={buyers.error} retry={buyers.reload} />
       {review ? (
@@ -130,7 +130,7 @@ export function AdminCreditGrant() {
               maxLength={500}
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              placeholder="Pilot scheduled-capacity credit"
+              placeholder="Pilot agent credit"
             />
           </label>
           <ErrorBox error={error} />

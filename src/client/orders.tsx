@@ -59,7 +59,7 @@ export function Orders({ search }: { search: string }) {
   const navigate = useNavigate(),
     now = useNow(),
     query = new URLSearchParams(search);
-  const kind = choices(query.get('kind'), ['all', 'auction', 'agreement', 'token'] as const, 'all');
+  const kind = choices(query.get('kind'), ['all', 'auction', 'token'] as const, 'all');
   const status = choices<OrderStatusFilter>(
     query.get('status'),
     ['all', 'active', 'history', 'attention'],
@@ -139,7 +139,7 @@ export function Orders({ search }: { search: string }) {
       {!filtered && !cursor && list.data && !items.length && <PurchaseCards compact />}
       <div className="purchase-history-heading">
         <h2>Order history</h2>
-        <p>Track purchases, live auctions and scheduled VM bookings.</p>
+        <p>Track VM auctions and AI token purchases.</p>
       </div>
       <section className="card market-orders">
         <div className="record-view-bar">
@@ -166,7 +166,6 @@ export function Orders({ search }: { search: string }) {
               >
                 <option value="all">All types</option>
                 <option value="auction">VM auctions</option>
-                <option value="agreement">Scheduled VMs</option>
                 <option value="token">AI token packs</option>
               </select>
             </label>
@@ -288,7 +287,7 @@ export function Orders({ search }: { search: string }) {
                             <div className="orders-reference">
                               <span>
                                 {item.kind === 'agreement'
-                                  ? '7-day agreement'
+                                  ? 'Historical capacity booking'
                                   : item.kind === 'token'
                                     ? `AI tokens · ${item.tokenMode === 'instant' ? 'Instant' : 'Auction'}`
                                     : 'Instant auction'}
@@ -323,7 +322,7 @@ export function Orders({ search }: { search: string }) {
                           {item.kind === 'agreement' && item.status === 'open' ? (
                             <span className="status-pill status-open">
                               <span />
-                              Pending matching
+                              Legacy record
                             </span>
                           ) : (
                             <StatusPill status={item.status} />
@@ -472,7 +471,7 @@ export function Orders({ search }: { search: string }) {
                   ? 'Completed orders appear here. Live auctions and pending cleanup stay in Active.'
                   : filtered
                     ? 'No orders match these filters. Clear them to return to the full list.'
-                    : 'Your VM auctions, scheduled agreements and AI token orders will appear here.'
+                    : 'Your VM auctions and AI token orders will appear here.'
               }
             >
               {status === 'history' ? (

@@ -15,9 +15,9 @@ Create a key on **API keys** in the Broker UI. The secret is displayed once. Cho
 
 Key management is browser-only. Machine credentials cannot mint keys or invoke admin functions. Revocation prevents new requests and closes attached terminals within the server’s authorization-recheck interval. It does not cancel existing orders, agreements or saved provider policies.
 
-Buyer limits are **per operation**: maximum auction budget (also applied to accepted alternatives), maximum agreement reservation and maximum activation quantity. They are not a daily or lifetime spending budget. Repeated permitted operations can exceed a single operation’s limit in aggregate. Existing wallet and capacity checks still apply.
+Buyer limits are **per operation**: maximum auction budget (also applied to accepted alternatives). They are not a daily or lifetime spending budget. Repeated permitted operations can exceed a single operation’s limit in aggregate. Existing wallet and capacity checks still apply.
 
-For aggregate AI spending limits, use **Agents** to fund a grant and issue its bound key. The `0.3.0` inference APIs enforce its total available budget plus purchase holds across rotations. Such keys cannot access VM purchases or internal Muse proposal helpers. See the [token marketplace guide](inference-marketplace.md) for prepaid quota, qualification, receipts and recovery.
+For aggregate AI spending limits, use **Agents** to fund a grant and issue its bound key. The `0.4.0` inference APIs enforce its total available budget plus purchase holds across rotations. Such keys cannot access VM purchases or internal Muse proposal helpers. See the [token marketplace guide](inference-marketplace.md) for prepaid quota, qualification, receipts and recovery.
 
 ## Install the versioned client release
 
@@ -25,12 +25,12 @@ The client packages are downloadable directly from Broker. Repository access and
 
 ```sh
 npm install \
-  https://meta-hackathon-wick-production.up.railway.app/downloads/0.3.0/wick-cloud-broker-sdk-0.3.0.tgz \
-  https://meta-hackathon-wick-production.up.railway.app/downloads/0.3.0/wick-cloud-broker-cli-0.3.0.tgz \
-  https://meta-hackathon-wick-production.up.railway.app/downloads/0.3.0/wick-cloud-broker-mcp-0.3.0.tgz
+  https://meta-hackathon-wick-production.up.railway.app/downloads/0.4.0/wick-cloud-broker-sdk-0.4.0.tgz \
+  https://meta-hackathon-wick-production.up.railway.app/downloads/0.4.0/wick-cloud-broker-cli-0.4.0.tgz \
+  https://meta-hackathon-wick-production.up.railway.app/downloads/0.4.0/wick-cloud-broker-mcp-0.4.0.tgz
 ```
 
-Use `npx --no-install wick-broker` for the installed CLI. For MCP, configure `node` with the absolute path to the installed `node_modules/@wick-cloud/broker-mcp/dist/index.js`; it uses the same saved origin-bound profile or Broker environment variables. Release hashes and byte sizes are listed at `/downloads/0.3.0/manifest.json`. Published version directories are immutable; client changes require a new package version and a new directory.
+Use `npx --no-install wick-broker` for the installed CLI. For MCP, configure `node` with the absolute path to the installed `node_modules/@wick-cloud/broker-mcp/dist/index.js`; it uses the same saved origin-bound profile or Broker environment variables. Release hashes and byte sizes are listed at `/downloads/0.4.0/manifest.json`. Published version directories are immutable; client changes require a new package version and a new directory.
 
 The standard npm registry commands below apply after registry publication. The direct downloads above are available independently.
 
@@ -103,23 +103,15 @@ Terminal attachment requires an interactive TTY. Ctrl-] detaches without termina
 
 Terminal input is an ordered stream, not a durable idempotent resource operation. It is never automatically retried. After an uncertain write or disconnected terminal, inspect the existing VM state before deciding whether to send a command again.
 
-## Agreements and billing
+## Billing and historical records
 
 ```sh
-wick-broker agreements preview --file agreement.json --json
-wick-broker agreements create --file agreement.json \
-  --operation-key agreement-20261029-001 --json
-wick-broker agreements get <agreement-id> --json
-wick-broker agreements activate <agreement-id> --file activation.json \
-  --operation-key activation-20261029-001 --json
-wick-broker agreements cancel-unmatched <agreement-id> \
-  --operation-key remainder-20261029-001 --json
 wick-broker billing wallet --json
 wick-broker billing history --limit 25 --json
 wick-broker billing invoices --limit 25 --json
 ```
 
-`agreement.json` follows the OpenAPI AgreementInput shape, including its `operationKey` when previewed. When also supplied as a CLI flag, both keys must match. `activation.json` contains `windowId` and `quantity`. Approval and window opening create zero VMs automatically. Activation must occur within a permitted window and preserves the original hard cutoff. Strict schedules remain unavailable on native routes whose cutoff enforcement has not been certified.
+Scheduled and bulk VM agreements have been retired. Current CLI, MCP and OpenAPI discovery no longer advertise them. Older immutable SDK/CLI downloads remain available for compatibility; new agreement, preview, draft and scheduled-supply requests return authenticated HTTP 410 without spending, model calls or VM allocation. Historical detail, cancellation of unmatched credit, settlement and already-funded booked activation remain supported through legacy endpoints. No existing invoices, credit records or accepted terms are deleted.
 
 ## Provider journey
 
@@ -138,12 +130,10 @@ wick-broker provider bids create <auction-id> --file reviewed-bid.json \
 wick-broker provider offerings propose --json
 wick-broker provider offerings create --file reviewed-offering.json \
   --operation-key offering-20261029-001 --json
-wick-broker provider commitments --from 2026-10-29T00:00:00Z \
-  --to 2026-11-05T00:00:00Z --json
 wick-broker provider earnings --json
 ```
 
-Policy Apply and relevant edits require the reviewed current revision. A proposal is not Apply, publication, acceptance or a bid. Existing provider policy and capacity protections are checked again when a mutation commits. `provider calendar` returns the same bounded committed intervals as `provider commitments`; it does not claim unreturned intervals are free.
+Policy Apply and relevant edits require the reviewed current revision. A proposal is not Apply, publication, acceptance or a bid. Existing provider policy and capacity protections are checked again when a mutation commits.
 
 ## Local MCP
 
@@ -154,7 +144,7 @@ Configure an MCP-capable host to launch the local package:
   "mcpServers": {
     "wick-broker": {
       "command": "npx",
-      "args": ["-y", "@wick-cloud/broker-mcp@0.3.0"]
+      "args": ["-y", "@wick-cloud/broker-mcp@0.4.0"]
     }
   }
 }
