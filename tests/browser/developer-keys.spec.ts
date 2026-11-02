@@ -69,7 +69,9 @@ for (const role of ['buyer', 'provider'] as const)
     await dialog.getByRole('button', { name: 'Create key', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'Save your key', exact: true })).toBeVisible();
     await expect(page.getByLabel('New Broker API key')).toHaveValue(token);
-    expect(writes[0].body.scopes).toEqual(defaultScopes(role));
+    expect(writes[0].body.scopes).toEqual(
+      defaultScopes(role).filter((scope) => !scope.startsWith('agreements:')),
+    );
     expect(writes[0].body.limits).toEqual({});
     await page.getByRole('button', { name: 'I’ve saved the key' }).click();
     await expect(page.getByLabel('New Broker API key')).toHaveCount(0);
