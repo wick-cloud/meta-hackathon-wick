@@ -17,7 +17,12 @@ import { applyCreditEntry } from '../agreements/credits.js';
 import { enqueue, transaction } from '../marketplace/db.js';
 import type { Row } from '../marketplace/data.js';
 import { operationFingerprint, withOperation } from '../operations.js';
-import { minimumInputReservation, type RuntimeRoute } from './runtime.js';
+import {
+  minimumInputReservation,
+  MIN_TASK_OUTPUT_RESERVATION,
+  type RuntimeRoute,
+} from './runtime.js';
+import { tokenAllowanceGroups, repairLegacyAllowance, type AllowanceRoute } from './allowance.js';
 import {
   activeMode,
   assertRoute,
@@ -166,6 +171,130 @@ function hasCapacity(row: Row, input: number, output: number) {
     Number(row.outstanding_output) + output <= Number(row.max_outstanding_output)
   );
 }
+async function activePacks(db: PoolClient, grantId: string) {
+  return (
+    await db.query(
+      "SELECT * FROM broker_token_packs WHERE grant_id=$1 AND status='active' AND expires_at>clock_timestamp() ORDER BY expires_at,id LIMIT 10",
+      [grantId],
+    )
+  ).rows;
+}
+function topupCompatible(
+  row: Row,
+  native: RuntimeRoute,
+  grant: Row,
+  packs: Row[],
+  at: Date,
+  input: number,
+  output: number,
+  requiredInput = minimumInputReservation(native),
+  requiredOutput = native.minimumOutputTokens ?? 1,
+) {
+  const group = tokenAllowanceGroups(
+    packs,
+    [
+      {
+        provider: row.provider,
+        providerId: row.provider_id,
+        sourceMode: grant.source_mode,
+        routeFingerprint: native.fingerprint,
+        inputBound: minimumInputReservation(native),
+        minimumOutputTokens: native.minimumOutputTokens ?? 1,
+        maximumOutputTokens: native.maximumOutputTokens,
+      },
+    ],
+    { grantId: grant.id, now: at },
+  )[0];
+  return (
+    input + (group?.availableInput ?? 0) >=
+      Math.max(requiredInput, minimumInputReservation(native)) &&
+    output + (group?.availableOutput ?? 0) >=
+      Math.max(requiredOutput, native.minimumOutputTokens ?? 1)
+  );
+}
+const requirementSchema = z
+  .array(
+    z
+      .object({
+        provider: z.enum(INFERENCE_PROVIDERS),
+        providerId: z.uuid(),
+        sourceMode: z.enum(['fixture', 'real']),
+        routeFingerprint: z.string().min(1).max(200),
+        inputBound: integer(10_000_000),
+        minimumOutputTokens: integer(8192),
+        maximumOutputTokens: integer(8192),
+      })
+      .strict(),
+  )
+  .min(1)
+  .max(2)
+  .refine((rows) => new Set(rows.map((r) => r.provider)).size === rows.length);
+async function qualifiedRequirements(
+  ctx: AppContext,
+  grant: Row,
+  rows: Row[],
+  proofs: readonly AllowanceRoute[],
+) {
+  const result: AllowanceRoute[] = [];
+  for (const proof of proofs) {
+    const row = rows.find((r) => r.provider === proof.provider);
+    const native = runtime(ctx).routes.get(proof.provider as InferenceProvider);
+    if (
+      !row ||
+      !native ||
+      !grant.allowed_providers.includes(proof.provider) ||
+      proof.providerId !== row.provider_id ||
+      proof.sourceMode !== grant.source_mode ||
+      proof.routeFingerprint !== native.fingerprint ||
+      proof.minimumOutputTokens !== (native.minimumOutputTokens ?? 1) ||
+      proof.maximumOutputTokens !== native.maximumOutputTokens
+    )
+      continue;
+    try {
+      await assertRoute(ctx, row, grant.source_mode);
+    } catch {
+      continue;
+    }
+    result.push(proof);
+  }
+  return result;
+}
+async function existingAllowanceFits(
+  ctx: AppContext,
+  grant: Row,
+  packs: Row[],
+  rows: Row[],
+  at: Date,
+  input: number,
+  output: number,
+  proofs: readonly AllowanceRoute[] | null,
+  providerConstraint: string,
+) {
+  // Older constrained orders have only one exact bound. Never apply that bound
+  // to another provider's different accounting contract.
+  const requirements =
+    proofs ??
+    rows
+      .filter((r) => r.provider === providerConstraint)
+      .map((row) => {
+        const native = runtime(ctx).routes.get(row.provider as InferenceProvider)!;
+        return {
+          provider: row.provider,
+          providerId: row.provider_id,
+          sourceMode: grant.source_mode,
+          routeFingerprint: native.fingerprint,
+          inputBound: input,
+          minimumOutputTokens: native.minimumOutputTokens ?? 1,
+          maximumOutputTokens: native.maximumOutputTokens,
+        };
+      });
+  const qualified = await qualifiedRequirements(ctx, grant, rows, requirements);
+  return tokenAllowanceGroups(packs, qualified, { grantId: grant.id, now: at }).some(
+    (group) =>
+      group.availableInput >= group.route.inputBound &&
+      group.availableOutput >= Math.max(output, group.route.minimumOutputTokens),
+  );
+}
 function snapshot(row: Row, native: RuntimeRoute) {
   return {
     currencyDecimals: 4,
@@ -214,6 +343,8 @@ export async function quotes(
     await authority(db, actor, 'inference:read');
     const grant = await lockedGrant(db, actor, grantId, true);
     activeMode(ctx, grant);
+    await db.query('SELECT provider FROM broker_inference_routes ORDER BY provider FOR UPDATE');
+    await repairLegacyAllowance(db, grantId);
     if (!grant.allow_instant)
       failure(403, 'instant_disabled', 'The owner disabled instant purchases for this grant.');
     const now = await clock(db),
@@ -225,6 +356,7 @@ export async function quotes(
         grant.allowed_providers,
       ])
     ).rows;
+    const packs = await activePacks(db, grantId);
     const items: TokenQuote[] = [];
     for (const row of rows) {
       try {
@@ -235,8 +367,7 @@ export async function quotes(
       const native = runtime(ctx).routes.get(row.provider as InferenceProvider)!;
       if (
         !offeringOpen(row, now) ||
-        input.inputTokens < minimumInputReservation(native) ||
-        input.outputTokens < (native.minimumOutputTokens ?? 1) ||
+        !topupCompatible(row, native, grant, packs, now, input.inputTokens, input.outputTokens) ||
         native.validUntil < new Date(grant.expires_at).getTime() ||
         !hasCapacity(row, input.inputTokens, input.outputTokens)
       )
@@ -341,14 +472,36 @@ export async function createTokenOrder(
   raw: unknown,
   buying?: { decisionId: string; automatic: boolean },
   studio?: StudioSource,
+  providerConstraint?: InferenceProvider,
+  requiredRoutes?: readonly AllowanceRoute[],
 ) {
   const input = createOrderSchema.parse(raw),
     grantId = grantIdFor(actor, input.grantId),
-    digest = operationFingerprint(input);
+    proofs = requiredRoutes === undefined ? null : requirementSchema.parse(requiredRoutes),
+    digest = operationFingerprint(
+      providerConstraint
+        ? { ...input, providerConstraint, ...(proofs ? { requiredRoutes: proofs } : {}) }
+        : input,
+    );
   return transaction(ctx.pool, async (db) => {
     await authority(db, actor, 'tokens:buy');
     const grant = await lockedGrant(db, actor, grantId);
-    if (studio) await studioAuthority(db, studio, actor);
+    const studioTask = studio ? await studioAuthority(db, studio, actor) : undefined;
+    if (studioTask && studioTask.grant_id !== grantId)
+      failure(
+        409,
+        'studio_grant_changed',
+        'The purchase grant must belong to the authorized Studio task.',
+      );
+    if (
+      (providerConstraint && (!studio || !grant.allowed_providers.includes(providerConstraint))) ||
+      (proofs && !providerConstraint)
+    )
+      failure(
+        403,
+        'provider_constraint_unavailable',
+        'A provider-constrained purchase requires its authorized Studio task.',
+      );
     if (!(await studioGrantOpen(db, grantId)))
       failure(409, 'task_stopped', 'This Studio task no longer authorizes purchases.');
     const prior = (
@@ -378,6 +531,8 @@ export async function createTokenOrder(
     )
       failure(409, 'grant_closed', 'The grant cannot cover this purchase deadline.');
     activeMode(ctx, grant);
+    await db.query('SELECT provider FROM broker_inference_routes ORDER BY provider FOR UPDATE');
+    await repairLegacyAllowance(db, grantId);
     if (
       input.maxTotalCents > grant.max_purchase_cents ||
       input.maxTotalCents > Number(grant.available_cents)
@@ -410,6 +565,73 @@ export async function createTokenOrder(
         [grant.allowed_providers],
       )
     ).rows;
+    const packs = await activePacks(db, grantId);
+    let requiredInput: number | null = null,
+      requiredOutput: number | null = null;
+    if (studioTask && providerConstraint && studioTask.coding_job_id) {
+      const estimate = (
+        await db.query(
+          'SELECT input_floor,required_provider,required_routes FROM broker_studio_usage_estimates WHERE task_id=$1 AND purchase_round=$2',
+          [studioTask.id, studioTask.purchase_round],
+        )
+      ).rows[0];
+      if (!estimate)
+        failure(
+          409,
+          'usage_estimate_missing',
+          'The frozen next-request estimate is required before a refill.',
+        );
+      if (estimate.required_provider !== providerConstraint)
+        failure(
+          409,
+          'usage_estimate_changed',
+          'The refill provider must match the frozen estimate.',
+        );
+      if (proofs) {
+        if (
+          estimate.required_routes &&
+          operationFingerprint(estimate.required_routes) !== operationFingerprint(proofs)
+        )
+          failure(
+            409,
+            'usage_estimate_changed',
+            'The request accounting proofs must match the frozen estimate.',
+          );
+        const qualified = await qualifiedRequirements(ctx, grant, rows, proofs);
+        const selected = qualified.find((p) => p.provider === providerConstraint);
+        if (!selected || selected.inputBound > estimate.input_floor)
+          failure(
+            409,
+            'usage_estimate_changed',
+            'The selected route no longer honors the frozen request bounds.',
+          );
+        if (!estimate.required_routes)
+          await db.query(
+            'UPDATE broker_studio_usage_estimates SET required_routes=$3 WHERE task_id=$1 AND purchase_round=$2 AND required_routes IS NULL',
+            [studioTask.id, studioTask.purchase_round, JSON.stringify(proofs)],
+          );
+        requiredInput = selected.inputBound;
+      } else requiredInput = estimate.input_floor;
+      requiredOutput = Math.min(studioTask.model_output, MIN_TASK_OUTPUT_RESERVATION);
+      if (
+        await existingAllowanceFits(
+          ctx,
+          grant,
+          packs,
+          rows,
+          now,
+          requiredInput!,
+          requiredOutput!,
+          proofs,
+          providerConstraint,
+        )
+      )
+        failure(
+          409,
+          'allowance_available',
+          'Compatible prepaid quota can admit the saved next request. Resume without another purchase.',
+        );
+    }
     let accountingCompatible = false;
     for (const row of rows) {
       try {
@@ -419,8 +641,18 @@ export async function createTokenOrder(
       }
       const native = runtime(ctx).routes.get(row.provider as InferenceProvider)!;
       if (
-        input.inputTokens >= minimumInputReservation(native) &&
-        input.outputTokens >= (native.minimumOutputTokens ?? 1) &&
+        (!providerConstraint || row.provider === providerConstraint) &&
+        topupCompatible(
+          row,
+          native,
+          grant,
+          packs,
+          now,
+          input.inputTokens,
+          input.outputTokens,
+          requiredInput ?? undefined,
+          requiredOutput ?? undefined,
+        ) &&
         native.validUntil >= new Date(grant.expires_at).getTime()
       )
         accountingCompatible = true;
@@ -460,8 +692,18 @@ export async function createTokenOrder(
       const native = runtime(ctx).routes.get(row.provider as InferenceProvider)!;
       if (
         !offeringOpen(row, now) ||
-        input.inputTokens < minimumInputReservation(native) ||
-        input.outputTokens < (native.minimumOutputTokens ?? 1) ||
+        (providerConstraint && row.provider !== providerConstraint) ||
+        !topupCompatible(
+          row,
+          native,
+          grant,
+          packs,
+          now,
+          input.inputTokens,
+          input.outputTokens,
+          requiredInput ?? undefined,
+          requiredOutput ?? undefined,
+        ) ||
         native.validUntil < new Date(grant.expires_at).getTime() ||
         !hasCapacity(row, input.inputTokens, input.outputTokens)
       )
@@ -499,8 +741,8 @@ export async function createTokenOrder(
       failure(409, 'grant_closed', 'The grant expires before the purchase can complete.');
     const order = (
       await db.query(
-        `INSERT INTO broker_token_orders(grant_id,buyer_id,source_key_id,operation_key,input_fingerprint,mode,source_mode,input_tokens,output_tokens,max_total_cents,closes_at,expires_at)
-      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
+        `INSERT INTO broker_token_orders(grant_id,buyer_id,source_key_id,operation_key,input_fingerprint,mode,source_mode,input_tokens,output_tokens,max_total_cents,closes_at,expires_at,provider_constraint,required_input,required_output,required_routes)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING *`,
         [
           grantId,
           actor.id,
@@ -514,6 +756,10 @@ export async function createTokenOrder(
           input.maxTotalCents,
           new Date(admitted.getTime() + (input.mode === 'auction' ? 30000 : 0)),
           grant.expires_at,
+          providerConstraint ?? null,
+          requiredInput,
+          requiredOutput,
+          proofs ? JSON.stringify(proofs) : null,
         ],
       )
     ).rows[0];
@@ -559,7 +805,13 @@ export async function createTokenOrder(
     return orderView(order);
   });
 }
-async function releaseOrder(db: PoolClient, grant: Row, order: Row, status: string) {
+async function releaseOrder(
+  db: PoolClient,
+  grant: Row,
+  order: Row,
+  status: string,
+  reason = status,
+) {
   if (order.status !== 'open') return;
   await db.query(
     'UPDATE broker_inference_grants SET held_cents=held_cents-$2,available_cents=available_cents+$2 WHERE id=$1',
@@ -568,7 +820,7 @@ async function releaseOrder(db: PoolClient, grant: Row, order: Row, status: stri
   await db.query('UPDATE broker_token_orders SET status=$2 WHERE id=$1', [order.id, status]);
   await db.query("UPDATE broker_token_bids SET status='lost' WHERE order_id=$1", [order.id]);
   await event(db, grant.id, `release:${order.id}`, 'purchase_hold_released', order.id, undefined, {
-    reason: status,
+    reason,
   });
 }
 export async function closeTokenAuction(ctx: AppContext, id: string) {
@@ -614,6 +866,8 @@ export async function closeTokenAuction(ctx: AppContext, id: string) {
       await releaseOrder(db, grant, order, 'cancelled');
       return;
     }
+    await db.query('SELECT provider FROM broker_inference_routes ORDER BY provider FOR UPDATE');
+    await repairLegacyAllowance(db, grant.id);
     const rows = (
       await db.query(
         `${OFFER_SELECT} WHERE r.provider=ANY($1::text[]) ORDER BY r.provider FOR UPDATE OF r,o`,
@@ -626,12 +880,32 @@ export async function closeTokenAuction(ctx: AppContext, id: string) {
         [id],
       )
     ).rows;
-    const packs = (
+    const packCount = (
       await db.query(
         "SELECT count(*)::int n FROM (SELECT 1 FROM broker_token_packs WHERE grant_id=$1 AND status<>'settled' LIMIT 10) p",
         [grant.id],
       )
     ).rows[0].n;
+    const ownedPacks = await activePacks(db, grant.id);
+    if (
+      order.provider_constraint &&
+      order.required_input &&
+      order.required_output &&
+      (await existingAllowanceFits(
+        ctx,
+        grant,
+        ownedPacks,
+        rows,
+        now,
+        order.required_input,
+        order.required_output,
+        order.required_routes,
+        order.provider_constraint,
+      ))
+    ) {
+      await releaseOrder(db, grant, order, 'cancelled', 'allowance_available');
+      return;
+    }
     for (const bid of bids) {
       const row = rows.find((r) => r.provider === bid.provider);
       if (
@@ -641,7 +915,8 @@ export async function closeTokenAuction(ctx: AppContext, id: string) {
         !row.auto_bid ||
         row.fingerprint !== bid.snapshot.fingerprint ||
         row.revision !== bid.snapshot.revision ||
-        packs >= 10 ||
+        packCount >= 10 ||
+        (order.provider_constraint && row.provider !== order.provider_constraint) ||
         !hasCapacity(row, order.input_tokens, order.output_tokens) ||
         !grant.allowed_providers.includes(row.provider)
       )
@@ -652,9 +927,26 @@ export async function closeTokenAuction(ctx: AppContext, id: string) {
         continue;
       }
       const native = runtime(ctx).routes.get(row.provider as InferenceProvider)!;
+      const proofs = order.required_routes ? requirementSchema.parse(order.required_routes) : null;
       if (
-        order.input_tokens < minimumInputReservation(native) ||
-        order.output_tokens < (native.minimumOutputTokens ?? 1) ||
+        proofs &&
+        !(await qualifiedRequirements(ctx, grant, [row], proofs)).some(
+          (p) => p.provider === row.provider,
+        )
+      )
+        continue;
+      if (
+        !topupCompatible(
+          row,
+          native,
+          grant,
+          ownedPacks,
+          now,
+          order.input_tokens,
+          order.output_tokens,
+          order.required_input ?? undefined,
+          order.required_output ?? undefined,
+        ) ||
         native.validUntil < new Date(grant.expires_at).getTime()
       )
         continue;

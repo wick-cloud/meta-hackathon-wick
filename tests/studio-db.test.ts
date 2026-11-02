@@ -17,6 +17,7 @@ import {
   OFFER_SELECT,
   packPrice,
   createTokenOrder,
+  quotes,
 } from '../src/server/inference/market.js';
 import { createWickAdapter } from '../src/server/integrations/wick.js';
 import { closeAuction, submitBid, awardHeldBid } from '../src/server/marketplace/auction.js';
@@ -733,6 +734,56 @@ describe.skipIf(!url)('Studio task budget and lifecycle (disposable Postgres)', 
       createStudioTask(ctx, owner, { ...body, goal: 'A completely different task.' }, verify),
     ).rejects.toThrow('another task');
   });
+  it('persists an owner-selected model provider through planning and purchase replay', async () => {
+    const body = input({ allowedProviders: ['baseten'] });
+    const task = await createStudioTask(ctx, owner, body, verify);
+    expect((await createStudioTask(ctx, owner, body, verify)).id).toBe(task.id);
+    const state = await planned(task.id);
+    expect(
+      (
+        await pool.query('SELECT allowed_providers FROM broker_inference_grants WHERE id=$1', [
+          state.grant_id,
+        ])
+      ).rows[0].allowed_providers,
+    ).toEqual(['baseten']);
+    expect(
+      (
+        await pool.query('SELECT provider FROM broker_token_bids WHERE order_id=$1', [
+          state.model_order_id,
+        ])
+      ).rows,
+    ).toEqual([{ provider: 'baseten' }]);
+    expect(
+      (
+        await pool.query(
+          'SELECT DISTINCT provider FROM broker_inference_requests WHERE grant_id=$1',
+          [state.grant_id],
+        )
+      ).rows,
+    ).toEqual([{ provider: 'baseten' }]);
+    await expect(
+      createStudioTask(ctx, owner, { ...body, allowedProviders: ['modal'] }, verify),
+    ).rejects.toThrow('another task');
+  });
+  it.each([
+    { allowedProviders: [] },
+    { allowedProviders: ['modal', 'modal'] },
+    { allowedProviders: ['unknown'] },
+  ])('rejects invalid model provider selection %j before funding', async ({ allowedProviders }) => {
+    await expect(create({ allowedProviders })).rejects.toThrow();
+    expect((await creditWalletView(pool, owner.id)).reservedCents).toBe(0);
+    expect(
+      (await pool.query('SELECT count(*)::int n FROM broker_inference_grants')).rows[0].n,
+    ).toBe(0);
+  });
+  it('rejects an unqualified owner-selected model route before funding', async () => {
+    await pool.query("UPDATE broker_inference_routes SET qualified=false WHERE provider='modal'");
+    await expect(create({ allowedProviders: ['modal'] })).rejects.toThrow('qualified for coding');
+    expect((await creditWalletView(pool, owner.id)).reservedCents).toBe(0);
+    expect(
+      (await pool.query('SELECT count(*)::int n FROM broker_inference_grants')).rows[0].n,
+    ).toBe(0);
+  });
   it('cannot oversubscribe wallet credit through concurrent task starts', async () => {
     const results = await Promise.allSettled([
       create({ budgetCents: 700 }),
@@ -1331,6 +1382,288 @@ describe.skipIf(!url)('Studio task budget and lifecycle (disposable Postgres)', 
     expect(d.modelPurchases.length).toBeGreaterThanOrEqual(2);
     expect((await pool.query('SELECT count(*)::int n FROM broker_vms')).rows[0].n).toBe(1);
     expect(modelCalls).toBe(5);
+  });
+  it('tops up only exhausted output and combines it with prepaid input on the same VM', async () => {
+    const task = await create({ allowedProviders: ['baseten'], allowInstant: false });
+    const { task: t } = await ready(task.id);
+    const original = (
+      await pool.query('SELECT * FROM broker_token_packs WHERE grant_id=$1', [t.grant_id])
+    ).rows[0];
+    // Synthetic exhaustion models other authorized calls spending this dimension.
+    // Keep the already paid input available and conserve both pack/route counters.
+    await transaction(pool, async (db) => {
+      await db.query(
+        'UPDATE broker_inference_routes SET outstanding_output=outstanding_output-$2 WHERE provider=$1',
+        [original.provider, original.available_output],
+      );
+      await db.query(
+        'UPDATE broker_token_packs SET available_output=0,consumed_output=output_tokens WHERE id=$1',
+        [original.id],
+      );
+    });
+    await processCodingJob(ctx, t.coding_job_id);
+    expect(
+      (await pool.query('SELECT status FROM broker_coding_jobs WHERE id=$1', [t.coding_job_id]))
+        .rows[0].status,
+    ).toBe('needs_allowance');
+    const state = await tick(task.id);
+    expect(state.status, state.blocked_reason).toBe('model_auction');
+    const order = (
+      await pool.query('SELECT * FROM broker_token_orders WHERE id=$1', [state.model_order_id])
+    ).rows[0];
+    expect(order.input_tokens).toBe(1);
+    expect(order.output_tokens).toBeGreaterThanOrEqual(1024);
+    expect(order.output_tokens).toBeLessThan(4096);
+    expect(order.provider_constraint).toBe('baseten');
+    const estimate = (
+      await pool.query(
+        'SELECT * FROM broker_studio_usage_estimates WHERE task_id=$1 AND purchase_round=1',
+        [task.id],
+      )
+    ).rows[0];
+    expect(estimate.required_provider).toBe('baseten');
+    expect(Number(estimate.existing_input)).toBe(Number(original.available_input));
+    expect(Number(estimate.existing_output)).toBe(0);
+    expect(estimate.required_routes).toHaveLength(1);
+    expect(estimate.required_routes[0]).toMatchObject({
+      provider: 'baseten',
+      inputBound: estimate.input_floor,
+    });
+    const replay = await ensureUsageEstimate(ctx, state, 1048576, [
+      { route: {}, inputFloor: 1048576, availableInput: 0, availableOutput: 0 },
+    ]);
+    expect(replay).toEqual(estimate);
+    await pool.query(
+      "UPDATE broker_token_orders SET closes_at=clock_timestamp()-interval '1 second' WHERE id=$1",
+      [order.id],
+    );
+    await closeTokenAuction(ctx, order.id);
+    await tick(task.id);
+    await processCodingJob(ctx, t.coding_job_id);
+    const allocations = (
+      await pool.query(
+        `SELECT a.* FROM broker_inference_allocations a JOIN broker_inference_requests r ON r.id=a.request_id WHERE r.source_job_id=$1 ORDER BY r.created_at,a.allocation_order LIMIT 2`,
+        [t.coding_job_id],
+      )
+    ).rows;
+    expect(allocations).toHaveLength(2);
+    expect(new Set(allocations.map((a) => a.pack_id)).size).toBe(2);
+    expect(allocations.some((a) => a.reserved_input > 0 && a.reserved_output === 0)).toBe(true);
+    expect(allocations.some((a) => a.reserved_input <= 1 && a.reserved_output > 0)).toBe(true);
+    expect((await pool.query('SELECT count(*)::int n FROM broker_vms')).rows[0].n).toBe(1);
+    expect(new Date(state.deadline_at).toISOString()).toBe(task.deadlineAt);
+    expect(
+      (
+        await pool.query('SELECT count(*)::int n FROM broker_token_orders WHERE grant_id=$1', [
+          t.grant_id,
+        ])
+      ).rows[0].n,
+    ).toBe(2);
+  });
+  it('resumes from fragmented compatible packs without an auction even after new supply is unpublished', async () => {
+    const task = await create({ allowedProviders: ['baseten'] });
+    const { task: t } = await ready(task.id);
+    const original = (
+      await pool.query('SELECT * FROM broker_token_packs WHERE grant_id=$1', [t.grant_id])
+    ).rows[0];
+    await pool.query(
+      'UPDATE broker_token_packs SET available_input=0,consumed_input=input_tokens WHERE id=$1',
+      [original.id],
+    );
+    await processCodingJob(ctx, t.coding_job_id);
+    const pending = (
+      await pool.query(
+        "SELECT payload_cipher FROM broker_coding_steps WHERE job_id=$1 AND kind='model' AND status='pending' ORDER BY sequence LIMIT 1",
+        [t.coding_job_id],
+      )
+    ).rows[0];
+    const inputFloor = fixtureInputTokens({ messages: open(ctx, pending.payload_cipher).messages });
+    const q = (
+      await quotes(ctx, owner, {
+        grantId: t.grant_id,
+        inputTokens: inputFloor * 2,
+        outputTokens: 256,
+      })
+    ).items[0]!;
+    expect(q.provider).toBe('baseten');
+    const extra = await createTokenOrder(ctx, owner, {
+      operationKey: randomUUID(),
+      grantId: t.grant_id,
+      mode: 'instant',
+      inputTokens: inputFloor * 2,
+      outputTokens: 256,
+      maxTotalCents: q.priceCents,
+      quoteId: q.quoteId,
+    });
+    const second = (
+      await pool.query('SELECT * FROM broker_token_packs WHERE order_id=$1', [extra.id])
+    ).rows[0];
+    await transaction(pool, async (db) => {
+      for (const [id, input, output] of [
+        [original.id, Math.floor(inputFloor / 2), 256],
+        [second.id, Math.ceil(inputFloor / 2), 0],
+      ] as const) {
+        await db.query(
+          'UPDATE broker_token_packs SET available_input=$2,consumed_input=input_tokens-$2,available_output=$3,consumed_output=output_tokens-$3 WHERE id=$1',
+          [id, input, output],
+        );
+      }
+      await db.query(
+        `UPDATE broker_inference_routes r SET outstanding_input=(SELECT sum(available_input+held_input) FROM broker_token_packs p WHERE p.provider=r.provider),outstanding_output=(SELECT sum(available_output+held_output) FROM broker_token_packs p WHERE p.provider=r.provider) WHERE provider='baseten'`,
+      );
+      await db.query('UPDATE broker_token_offerings SET active=false');
+    });
+    const callsBefore = modelCalls;
+    const state = await tick(task.id);
+    expect(state.status, state.blocked_reason).toBe('running');
+    expect(
+      (
+        await pool.query('SELECT count(*)::int n FROM broker_token_orders WHERE grant_id=$1', [
+          t.grant_id,
+        ])
+      ).rows[0].n,
+    ).toBe(2);
+    expect(
+      (
+        await pool.query(
+          'SELECT count(*)::int n FROM broker_studio_usage_estimates WHERE task_id=$1',
+          [task.id],
+        )
+      ).rows[0].n,
+    ).toBe(1);
+    await processCodingJob(ctx, t.coding_job_id);
+    expect(modelCalls).toBe(callsBefore + 1);
+    const allocations = (
+      await pool.query(
+        `SELECT a.pack_id FROM broker_inference_allocations a JOIN broker_inference_requests r ON r.id=a.request_id WHERE r.source_job_id=$1`,
+        [t.coding_job_id],
+      )
+    ).rows;
+    expect(new Set(allocations.map((a) => a.pack_id))).toEqual(new Set([original.id, second.id]));
+    expect((await pool.query('SELECT count(*)::int n FROM broker_vms')).rows[0].n).toBe(1);
+    expect(new Date(state.deadline_at).toISOString()).toBe(task.deadlineAt);
+  });
+  it('resumes existing quota when a pending refill auction releases its hold instead of purchasing again', async () => {
+    const task = await create({ allowedProviders: ['baseten'] });
+    const { task: t } = await ready(task.id);
+    const original = (
+      await pool.query('SELECT * FROM broker_token_packs WHERE grant_id=$1', [t.grant_id])
+    ).rows[0];
+    await transaction(pool, async (db) => {
+      await db.query(
+        'UPDATE broker_inference_routes SET outstanding_output=outstanding_output-$2 WHERE provider=$1',
+        [original.provider, original.available_output],
+      );
+      await db.query(
+        'UPDATE broker_token_packs SET available_output=0,consumed_output=output_tokens WHERE id=$1',
+        [original.id],
+      );
+    });
+    await processCodingJob(ctx, t.coding_job_id);
+    const auction = await tick(task.id);
+    expect(auction.status).toBe('model_auction');
+    const orderId = auction.model_order_id;
+    // An owner may independently fund and purchase quota during a queued auction.
+    await controlStudio(ctx, owner, task.id, 'fund', {
+      operationKey: randomUUID(),
+      amountCents: 10,
+    });
+    const q = (
+      await quotes(ctx, owner, { grantId: t.grant_id, inputTokens: 1, outputTokens: 2048 })
+    ).items.find((q) => q.provider === 'baseten')!;
+    expect(q).toBeDefined();
+    await createTokenOrder(ctx, owner, {
+      operationKey: randomUUID(),
+      grantId: t.grant_id,
+      mode: 'instant',
+      inputTokens: 1,
+      outputTokens: 2048,
+      maxTotalCents: q.priceCents,
+      quoteId: q.quoteId,
+    });
+    await pool.query(
+      "UPDATE broker_token_orders SET closes_at=clock_timestamp()-interval '1 second' WHERE id=$1",
+      [orderId],
+    );
+    await closeTokenAuction(ctx, orderId);
+    expect(
+      (await pool.query('SELECT status FROM broker_token_orders WHERE id=$1', [orderId])).rows[0]
+        .status,
+    ).toBe('cancelled');
+    const resumed = await tick(task.id);
+    expect(resumed.status, resumed.blocked_reason).toBe('running');
+    expect(resumed.model_order_id).toBe(orderId);
+    expect(
+      (
+        await pool.query('SELECT count(*)::int n FROM broker_token_orders WHERE grant_id=$1', [
+          t.grant_id,
+        ])
+      ).rows[0].n,
+    ).toBe(3);
+    expect(
+      (
+        await pool.query('SELECT count(*)::int n FROM broker_token_packs WHERE grant_id=$1', [
+          t.grant_id,
+        ])
+      ).rows[0].n,
+    ).toBe(2);
+    expect(
+      (await pool.query('SELECT held_cents FROM broker_inference_grants WHERE id=$1', [t.grant_id]))
+        .rows[0].held_cents,
+    ).toBe(0);
+    expect((await pool.query('SELECT count(*)::int n FROM broker_vms')).rows[0].n).toBe(1);
+    expect(new Date(resumed.deadline_at).toISOString()).toBe(task.deadlineAt);
+  });
+  it('pauses an unusable frozen refill without charging or falling back to another purchase', async () => {
+    const task = await create({ allowedProviders: ['baseten'] });
+    const { task: t } = await ready(task.id);
+    const original = (
+      await pool.query('SELECT * FROM broker_token_packs WHERE grant_id=$1', [t.grant_id])
+    ).rows[0];
+    await pool.query(
+      'UPDATE broker_token_packs SET available_output=0,consumed_output=output_tokens WHERE id=$1',
+      [original.id],
+    );
+    await processCodingJob(ctx, t.coding_job_id);
+    const auction = await tick(task.id);
+    const before = (
+      await pool.query('SELECT spent_cents FROM broker_inference_grants WHERE id=$1', [t.grant_id])
+    ).rows[0];
+    // Another authorized consumer can spend the dimension on which this top-up relies.
+    await pool.query(
+      'UPDATE broker_token_packs SET available_input=0,consumed_input=input_tokens WHERE id=$1',
+      [original.id],
+    );
+    await pool.query(
+      "UPDATE broker_token_orders SET closes_at=clock_timestamp()-interval '1 second' WHERE id=$1",
+      [auction.model_order_id],
+    );
+    await closeTokenAuction(ctx, auction.model_order_id);
+    expect(
+      (
+        await pool.query('SELECT status FROM broker_token_orders WHERE id=$1', [
+          auction.model_order_id,
+        ])
+      ).rows[0].status,
+    ).toBe('no_offers');
+    const paused = await tick(task.id);
+    expect(paused.status).toBe('needs_attention');
+    expect(paused.blocked_reason).toContain('No additional pack was charged');
+    expect(
+      (
+        await pool.query('SELECT count(*)::int n FROM broker_token_orders WHERE grant_id=$1', [
+          t.grant_id,
+        ])
+      ).rows[0].n,
+    ).toBe(2);
+    expect(
+      (
+        await pool.query('SELECT spent_cents,held_cents FROM broker_inference_grants WHERE id=$1', [
+          t.grant_id,
+        ])
+      ).rows[0],
+    ).toEqual({ spent_cents: before.spent_cents, held_cents: 0 });
+    expect(new Date(paused.deadline_at).toISOString()).toBe(task.deadlineAt);
   });
   it('preserves the compute hold if the owner closes funding during VM admission', async () => {
     const task = await create(),

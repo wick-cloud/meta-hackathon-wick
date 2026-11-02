@@ -12,7 +12,7 @@ import { proposeTokenSupply } from '../src/server/inference/supply.js';
 import { createMuseAdapter } from '../src/server/integrations/muse.js';
 import { randomUUID } from 'node:crypto';
 import Fastify, { type FastifyInstance } from 'fastify';
-import { Pool } from 'pg';
+import { Pool, type PoolClient } from 'pg';
 import { hashPassword } from 'better-auth/crypto';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { migrate } from '../src/server/db.js';
@@ -130,9 +130,16 @@ describe.skipIf(!url)(
         ...issued,
       };
     }
-    async function buy(grantId: string, quantities = { inputTokens: 10000, outputTokens: 1000 }) {
-      const quote = (await quotes(ctx, owner, { grantId, ...quantities })).items[0];
+    async function buy(
+      grantId: string,
+      quantities = { inputTokens: 10000, outputTokens: 1000 },
+      provider?: 'baseten' | 'modal',
+    ) {
+      const quote = (await quotes(ctx, owner, { grantId, ...quantities })).items.find(
+        (q) => !provider || q.provider === provider,
+      );
       expect(quote).toBeDefined();
+      if (!quote) throw new Error('Expected a compatible fixture quote.');
       const order = await createTokenOrder(ctx, owner, {
         ...quantities,
         grantId,
@@ -143,6 +150,20 @@ describe.skipIf(!url)(
       });
       return (await tokenOrderDetail(ctx, owner, order.id)).pack!;
     }
+    async function fragmentedAllowance() {
+      const g = await grant(100, { allowedProviders: ['baseten'] }),
+        key = await agent(g.id),
+        a = await buy(g.id, { inputTokens: 20, outputTokens: 32 }),
+        b = await buy(g.id, { inputTokens: 20, outputTokens: 32 });
+      return { g, key, a, b };
+    }
+    const smallUsage = () => ({
+      id: 'fixture-pooled-usage',
+      content: 'OK',
+      finishReason: 'stop',
+      inputTokens: 10,
+      outputTokens: 12,
+    });
     beforeAll(async () => {
       admin = new Pool({ connectionString: url });
       await admin.query(`CREATE SCHEMA ${schema}`);
@@ -263,6 +284,1131 @@ describe.skipIf(!url)(
         ...extra,
       });
     }
+    it('pools compatible fragmented quota without buying or charging another pack', async () => {
+      const { g, key, a, b } = await fragmentedAllowance(),
+        wallet = await creditWalletView(pool, owner.id);
+      ctx.inference!.dispatch = vi.fn(async () => smallUsage());
+      const result = await complete(ctx, key.actor, { ...call, operationKey: randomUUID() });
+      expect(result.broker.provider).toBe('baseten');
+      expect([a.id, b.id]).toContain(result.broker.packId);
+      expect(ctx.inference!.dispatch).toHaveBeenCalledTimes(1);
+      const allocations = (
+        await pool.query(
+          'SELECT * FROM broker_inference_allocations WHERE request_id=$1 ORDER BY allocation_order',
+          [result.id],
+        )
+      ).rows;
+      expect(allocations).toHaveLength(2);
+      expect(allocations.map((a) => a.allocation_order)).toEqual([0, 1]);
+      expect(allocations.reduce((n, a) => n + a.reserved_input, 0)).toBe(inputBound);
+      expect(allocations.reduce((n, a) => n + a.reserved_output, 0)).toBe(64);
+      expect(allocations.reduce((n, a) => n + a.input_tokens, 0)).toBe(10);
+      expect(allocations.reduce((n, a) => n + a.output_tokens, 0)).toBe(12);
+      const detail = await grantDetail(ctx, owner, g.id);
+      expect(detail.packs).toHaveLength(2);
+      expect(detail.orders).toHaveLength(2);
+      expect(detail.packs.reduce((n, p) => n + p.availableInputTokens, 0)).toBe(30);
+      expect(detail.packs.reduce((n, p) => n + p.availableOutputTokens, 0)).toBe(52);
+      expect(detail.packs.reduce((n, p) => n + p.heldInputTokens + p.heldOutputTokens, 0)).toBe(0);
+      expect(detail.packs.reduce((n, p) => n + p.consumedInputTokens, 0)).toBe(10);
+      expect(detail.packs.reduce((n, p) => n + p.consumedOutputTokens, 0)).toBe(12);
+      expect(await creditWalletView(pool, owner.id)).toEqual(wallet);
+      expect(
+        (
+          await pool.query(
+            "SELECT count(*)::int n FROM broker_credit_ledger WHERE kind='token_purchase' AND grant_id=$1",
+            [g.id],
+          )
+        ).rows[0].n,
+      ).toBe(2);
+      expect(
+        (
+          await pool.query(
+            "SELECT held_calls,outstanding_input,outstanding_output FROM broker_inference_routes WHERE provider='baseten'",
+          )
+        ).rows[0],
+      ).toEqual({ held_calls: 0, outstanding_input: '30', outstanding_output: '52' });
+    });
+    it.each(['provider', 'fingerprint', 'seller', 'mode', 'expiry', 'grant'] as const)(
+      'does not pool quota across a different %s',
+      async (mismatch) => {
+        const g = await grant(100),
+          key = await agent(g.id);
+        await buy(g.id, { inputTokens: 20, outputTokens: 32 }, 'baseten');
+        const secondGrant = mismatch === 'grant' ? await grant(100) : g;
+        const b = await buy(
+          secondGrant.id,
+          { inputTokens: 20, outputTokens: 32 },
+          mismatch === 'provider' ? 'modal' : 'baseten',
+        );
+        if (mismatch === 'fingerprint')
+          await pool.query(
+            "UPDATE broker_token_packs SET route_fingerprint='older-contract' WHERE id=$1",
+            [b.id],
+          );
+        if (mismatch === 'seller')
+          await pool.query(
+            'UPDATE broker_token_packs p SET provider_id=(SELECT id FROM broker_providers WHERE id<>p.provider_id ORDER BY id LIMIT 1) WHERE p.id=$1',
+            [b.id],
+          );
+        if (mismatch === 'mode')
+          await pool.query("UPDATE broker_token_packs SET source_mode='real' WHERE id=$1", [b.id]);
+        if (mismatch === 'expiry')
+          await pool.query(
+            "UPDATE broker_token_packs SET expires_at=clock_timestamp()-interval '1 second' WHERE id=$1",
+            [b.id],
+          );
+        ctx.inference!.dispatch = vi.fn(async () => smallUsage());
+        await expect(
+          complete(ctx, key.actor, { ...call, operationKey: randomUUID() }),
+        ).rejects.toMatchObject({
+          code: 'token_allowance_exceeded',
+        });
+        expect(ctx.inference!.dispatch).not.toHaveBeenCalled();
+        expect(
+          (await pool.query('SELECT count(*)::int n FROM broker_inference_requests')).rows[0].n,
+        ).toBe(0);
+      },
+    );
+    it('keeps batch-scoped keys inside one fragment even when the parent grant can pool', async () => {
+      const { g, key, a } = await fragmentedAllowance(),
+        issued = await issuePackKey(ctx, owner, a.id, { operationKey: randomUUID() });
+      ctx.inference!.dispatch = vi.fn(async () => smallUsage());
+      const denied = await app.inject({
+        method: 'POST',
+        url: '/api/v1/chat/completions',
+        headers: { authorization: `Bearer ${issued.token}` },
+        payload: { ...call, operationKey: randomUUID() },
+      });
+      expect(denied.statusCode).toBe(409);
+      expect(denied.json().code).toBe('token_allowance_exceeded');
+      expect(ctx.inference!.dispatch).not.toHaveBeenCalled();
+      const operationKey = randomUUID(),
+        pooled = await complete(ctx, key.actor, { ...call, operationKey });
+      expect(ctx.inference!.dispatch).toHaveBeenCalledTimes(1);
+      expect((await grantDetail(ctx, owner, g.id)).requests).toHaveLength(1);
+      const anchorKey = await issuePackKey(ctx, owner, pooled.broker.packId, {
+          operationKey: randomUUID(),
+        }),
+        headers = { authorization: `Bearer ${anchorKey.token}` };
+      expect(
+        (await app.inject({ url: `/api/inference/requests/${pooled.id}`, headers })).statusCode,
+      ).toBe(404);
+      const replay = await app.inject({
+        method: 'POST',
+        url: '/api/v1/chat/completions',
+        headers,
+        payload: { ...call, operationKey },
+      });
+      expect(replay.statusCode).toBe(403);
+      expect(replay.json().inferenceRequestId).toBeUndefined();
+    });
+    it('buys only a below-minimum input top-up when a compatible existing pool makes it usable', async () => {
+      const g = await grant(100, { allowedProviders: ['baseten'] }),
+        key = await agent(g.id);
+      await buy(g.id, { inputTokens: 20, outputTokens: 100 });
+      ctx.inference!.dispatch = vi.fn(async () => ({
+        ...smallUsage(),
+        inputTokens: 5,
+        outputTokens: 4,
+      }));
+      await complete(ctx, key.actor, {
+        ...call,
+        messages: [{ role: 'user', content: '' }],
+        max_tokens: 8,
+        operationKey: randomUUID(),
+      });
+      const topup = await buy(g.id, { inputTokens: 10, outputTokens: 1 });
+      expect(topup).toMatchObject({ inputTokens: 10, outputTokens: 1 });
+      ctx.inference!.dispatch = vi.fn(async () => smallUsage());
+      await complete(ctx, key.actor, { ...call, operationKey: randomUUID() });
+      expect(ctx.inference!.dispatch).toHaveBeenCalledTimes(1);
+      const empty = await grant(100, { allowedProviders: ['baseten'] });
+      expect(
+        (await quotes(ctx, owner, { grantId: empty.id, inputTokens: 10, outputTokens: 1 })).items,
+      ).toEqual([]);
+      await expect(
+        createTokenOrder(ctx, owner, {
+          operationKey: randomUUID(),
+          grantId: empty.id,
+          mode: 'auction',
+          inputTokens: 10,
+          outputTokens: 1,
+          maxTotalCents: 10,
+        }),
+      ).rejects.toMatchObject({ code: 'route_unavailable' });
+      expect((await grantDetail(ctx, owner, empty.id)).grant.heldCents).toBe(0);
+    });
+    it('does not award a tiny refill after its supporting pool no longer covers the frozen next request', async () => {
+      const g = await grant(100, { allowedProviders: ['baseten'] }),
+        key = await agent(g.id);
+      await buy(g.id, { inputTokens: 20, outputTokens: 100 });
+      const order = await createTokenOrder(ctx, owner, {
+        operationKey: randomUUID(),
+        grantId: g.id,
+        mode: 'auction',
+        inputTokens: 10,
+        outputTokens: 1,
+        maxTotalCents: 10,
+      });
+      // These private columns model the requirement frozen by an authorized
+      // Studio refill; public callers cannot set a provider or request floor.
+      await pool.query(
+        'UPDATE broker_token_orders SET provider_constraint=$2,required_input=$3,required_output=64 WHERE id=$1',
+        [order.id, 'baseten', inputBound],
+      );
+      ctx.inference!.dispatch = vi.fn(async () => ({
+        ...smallUsage(),
+        inputTokens: 6,
+        outputTokens: 0,
+      }));
+      await complete(ctx, key.actor, {
+        ...call,
+        messages: [{ role: 'user', content: '' }],
+        max_tokens: 8,
+        operationKey: randomUUID(),
+      });
+      const spent = (await grantDetail(ctx, owner, g.id)).grant.spentCents;
+      await pool.query(
+        "UPDATE broker_token_orders SET closes_at=clock_timestamp()-interval '1 second' WHERE id=$1",
+        [order.id],
+      );
+      await closeTokenAuction(ctx, order.id);
+      const detail = await tokenOrderDetail(ctx, owner, order.id);
+      expect(detail.order.status).toBe('no_offers');
+      expect(detail.pack).toBeNull();
+      const balance = await grantDetail(ctx, owner, g.id);
+      expect(balance.packs).toHaveLength(1);
+      expect(balance.grant.spentCents).toBe(spent);
+      expect(balance.grant.heldCents).toBe(0);
+    });
+    it.each(['input', 'output'] as const)(
+      'preserves a partially depleted %s balance and uses the complementary next pack',
+      async (depleted) => {
+        const g = await grant(100, { allowedProviders: ['baseten'] }),
+          key = await agent(g.id),
+          a = await buy(g.id, { inputTokens: inputBound * 3, outputTokens: 64 });
+        ctx.inference!.dispatch = vi.fn(async () => ({
+          ...smallUsage(),
+          inputTokens: depleted === 'input' ? inputBound * 3 : 5,
+          outputTokens: depleted === 'output' ? 64 : 12,
+        }));
+        const firstCall =
+          depleted === 'input'
+            ? {
+                ...call,
+                messages: [{ role: 'user' as const, content: 'x'.repeat(inputBound * 3 - 20) }],
+              }
+            : call;
+        await complete(ctx, key.actor, { ...firstCall, operationKey: randomUUID() });
+        const partial = (await grantDetail(ctx, owner, g.id)).packs.find((p) => p.id === a.id)!;
+        expect(partial.status).toBe('active');
+        expect(partial.retiredInputTokens + partial.retiredOutputTokens).toBe(0);
+        expect(
+          depleted === 'input' ? partial.availableInputTokens : partial.availableOutputTokens,
+        ).toBe(0);
+        const next =
+          depleted === 'input'
+            ? { inputTokens: inputBound + 10, outputTokens: 12 }
+            : { inputTokens: 20, outputTokens: 64 };
+        await buy(g.id, next);
+        const wallet = await creditWalletView(pool, owner.id);
+        ctx.inference!.dispatch = vi.fn(async () => smallUsage());
+        await complete(ctx, key.actor, { ...call, operationKey: randomUUID() });
+        expect(ctx.inference!.dispatch).toHaveBeenCalledTimes(1);
+        expect((await grantDetail(ctx, owner, g.id)).orders).toHaveLength(2);
+        expect(await creditWalletView(pool, owner.id)).toEqual(wallet);
+      },
+    );
+    it('serializes pooled reservations and does not redispatch a duplicate operation', async () => {
+      const { g, key } = await fragmentedAllowance();
+      let entered!: () => void, release!: () => void;
+      const started = new Promise<void>((resolve) => {
+          entered = resolve;
+        }),
+        gate = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+      ctx.inference!.dispatch = vi.fn(async () => {
+        entered();
+        await gate;
+        return smallUsage();
+      });
+      const operationKey = randomUUID(),
+        first = complete(ctx, key.actor, { ...call, operationKey });
+      await started;
+      const during = await grantDetail(ctx, owner, g.id);
+      expect(during.packs.reduce((n, p) => n + p.heldInputTokens, 0)).toBe(inputBound);
+      expect(during.packs.reduce((n, p) => n + p.heldOutputTokens, 0)).toBe(64);
+      expect(
+        (
+          await pool.query(
+            "SELECT held_calls FROM broker_inference_routes WHERE provider='baseten'",
+          )
+        ).rows[0].held_calls,
+      ).toBe(1);
+      try {
+        await expect(
+          complete(ctx, key.actor, { ...call, operationKey: randomUUID() }),
+        ).rejects.toMatchObject({ code: 'token_allowance_exceeded' });
+        await expect(complete(ctx, key.actor, { ...call, operationKey })).rejects.toMatchObject({
+          code: 'inference_pending',
+        });
+      } finally {
+        release();
+      }
+      const completed = await first;
+      await settleRequest(ctx, completed.id, smallUsage());
+      const after = await grantDetail(ctx, owner, g.id);
+      expect(after.packs.reduce((n, p) => n + p.consumedInputTokens, 0)).toBe(10);
+      expect(after.packs.reduce((n, p) => n + p.consumedOutputTokens, 0)).toBe(12);
+      expect(ctx.inference!.dispatch).toHaveBeenCalledTimes(1);
+      expect(
+        (
+          await pool.query(
+            "SELECT held_calls FROM broker_inference_routes WHERE provider='baseten'",
+          )
+        ).rows[0].held_calls,
+      ).toBe(0);
+    });
+    it.each([false, true])(
+      'reserves and settles ten fragments with a constant query count; fully consumed: %s',
+      async (fullyConsumed) => {
+        const single = await grant(1000, { allowedProviders: ['baseten'] }),
+          singleKey = await agent(single.id),
+          fragmented = await grant(1000, { allowedProviders: ['baseten'] }),
+          fragmentedKey = await agent(fragmented.id);
+        await buy(single.id, { inputTokens: 200, outputTokens: 70 });
+        for (let i = 0; i < 10; i++) {
+          await buy(fragmented.id, { inputTokens: 20, outputTokens: 7 });
+          await pool.query(
+            "UPDATE broker_token_orders SET created_at=created_at-interval '2 minutes' WHERE grant_id=$1",
+            [fragmented.id],
+          );
+        }
+        const diagnosticCall = fullyConsumed
+          ? {
+              ...call,
+              messages: [{ role: 'user' as const, content: 'x'.repeat(180) }],
+              max_tokens: 70,
+            }
+          : call;
+        ctx.inference!.dispatch = vi.fn(async () =>
+          fullyConsumed ? { ...smallUsage(), inputTokens: 200, outputTokens: 70 } : smallUsage(),
+        );
+        async function measured(actor: Actor) {
+          let queries = 0;
+          const original = ctx.pool;
+          const instrumentClient = (client: PoolClient) =>
+            new Proxy(client, {
+              get(target, property) {
+                const value = Reflect.get(target, property, target);
+                if (property === 'query')
+                  return (...args: unknown[]) => {
+                    queries++;
+                    return Reflect.apply(value, target, args);
+                  };
+                return typeof value === 'function' ? value.bind(target) : value;
+              },
+            });
+          ctx.pool = new Proxy(pool, {
+            get(target, property) {
+              if (property === 'query')
+                return (...args: unknown[]) => {
+                  queries++;
+                  return Reflect.apply(target.query, target, args);
+                };
+              if (property === 'connect')
+                return async () => instrumentClient(await target.connect());
+              const value = Reflect.get(target, property, target);
+              return typeof value === 'function' ? value.bind(target) : value;
+            },
+          });
+          try {
+            const result = await complete(ctx, actor, {
+              ...diagnosticCall,
+              operationKey: randomUUID(),
+            });
+            return { result, queries };
+          } finally {
+            ctx.pool = original;
+          }
+        }
+        const one = await measured(singleKey.actor),
+          ten = await measured(fragmentedKey.actor);
+        expect(one.queries).toBeGreaterThan(0);
+        expect(ten.queries).toBe(one.queries);
+        const allocations = (
+          await pool.query(
+            'SELECT count(*)::int n FROM broker_inference_allocations WHERE request_id=$1',
+            [ten.result.id],
+          )
+        ).rows[0].n;
+        expect(allocations).toBe(10);
+        const detail = await grantDetail(ctx, owner, fragmented.id);
+        expect(detail.packs.reduce((n, p) => n + p.availableInputTokens, 0)).toBe(
+          fullyConsumed ? 0 : 190,
+        );
+        expect(detail.packs.reduce((n, p) => n + p.availableOutputTokens, 0)).toBe(
+          fullyConsumed ? 0 : 58,
+        );
+        expect(detail.packs.every((p) => p.status === (fullyConsumed ? 'settled' : 'active'))).toBe(
+          true,
+        );
+      },
+    );
+    it('releases every pooled hold after a certified pre-generation rejection', async () => {
+      const { g, key } = await fragmentedAllowance();
+      ctx.inference!.dispatch = vi.fn(async () => {
+        throw new InferenceUpstreamError('upstream_429', true);
+      });
+      await expect(
+        complete(ctx, key.actor, { ...call, operationKey: randomUUID() }),
+      ).rejects.toMatchObject({ code: 'inference_rejected' });
+      const detail = await grantDetail(ctx, owner, g.id);
+      expect(detail.packs).toHaveLength(2);
+      expect(
+        detail.packs.every(
+          (p) =>
+            p.status === 'active' &&
+            p.availableInputTokens === 20 &&
+            p.availableOutputTokens === 32,
+        ),
+      ).toBe(true);
+      expect(
+        detail.packs.every(
+          (p) =>
+            p.heldInputTokens +
+              p.heldOutputTokens +
+              p.consumedInputTokens +
+              p.consumedOutputTokens ===
+            0,
+        ),
+      ).toBe(true);
+      expect(
+        (
+          await pool.query(
+            "SELECT held_calls FROM broker_inference_routes WHERE provider='baseten'",
+          )
+        ).rows[0].held_calls,
+      ).toBe(0);
+    });
+    it('keeps all pooled unknown reservations through restart and owner closure, then reconciles once', async () => {
+      const { g, key } = await fragmentedAllowance();
+      ctx.inference!.dispatch = vi.fn(async () => {
+        throw new InferenceUpstreamError('transport_outcome_unknown', false);
+      });
+      const operationKey = randomUUID();
+      await expect(complete(ctx, key.actor, { ...call, operationKey })).rejects.toMatchObject({
+        code: 'inference_outcome_unknown',
+      });
+      const request = (
+        await pool.query('SELECT * FROM broker_inference_requests WHERE grant_id=$1', [g.id])
+      ).rows[0];
+      await pool.query(
+        "UPDATE broker_inference_requests SET deadline_at=clock_timestamp()-interval '1 second' WHERE id=$1",
+        [request.id],
+      );
+      await recoverRequest(ctx, request.id);
+      expect((await receipt(ctx, key.actor, request.id)).status).toBe('needs_reconciliation');
+      await closeGrant(ctx, owner, g.id, { operationKey: randomUUID() });
+      const held = await grantDetail(ctx, owner, g.id);
+      expect(held.grant.status).toBe('closing');
+      expect(held.packs.every((p) => p.status === 'retiring')).toBe(true);
+      expect(held.packs.reduce((n, p) => n + p.heldInputTokens, 0)).toBe(inputBound);
+      expect(held.packs.reduce((n, p) => n + p.heldOutputTokens, 0)).toBe(64);
+      const wallet = await creditWalletView(pool, owner.id);
+      const resolution = {
+        operationKey: randomUUID(),
+        providerRequestId: 'fixture-pooled-resolution',
+        evidence: 'Verified fixture usage across both prepaid pack allocations.',
+        inputTokens: 10,
+        outputTokens: 12,
+        rejected: false,
+      };
+      await resolveRequest(ctx, operator, request.id, resolution);
+      await resolveRequest(ctx, operator, request.id, resolution);
+      const settled = await grantDetail(ctx, owner, g.id);
+      expect(settled.grant.status).toBe('closed');
+      expect(
+        settled.packs.every(
+          (p) => p.status === 'settled' && p.heldInputTokens + p.heldOutputTokens === 0,
+        ),
+      ).toBe(true);
+      expect(settled.packs.reduce((n, p) => n + p.consumedInputTokens, 0)).toBe(10);
+      expect(settled.packs.reduce((n, p) => n + p.consumedOutputTokens, 0)).toBe(12);
+      expect(await creditWalletView(pool, owner.id)).toEqual(wallet);
+      expect(ctx.inference!.dispatch).toHaveBeenCalledTimes(1);
+      expect(
+        (
+          await pool.query(
+            "SELECT held_calls,outstanding_input,outstanding_output FROM broker_inference_routes WHERE provider='baseten'",
+          )
+        ).rows[0],
+      ).toEqual({ held_calls: 0, outstanding_input: '0', outstanding_output: '0' });
+    });
+    it.each([
+      ['baseten', 3],
+      ['modal', 2],
+    ] as const)(
+      'counts complete pooled buying calls without combining %s with another provider',
+      async (secondProvider, expectedCalls) => {
+        const g = await grant(1000),
+          quantities = {
+            inputTokens: Math.floor(FIXTURE_BUYING_INPUT_BOUND * 1.5),
+            outputTokens: 768,
+          };
+        await buy(g.id, quantities, 'baseten');
+        await buy(g.id, quantities, secondProvider);
+        const balance = await transaction(pool, async (db) =>
+          allowance(
+            db,
+            (await db.query('SELECT * FROM broker_inference_grants WHERE id=$1', [g.id])).rows[0],
+            512,
+          ),
+        );
+        expect(balance.eligibleCalls).toBe(expectedCalls);
+        expect(balance.availableInputTokens).toBe(quantities.inputTokens * 2);
+        expect(balance.availableOutputTokens).toBe(1536);
+      },
+    );
+    it('keeps every pooled hold when a grant expires during uncertain inference', async () => {
+      const { g, key } = await fragmentedAllowance();
+      ctx.inference!.dispatch = vi.fn(async () => {
+        throw new InferenceUpstreamError('transport_outcome_unknown', false);
+      });
+      await expect(
+        complete(ctx, key.actor, { ...call, operationKey: randomUUID() }),
+      ).rejects.toMatchObject({ code: 'inference_outcome_unknown' });
+      await pool.query(
+        "UPDATE broker_inference_grants SET expires_at=clock_timestamp()-interval '1 second',created_at=clock_timestamp()-interval '1 day' WHERE id=$1",
+        [g.id],
+      );
+      await maintainInference(ctx);
+      const expired = await grantDetail(ctx, owner, g.id);
+      expect(expired.grant.status).toBe('closing');
+      expect(expired.packs.every((p) => p.status === 'retiring')).toBe(true);
+      expect(expired.packs.reduce((n, p) => n + p.heldInputTokens, 0)).toBe(inputBound);
+      expect(expired.packs.reduce((n, p) => n + p.heldOutputTokens, 0)).toBe(64);
+      expect(expired.packs.reduce((n, p) => n + p.refundCents, 0)).toBe(0);
+      expect(ctx.inference!.dispatch).toHaveBeenCalledTimes(1);
+    });
+    it('retires every pooled reservation on an explicit manual write-off without inventing usage', async () => {
+      const { g, key } = await fragmentedAllowance();
+      ctx.inference!.dispatch = vi.fn(async () => {
+        throw new InferenceUpstreamError(
+          'transport_outcome_unknown',
+          false,
+          'fixture-pooled-native',
+        );
+      });
+      await expect(
+        complete(ctx, key.actor, { ...call, operationKey: randomUUID() }),
+      ).rejects.toMatchObject({ code: 'inference_outcome_unknown' });
+      const request = (
+        await pool.query('SELECT * FROM broker_inference_requests WHERE grant_id=$1', [g.id])
+      ).rows[0];
+      await closeGrant(ctx, owner, g.id, { operationKey: randomUUID() });
+      await pool.query(
+        "UPDATE broker_inference_requests SET deadline_at=clock_timestamp()-interval '1 second' WHERE id=$1",
+        [request.id],
+      );
+      const wallet = await creditWalletView(pool, owner.id),
+        input = {
+          operationKey: randomUUID(),
+          evidence:
+            'Operator accepts unknown native liability across both retired fixture allocations.',
+          acceptPlatformLiability: true,
+        };
+      const first = await writeOffRequest(ctx, operator, request.id, input);
+      expect(await writeOffRequest(ctx, operator, request.id, input)).toEqual(first);
+      expect(first).toMatchObject({
+        status: 'written_off',
+        inputTokens: null,
+        outputTokens: null,
+        heldInputTokens: 0,
+        heldOutputTokens: 0,
+      });
+      const detail = await grantDetail(ctx, owner, g.id);
+      expect(detail.grant.status).toBe('closed');
+      expect(
+        detail.packs.every(
+          (p) =>
+            p.status === 'settled' &&
+            p.consumedInputTokens +
+              p.consumedOutputTokens +
+              p.heldInputTokens +
+              p.heldOutputTokens +
+              p.refundCents ===
+              0,
+        ),
+      ).toBe(true);
+      expect(detail.packs.reduce((n, p) => n + p.retiredInputTokens, 0)).toBe(40);
+      expect(detail.packs.reduce((n, p) => n + p.retiredOutputTokens, 0)).toBe(64);
+      expect(await creditWalletView(pool, owner.id)).toEqual(wallet);
+      expect(
+        (
+          await pool.query(
+            "SELECT held_calls,outstanding_input,outstanding_output FROM broker_inference_routes WHERE provider='baseten'",
+          )
+        ).rows[0],
+      ).toEqual({ held_calls: 0, outstanding_input: '0', outstanding_output: '0' });
+    });
+    it('calculates a provider-failure refund from each pooled pack only after unknown usage settles', async () => {
+      const { g, key } = await fragmentedAllowance();
+      ctx.inference!.dispatch = vi.fn(async () => {
+        throw new InferenceUpstreamError('transport_outcome_unknown', false);
+      });
+      await expect(
+        complete(ctx, key.actor, { ...call, operationKey: randomUUID() }),
+      ).rejects.toMatchObject({ code: 'inference_outcome_unknown' });
+      const request = (
+        await pool.query('SELECT * FROM broker_inference_requests WHERE grant_id=$1', [g.id])
+      ).rows[0];
+      await transaction(pool, async (db) => {
+        await db.query('SELECT id FROM broker_inference_grants WHERE id=$1 FOR UPDATE', [g.id]);
+        await db.query('SELECT provider FROM broker_inference_routes ORDER BY provider FOR UPDATE');
+        const rows = (
+          await db.query(
+            'SELECT * FROM broker_token_packs WHERE grant_id=$1 ORDER BY id FOR UPDATE',
+            [g.id],
+          )
+        ).rows;
+        for (const row of rows)
+          await retirePackLocked(
+            db,
+            row,
+            'provider_failure',
+            'Verified fixture native outage affects both purchased allocations.',
+          );
+      });
+      const pending = await grantDetail(ctx, owner, g.id);
+      expect(pending.packs.every((p) => p.status === 'retiring' && p.refundCents === 0)).toBe(true);
+      const resolution = {
+        operationKey: randomUUID(),
+        providerRequestId: 'fixture-pooled-refund',
+        evidence: 'Verified fixture usage allowing independent frozen-price refunds.',
+        inputTokens: 10,
+        outputTokens: 12,
+        rejected: false,
+      };
+      await resolveRequest(ctx, operator, request.id, resolution);
+      await resolveRequest(ctx, operator, request.id, resolution);
+      const settled = await grantDetail(ctx, owner, g.id);
+      expect(
+        settled.packs.every(
+          (p) => p.status === 'settled' && p.refundCents > 0 && p.refundCents <= p.priceCents,
+        ),
+      ).toBe(true);
+      expect(settled.packs.reduce((n, p) => n + p.consumedInputTokens, 0)).toBe(10);
+      expect(settled.packs.reduce((n, p) => n + p.consumedOutputTokens, 0)).toBe(12);
+      expect(
+        (
+          await pool.query(
+            "SELECT count(*)::int n FROM broker_credit_ledger WHERE grant_id=$1 AND kind='token_refund'",
+            [g.id],
+          )
+        ).rows[0].n,
+      ).toBe(2);
+      expect(
+        (
+          await pool.query(
+            "SELECT held_calls,outstanding_input,outstanding_output FROM broker_inference_routes WHERE provider='baseten'",
+          )
+        ).rows[0],
+      ).toEqual({ held_calls: 0, outstanding_input: '0', outstanding_output: '0' });
+    });
+    it.each([0, 1])(
+      'isolates a provider failure of allocation %s from its still-active sibling',
+      async (failedIndex) => {
+        const { g, key } = await fragmentedAllowance();
+        ctx.inference!.dispatch = vi.fn(async () => {
+          throw new InferenceUpstreamError('transport_outcome_unknown', false);
+        });
+        await expect(
+          complete(ctx, key.actor, { ...call, operationKey: randomUUID() }),
+        ).rejects.toMatchObject({ code: 'inference_outcome_unknown' });
+        const request = (
+            await pool.query('SELECT * FROM broker_inference_requests WHERE grant_id=$1', [g.id])
+          ).rows[0],
+          allocations = (
+            await pool.query(
+              'SELECT pack_id FROM broker_inference_allocations WHERE request_id=$1 ORDER BY allocation_order',
+              [request.id],
+            )
+          ).rows,
+          failedId = allocations[failedIndex].pack_id;
+        await transaction(pool, async (db) => {
+          await db.query('SELECT id FROM broker_inference_grants WHERE id=$1 FOR UPDATE', [g.id]);
+          await db.query(
+            'SELECT provider FROM broker_inference_routes ORDER BY provider FOR UPDATE',
+          );
+          const p = (
+            await db.query('SELECT * FROM broker_token_packs WHERE id=$1 FOR UPDATE', [failedId])
+          ).rows[0];
+          await retirePackLocked(
+            db,
+            p,
+            'provider_failure',
+            'Verified fixture failure for this allocation only.',
+          );
+        });
+        await resolveRequest(ctx, operator, request.id, {
+          operationKey: randomUUID(),
+          providerRequestId: 'fixture-partial-outage',
+          evidence: 'Verified fixture usage despite one affected prepaid allocation.',
+          inputTokens: 10,
+          outputTokens: 12,
+          rejected: false,
+        });
+        const detail = await grantDetail(ctx, owner, g.id),
+          failed = detail.packs.find((p) => p.id === failedId)!,
+          sibling = detail.packs.find((p) => p.id !== failedId)!;
+        expect(failed.status).toBe('settled');
+        expect(failed.refundCents).toBeGreaterThan(0);
+        expect(sibling.status).toBe('active');
+        expect(sibling.refundCents).toBe(0);
+        expect(detail.packs.every((p) => p.heldInputTokens + p.heldOutputTokens === 0)).toBe(true);
+        expect(sibling.availableInputTokens).toBe(failedIndex === 0 ? 20 : 10);
+        expect(sibling.availableOutputTokens).toBe(failedIndex === 0 ? 32 : 20);
+        expect(
+          (
+            await pool.query(
+              "SELECT held_calls,outstanding_input,outstanding_output FROM broker_inference_routes WHERE provider='baseten'",
+            )
+          ).rows[0],
+        ).toEqual({
+          held_calls: 0,
+          outstanding_input: String(sibling.availableInputTokens),
+          outstanding_output: String(sibling.availableOutputTokens),
+        });
+        expect(
+          (
+            await pool.query(
+              "SELECT count(*)::int n FROM broker_credit_ledger WHERE grant_id=$1 AND kind='token_refund'",
+              [g.id],
+            )
+          ).rows[0].n,
+        ).toBe(1);
+      },
+    );
+    it('recovers and settles legacy single-pack reservations without allocation rows', async () => {
+      const g = await grant(100, { allowedProviders: ['baseten'] }),
+        key = await agent(g.id),
+        pack = await buy(g.id, { inputTokens: 80, outputTokens: 128 });
+      async function legacy(status: 'reserved' | 'dispatching') {
+        return transaction(pool, async (db) => {
+          await db.query(
+            'UPDATE broker_token_packs SET available_input=available_input-$2,available_output=available_output-64,held_input=held_input+$2,held_output=held_output+64 WHERE id=$1',
+            [pack.id, inputBound],
+          );
+          await db.query(
+            "UPDATE broker_inference_routes SET held_calls=held_calls+1 WHERE provider='baseten'",
+          );
+          return (
+            await db.query(
+              `INSERT INTO broker_inference_requests(grant_id,pack_id,buyer_id,source_key_id,provider,source_mode,operation_key,input_fingerprint,status,reserved_input,reserved_output,deadline_at)
+            VALUES($1,$2,$3,$4,'baseten','fixture',$5,'legacy-test',$6,$7,64,clock_timestamp()-interval '1 minute') RETURNING id`,
+              [g.id, pack.id, owner.id, key.key.id, randomUUID(), status, inputBound],
+            )
+          ).rows[0].id as string;
+        });
+      }
+      const neverDispatched = await legacy('reserved');
+      await recoverRequest(ctx, neverDispatched);
+      expect(await receipt(ctx, owner, neverDispatched)).toMatchObject({
+        status: 'rejected',
+        inputTokens: 0,
+        outputTokens: 0,
+        heldInputTokens: 0,
+        heldOutputTokens: 0,
+      });
+      const uncertain = await legacy('dispatching');
+      await recoverRequest(ctx, uncertain);
+      expect((await receipt(ctx, owner, uncertain)).status).toBe('needs_reconciliation');
+      const resolution = {
+        operationKey: randomUUID(),
+        providerRequestId: 'fixture-legacy-usage',
+        evidence: 'Verified historical single-pack usage without a new allocation record.',
+        inputTokens: 10,
+        outputTokens: 12,
+        rejected: false,
+      };
+      await resolveRequest(ctx, operator, uncertain, resolution);
+      await resolveRequest(ctx, operator, uncertain, resolution);
+      expect((await grantDetail(ctx, owner, g.id)).packs[0]).toMatchObject({
+        availableInputTokens: 70,
+        availableOutputTokens: 116,
+        heldInputTokens: 0,
+        heldOutputTokens: 0,
+        consumedInputTokens: 10,
+        consumedOutputTokens: 12,
+      });
+      expect(
+        (
+          await pool.query(
+            "SELECT held_calls,outstanding_input,outstanding_output FROM broker_inference_routes WHERE provider='baseten'",
+          )
+        ).rows[0],
+      ).toEqual({ held_calls: 0, outstanding_input: '70', outstanding_output: '116' });
+    });
+    it('fails closed at the partial-pack bound without discarding reusable prepaid quota', async () => {
+      const g = await grant(1000, { allowedProviders: ['baseten'] }),
+        key = await agent(g.id);
+      ctx.inference!.dispatch = vi.fn(async () => ({
+        ...smallUsage(),
+        inputTokens: 20,
+        outputTokens: 0,
+      }));
+      for (let i = 0; i < 10; i++) {
+        await buy(g.id, { inputTokens: 20, outputTokens: 64 });
+        await complete(ctx, key.actor, {
+          ...call,
+          messages: [{ role: 'user', content: '' }],
+          max_tokens: 8,
+          operationKey: randomUUID(),
+        });
+        await pool.query(
+          "UPDATE broker_token_orders SET created_at=created_at-interval '2 minutes' WHERE grant_id=$1",
+          [g.id],
+        );
+      }
+      const wallet = await creditWalletView(pool, owner.id);
+      await expect(buy(g.id, { inputTokens: 20, outputTokens: 64 })).rejects.toMatchObject({
+        code: 'purchase_limit',
+      });
+      const detail = await grantDetail(ctx, owner, g.id);
+      expect(detail.packs).toHaveLength(10);
+      expect(
+        detail.packs.every(
+          (p) =>
+            p.status === 'active' &&
+            p.availableInputTokens === 0 &&
+            p.availableOutputTokens === 64 &&
+            p.retiredInputTokens + p.retiredOutputTokens === 0,
+        ),
+      ).toBe(true);
+      expect(detail.packs.reduce((n, p) => n + p.availableOutputTokens, 0)).toBe(640);
+      expect(await creditWalletView(pool, owner.id)).toEqual(wallet);
+    });
+    it('repairs an old worker retirement committed after migration before dispatching from the pool', async () => {
+      const g = await grant(100, { allowedProviders: ['baseten'] }),
+        key = await agent(g.id),
+        a = await buy(g.id, { inputTokens: 80, outputTokens: 64 });
+      await buy(g.id, { inputTokens: 20, outputTokens: 64 });
+      const child = await issuePackKey(ctx, owner, a.id, { operationKey: randomUUID() });
+      ctx.inference!.dispatch = vi.fn(async () => ({
+        ...smallUsage(),
+        inputTokens: 10,
+        outputTokens: 64,
+      }));
+      expect(
+        (
+          await app.inject({
+            method: 'POST',
+            url: '/api/v1/chat/completions',
+            headers: { authorization: `Bearer ${child.token}` },
+            payload: { ...call, operationKey: randomUUID() },
+          })
+        ).statusCode,
+      ).toBe(200);
+      await transaction(pool, async (db) => {
+        await db.query('SELECT id FROM broker_inference_grants WHERE id=$1 FOR UPDATE', [g.id]);
+        await db.query('SELECT provider FROM broker_inference_routes ORDER BY provider FOR UPDATE');
+        const p = (
+          await db.query('SELECT * FROM broker_token_packs WHERE id=$1 FOR UPDATE', [a.id])
+        ).rows[0];
+        await retirePackLocked(db, p, 'quota_exhausted');
+      });
+      expect(
+        (await pool.query('SELECT status FROM broker_token_packs WHERE id=$1', [a.id])).rows[0]
+          .status,
+      ).toBe('settled');
+      const wallet = await creditWalletView(pool, owner.id);
+      ctx.inference!.dispatch = vi.fn(async () => smallUsage());
+      await complete(ctx, key.actor, { ...call, operationKey: randomUUID() });
+      const detail = await grantDetail(ctx, owner, g.id);
+      expect(detail.packs).toHaveLength(2);
+      expect(detail.packs.find((p) => p.id === a.id)).toMatchObject({
+        status: 'active',
+        availableOutputTokens: 0,
+        retiredInputTokens: 0,
+        retiredOutputTokens: 0,
+      });
+      expect(detail.packs.reduce((n, p) => n + p.availableInputTokens, 0)).toBe(80);
+      expect(
+        (
+          await pool.query(
+            "SELECT details FROM broker_inference_events WHERE resource_id=$1 AND kind='quota_restored'",
+            [a.id],
+          )
+        ).rows[0].details,
+      ).toMatchObject({ inputTokens: 70, outputTokens: 0, buyerMoneyChanged: false });
+      expect(
+        (
+          await pool.query(
+            "SELECT count(*)::int n FROM broker_inference_events WHERE grant_id=$1 AND kind='quota_restored'",
+            [g.id],
+          )
+        ).rows[0].n,
+      ).toBe(1);
+      expect(
+        (
+          await pool.query(
+            "SELECT held_calls,outstanding_input,outstanding_output FROM broker_inference_routes WHERE provider='baseten'",
+          )
+        ).rows[0],
+      ).toEqual({ held_calls: 0, outstanding_input: '80', outstanding_output: '52' });
+      expect(await creditWalletView(pool, owner.id)).toEqual(wallet);
+    });
+    it('restores already-paid entitlement above a reduced sales cap and blocks further sales', async () => {
+      const g = await grant(100, { allowedProviders: ['baseten'] }),
+        pack = await buy(g.id, { inputTokens: 1000, outputTokens: 100 });
+      await transaction(pool, async (db) => {
+        await db.query('SELECT id FROM broker_inference_grants WHERE id=$1 FOR UPDATE', [g.id]);
+        await db.query('SELECT provider FROM broker_inference_routes ORDER BY provider FOR UPDATE');
+        const p = (
+          await db.query('SELECT * FROM broker_token_packs WHERE id=$1 FOR UPDATE', [pack.id])
+        ).rows[0];
+        await retirePackLocked(db, p, 'quota_exhausted');
+      });
+      await pool.query(
+        "UPDATE broker_token_offerings SET max_outstanding_input=10,max_outstanding_output=1 WHERE provider='baseten'",
+      );
+      const wallet = await creditWalletView(pool, owner.id),
+        spent = (await grantDetail(ctx, owner, g.id)).grant.spentCents;
+      expect(
+        (await quotes(ctx, owner, { grantId: g.id, inputTokens: 20, outputTokens: 1 })).items,
+      ).toEqual([]);
+      expect(
+        (
+          await pool.query(
+            "SELECT outstanding_input,outstanding_output FROM broker_inference_routes WHERE provider='baseten'",
+          )
+        ).rows[0],
+      ).toEqual({ outstanding_input: '1000', outstanding_output: '100' });
+      const order = await createTokenOrder(ctx, owner, {
+        operationKey: randomUUID(),
+        grantId: g.id,
+        mode: 'auction',
+        inputTokens: 20,
+        outputTokens: 1,
+        maxTotalCents: 10,
+      });
+      await pool.query(
+        "UPDATE broker_token_orders SET closes_at=clock_timestamp()-interval '1 second' WHERE id=$1",
+        [order.id],
+      );
+      await closeTokenAuction(ctx, order.id);
+      expect((await tokenOrderDetail(ctx, owner, order.id)).order.status).toBe('no_offers');
+      const detail = await grantDetail(ctx, owner, g.id);
+      expect(detail.packs).toHaveLength(1);
+      expect(detail.packs[0]).toMatchObject({
+        status: 'active',
+        inputTokens: 1000,
+        outputTokens: 100,
+        availableInputTokens: 1000,
+        availableOutputTokens: 100,
+      });
+      expect(detail.grant.spentCents).toBe(spent);
+      expect(detail.grant.heldCents).toBe(0);
+      expect(await creditWalletView(pool, owner.id)).toEqual(wallet);
+    });
+    it('repairs only eligible old quota-exhausted balances in the actual pooling migration', async () => {
+      const eligible = await grant(1000, { allowedProviders: ['baseten'] }),
+        eligibleKey = await agent(eligible.id),
+        inputRemainder = await buy(eligible.id, { inputTokens: 80, outputTokens: 32 });
+      ctx.inference!.dispatch = vi.fn(async () => ({
+        ...smallUsage(),
+        inputTokens: 10,
+        outputTokens: 32,
+      }));
+      await complete(ctx, eligibleKey.actor, {
+        ...call,
+        max_tokens: 32,
+        operationKey: randomUUID(),
+      });
+      const outputRemainder = await buy(eligible.id, { inputTokens: 20, outputTokens: 32 });
+      // A batch key keeps this consumption out of the first pack's spare input.
+      const child = await issuePackKey(ctx, owner, outputRemainder.id, {
+        operationKey: randomUUID(),
+      });
+      ctx.inference!.dispatch = vi.fn(async () => ({
+        ...smallUsage(),
+        inputTokens: 20,
+        outputTokens: 5,
+      }));
+      const consumed = await app.inject({
+        method: 'POST',
+        url: '/api/v1/chat/completions',
+        headers: { authorization: `Bearer ${child.token}` },
+        payload: {
+          ...call,
+          messages: [{ role: 'user', content: '' }],
+          max_tokens: 8,
+          operationKey: randomUUID(),
+        },
+      });
+      expect(consumed.statusCode).toBe(200);
+      async function retire(id: string, grantId: string, reason = 'quota_exhausted') {
+        await transaction(pool, async (db) => {
+          await db.query('SELECT id FROM broker_inference_grants WHERE id=$1 FOR UPDATE', [
+            grantId,
+          ]);
+          await db.query(
+            'SELECT provider FROM broker_inference_routes ORDER BY provider FOR UPDATE',
+          );
+          const p = (
+            await db.query('SELECT * FROM broker_token_packs WHERE id=$1 FOR UPDATE', [id])
+          ).rows[0];
+          await retirePackLocked(db, p, reason);
+        });
+      }
+      await retire(inputRemainder.id, eligible.id);
+      await retire(outputRemainder.id, eligible.id);
+      const excluded: string[] = [];
+      for (const kind of [
+        'closed',
+        'grant_expired',
+        'pack_expired',
+        'refunded',
+        'provider_failure',
+        'fingerprint',
+        'seller',
+        'mode',
+        'provider_revoked',
+        'unqualified',
+      ] as const) {
+        const g = await grant(100),
+          p = await buy(
+            g.id,
+            { inputTokens: 20, outputTokens: 32 },
+            kind === 'unqualified' ? 'modal' : 'baseten',
+          );
+        await retire(
+          p.id,
+          g.id,
+          kind === 'provider_failure' ? 'provider_failure' : 'quota_exhausted',
+        );
+        excluded.push(p.id);
+        if (kind === 'closed') await closeGrant(ctx, owner, g.id, { operationKey: randomUUID() });
+        if (kind === 'grant_expired')
+          await pool.query(
+            "UPDATE broker_inference_grants SET expires_at=clock_timestamp()-interval '1 second',created_at=clock_timestamp()-interval '1 day' WHERE id=$1",
+            [g.id],
+          );
+        if (kind === 'pack_expired')
+          await pool.query(
+            "UPDATE broker_token_packs SET expires_at=clock_timestamp()-interval '1 second' WHERE id=$1",
+            [p.id],
+          );
+        if (kind === 'refunded')
+          await pool.query('UPDATE broker_token_packs SET refund_cents=price_cents WHERE id=$1', [
+            p.id,
+          ]);
+        if (kind === 'fingerprint')
+          await pool.query(
+            "UPDATE broker_token_packs SET route_fingerprint='retired-accounting-contract' WHERE id=$1",
+            [p.id],
+          );
+        if (kind === 'seller')
+          await pool.query(
+            'UPDATE broker_token_packs p SET provider_id=(SELECT id FROM broker_providers WHERE id<>p.provider_id ORDER BY id LIMIT 1) WHERE p.id=$1',
+            [p.id],
+          );
+        if (kind === 'mode')
+          await pool.query("UPDATE broker_token_packs SET source_mode='real' WHERE id=$1", [p.id]);
+        if (kind === 'provider_revoked')
+          await pool.query(
+            'UPDATE broker_inference_grants SET allowed_providers=\'["modal"]\'::jsonb WHERE id=$1',
+            [g.id],
+          );
+        if (kind === 'unqualified')
+          await pool.query(
+            "UPDATE broker_inference_routes SET qualified=false WHERE provider='modal'",
+          );
+      }
+      const ledgerBefore = (await pool.query('SELECT count(*)::int n FROM broker_credit_ledger'))
+          .rows[0].n,
+        wallet = await creditWalletView(pool, owner.id),
+        before = (await pool.query('SELECT * FROM broker_token_packs ORDER BY id')).rows;
+      expect(before.find((p) => p.id === inputRemainder.id)).toMatchObject({
+        status: 'settled',
+        available_input: '0',
+        retired_input: '70',
+      });
+      expect(before.find((p) => p.id === outputRemainder.id)).toMatchObject({
+        status: 'settled',
+        available_output: '0',
+        retired_output: '27',
+      });
+      // Recreate the pre-029 schema shape and run the migration itself, rather
+      // than copying its repair predicate into the assertion fixture.
+      await pool.query('DROP TABLE broker_inference_allocations');
+      await pool.query('DROP INDEX broker_token_packs_legacy_residual');
+      await pool.query(
+        'ALTER TABLE broker_token_orders DROP COLUMN provider_constraint, DROP COLUMN required_input, DROP COLUMN required_output, DROP COLUMN required_routes',
+      );
+      await pool.query(
+        'ALTER TABLE broker_studio_usage_estimates DROP COLUMN required_provider, DROP COLUMN existing_input, DROP COLUMN existing_output, DROP COLUMN required_routes',
+      );
+      await pool.query(
+        "DELETE FROM broker_migrations WHERE name='029_pooled_token_allowances.sql'",
+      );
+      await migrate(pool);
+      const rows = (await pool.query('SELECT * FROM broker_token_packs ORDER BY id')).rows;
+      for (const row of rows) {
+        const prior = before.find((p) => p.id === row.id)!;
+        expect(row.input_tokens).toBe(prior.input_tokens);
+        expect(row.output_tokens).toBe(prior.output_tokens);
+        expect(row.consumed_input).toBe(prior.consumed_input);
+        expect(row.consumed_output).toBe(prior.consumed_output);
+        expect(row.price_cents).toBe(prior.price_cents);
+        expect(row.refund_cents).toBe(prior.refund_cents);
+        expect(row.expires_at).toEqual(prior.expires_at);
+        if (excluded.includes(row.id)) expect(row).toEqual(prior);
+      }
+      expect(rows.find((p) => p.id === inputRemainder.id)).toMatchObject({
+        status: 'active',
+        available_input: '70',
+        available_output: '0',
+        retired_input: '0',
+        retired_output: '0',
+      });
+      expect(rows.find((p) => p.id === outputRemainder.id)).toMatchObject({
+        status: 'active',
+        available_input: '0',
+        available_output: '27',
+        retired_input: '0',
+        retired_output: '0',
+      });
+      expect(
+        (
+          await pool.query(
+            "SELECT outstanding_input,outstanding_output FROM broker_inference_routes WHERE provider='baseten'",
+          )
+        ).rows[0],
+      ).toEqual({ outstanding_input: '70', outstanding_output: '27' });
+      expect(
+        (
+          await pool.query(
+            "SELECT count(*)::int n FROM broker_inference_events WHERE kind='quota_restored'",
+          )
+        ).rows[0].n,
+      ).toBe(2);
+      expect((await pool.query('SELECT count(*)::int n FROM broker_credit_ledger')).rows[0].n).toBe(
+        ledgerBefore,
+      );
+      expect(await creditWalletView(pool, owner.id)).toEqual(wallet);
+      await migrate(pool);
+      expect(
+        (
+          await pool.query(
+            "SELECT count(*)::int n FROM broker_inference_events WHERE kind='quota_restored'",
+          )
+        ).rows[0].n,
+      ).toBe(2);
+    });
     it('buys a small qualified real-mode pack and reserves request bytes while public output caps stay exact', async () => {
       const oldConfig = ctx.config;
       const certificates = ['baseten', 'modal'].map((provider) => ({
@@ -364,12 +1510,34 @@ describe.skipIf(!url)(
         const modalKey = await agent(modalGrant.id),
           modalPack = await buy(modalGrant.id, { inputTokens: 1048576, outputTokens: 256 });
         expect(
-          (await transaction(pool, (db) => allowance(db, { id: modalGrant.id }, 128)))
-            .eligibleCalls,
+          (
+            await transaction(pool, async (db) =>
+              allowance(
+                db,
+                (
+                  await db.query('SELECT * FROM broker_inference_grants WHERE id=$1', [
+                    modalGrant.id,
+                  ])
+                ).rows[0],
+                128,
+              ),
+            )
+          ).eligibleCalls,
         ).toBe(0);
         expect(
-          (await transaction(pool, (db) => allowance(db, { id: modalGrant.id }, 256)))
-            .eligibleCalls,
+          (
+            await transaction(pool, async (db) =>
+              allowance(
+                db,
+                (
+                  await db.query('SELECT * FROM broker_inference_grants WHERE id=$1', [
+                    modalGrant.id,
+                  ])
+                ).rows[0],
+                256,
+              ),
+            )
+          ).eligibleCalls,
         ).toBe(1);
         await buyingPolicy(modalGrant.id, { outputPerCall: 128 });
         expect(
@@ -397,17 +1565,30 @@ describe.skipIf(!url)(
         const retired = (await grantDetail(ctx, owner, modalGrant.id)).packs.find(
           (p) => p.id === modalPack.id,
         )!;
-        expect(retired.status).toBe('settled');
-        expect(retired.availableOutputTokens).toBe(0);
+        expect(retired.status).toBe('active');
+        expect(retired.availableOutputTokens).toBe(244);
         expect(retired.consumedOutputTokens).toBe(12);
-        expect(retired.retiredOutputTokens).toBe(244);
+        expect(retired.retiredOutputTokens).toBe(0);
         expect(
           (
             await pool.query(
               "SELECT outstanding_input,outstanding_output FROM broker_inference_routes WHERE provider='modal'",
             )
           ).rows[0],
-        ).toEqual({ outstanding_input: '0', outstanding_output: '0' });
+        ).toEqual({ outstanding_input: '1048556', outstanding_output: '244' });
+        const modalTopup = await buy(modalGrant.id, { inputTokens: 1, outputTokens: 12 });
+        expect(modalTopup).toMatchObject({ inputTokens: 1, outputTokens: 12 });
+        await complete(ctx, modalKey.actor, {
+          ...call,
+          operationKey: randomUUID(),
+          max_tokens: 256,
+        });
+        expect(ctx.inference.dispatch).toHaveBeenCalledTimes(3);
+        const emptyModal = await grant(1000, { allowedProviders: ['modal'] });
+        expect(
+          (await quotes(ctx, owner, { grantId: emptyModal.id, inputTokens: 1, outputTokens: 12 }))
+            .items,
+        ).toEqual([]);
       } finally {
         ctx.config = oldConfig;
       }
@@ -962,7 +2143,7 @@ describe.skipIf(!url)(
         const row = (
           await db.query('SELECT * FROM broker_token_packs WHERE id=$1 FOR UPDATE', [a.id])
         ).rows[0];
-        await retirePackLocked(db, row, 'quota_exhausted');
+        await retirePackLocked(db, row, 'owner_closed');
       });
       const denied = await app.inject({
         method: 'POST',
@@ -2230,6 +3411,11 @@ describe.skipIf(!url)(
     it('permits refilling after ten exhausted packs without retaining unusable commitments', async () => {
       const g = await grant(),
         key = await agent(g.id);
+      ctx.inference!.dispatch = vi.fn(async () => ({
+        ...smallUsage(),
+        inputTokens: inputBound,
+        outputTokens: call.max_tokens,
+      }));
       for (let i = 0; i < 10; i++) {
         await buy(g.id, { inputTokens: inputBound, outputTokens: call.max_tokens });
         await complete(ctx, key.actor, { ...call, operationKey: randomUUID() });

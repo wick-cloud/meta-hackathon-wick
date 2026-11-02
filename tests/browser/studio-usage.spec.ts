@@ -155,6 +155,68 @@ test('new task purchases explain the small buffer and demand-triggered refill', 
   await expect(card.getByText(/Purchase floor: 7,000 input/)).toBeVisible();
   expect(writes).toEqual([]);
 });
+test('a pooled refill distinguishes existing quota from its shortfall purchase', async ({
+  page,
+}) => {
+  const data = detail();
+  Object.assign(data.usage!, {
+    purchaseRound: 1,
+    purchaseInput: 1,
+    purchaseOutput: 2048,
+    inputReservationFloor: 7000,
+    outputReservationFloor: 1024,
+    refillProvider: 'baseten',
+    existingInput: 19000,
+    existingOutput: 0,
+  });
+  await fixture(page, data);
+  const card = page.getByRole('region', { name: 'Model usage estimate' });
+  await card.getByText('How this purchase was sized').click();
+  await expect(card.getByText(/Allowance 2: 1 input \/ 2,048 output/)).toBeVisible();
+  await expect(
+    card.getByText(/Existing Baseten quota before this refill: 19,000 input/),
+  ).toBeVisible();
+  await expect(card.getByText(/Only the shortfall is purchased/)).toBeVisible();
+});
+test('an owner can restrict Studio auctions to one model provider', async ({ page }) => {
+  let submitted: Record<string, unknown> | undefined;
+  await page.route('**/api/**', async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === '/api/me')
+      return route.fulfill({
+        json: {
+          user: { id: 'buyer', role: 'buyer', name: 'Alex' },
+          modes: { wick: 'fixture', muse: 'fixture' },
+          catalog: [],
+        },
+      });
+    if (path === '/api/studio/options')
+      return route.fulfill({ json: { available: true, mode: 'fixture', reason: '' } });
+    if (path === '/api/credits') return route.fulfill({ json: { availableCents: 1000 } });
+    if (path === '/api/studio/tasks' && route.request().method() === 'POST') {
+      submitted = route.request().postDataJSON();
+      return route.fulfill({ json: detail().task });
+    }
+    if (path === '/api/studio/tasks') return route.fulfill({ json: { items: [] } });
+    if (path === '/api/studio/tasks/' + id) return route.fulfill({ json: detail() });
+    return route.fulfill({ status: 500, json: { error: 'Unexpected fixture request.' } });
+  });
+  await page.goto('/studio?new=1');
+  await page.getByLabel('Task', { exact: true }).fill('Add a greeting utility with tests.');
+  await page
+    .getByLabel('Public repository', { exact: true })
+    .fill('https://github.com/example/public');
+  await page.getByLabel('Maximum total spend · USD').fill('1.00');
+  await page.getByText('Advanced · completion checks').click();
+  await page.getByRole('combobox', { name: 'Model provider', exact: true }).selectOption('modal');
+  await page.getByRole('button', { name: 'Start task · $1.00 maximum' }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByText('Modal only', { exact: true })).toBeVisible();
+  await dialog.getByRole('button', { name: 'Start within $1.00' }).click();
+  await expect(page).toHaveURL(new RegExp('/studio/tasks/' + id));
+  expect(submitted?.allowedProviders).toEqual(['modal']);
+  expect(submitted?.budgetCents).toBe(100);
+});
 test('learned diagnostics and unresolved usage remain readable on a phone', async ({
   page,
 }, info) => {

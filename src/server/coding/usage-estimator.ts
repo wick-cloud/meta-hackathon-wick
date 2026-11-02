@@ -191,6 +191,7 @@ export function sizeUsagePurchase(
   inputFloor: number,
   outputFloor: number,
   round: number,
+  available: { input: number; output: number } = { input: 0, output: 0 },
 ) {
   if (
     ![
@@ -203,10 +204,14 @@ export function sizeUsagePurchase(
       forecast.expectedInput,
       forecast.expectedOutput,
       forecast.expectedCalls,
+      available.input,
+      available.output,
     ].every(Number.isInteger) ||
     progress.input < 0 ||
     progress.output < 0 ||
     progress.calls < 0 ||
+    available.input < 0 ||
+    available.output < 0 ||
     inputFloor < 1 ||
     outputFloor < 1 ||
     inputFloor > 10_000_000 ||
@@ -248,11 +253,15 @@ export function sizeUsagePurchase(
   // admission headroom to make the other call in this small refill usable too.
   const admissionInput =
     round === 0 ? inputFloor : inputFloor + buffered(inputPerCall * (remainingCalls - 1));
-  const inputTokens = Math.min(10_000_000, Math.max(targetInput, admissionInput));
-  const outputTokens = Math.min(1_000_000, Math.max(targetOutput, outputFloor));
+  const desiredInput = Math.min(10_000_000, Math.max(targetInput, admissionInput));
+  const desiredOutput = Math.min(1_000_000, Math.max(targetOutput, outputFloor));
+  // Input and output may come from different compatible packs. A top-up buys
+  // the missing quantity only; the market requires at least one of each token.
+  const inputTokens = Math.max(1, desiredInput - available.input);
+  const outputTokens = Math.max(1, desiredOutput - available.output);
   return {
     inputTokens,
     outputTokens,
-    reservationLimited: inputTokens > targetInput || outputTokens > targetOutput,
+    reservationLimited: desiredInput > targetInput || desiredOutput > targetOutput,
   };
 }

@@ -5,6 +5,7 @@ import type { Row } from '../marketplace/data.js';
 import { iso } from '../marketplace/data.js';
 import { clock, failure } from './data.js';
 import { MAX_API_BODY_BYTES } from '../http-limits.js';
+import { tokenAllowanceGroups, type AllowanceRoute } from './allowance.js';
 
 // Fixture input counts bytes plus framing. The complete JSON body is always larger.
 // Its minimum (20) is not an upper bound for a non-empty agent task.
@@ -45,8 +46,9 @@ export async function allowance(
 ): Promise<BuyingAllowance> {
   const packs = (
     await db.query(
-      `SELECT p.available_input,p.available_output,p.held_input,p.held_output,
-    p.source_mode,p.status,p.expires_at,p.route_fingerprint,p.snapshot,r.fingerprint,r.qualified,r.quarantined_at,r.max_output_tokens
+      `SELECT p.id,p.grant_id,p.provider,p.provider_id,p.available_input,p.available_output,p.held_input,p.held_output,
+    p.source_mode,p.status,p.expires_at,p.route_fingerprint,p.snapshot,r.fingerprint,r.qualified,r.quarantined_at,r.max_output_tokens,
+    r.provider_id route_provider_id,r.source_mode route_source_mode
     FROM (SELECT * FROM broker_token_packs WHERE grant_id=$1 AND status<>'settled' ORDER BY id LIMIT 10) p
     JOIN broker_inference_routes r ON r.provider=p.provider`,
       [grant.id],
@@ -63,6 +65,7 @@ export async function allowance(
     unresolvedRequests: 0,
     pendingOrders: 0,
   };
+  const routes = new Map<string, AllowanceRoute>();
   for (const p of packs) {
     result.heldInputTokens += Number(p.held_input);
     result.heldOutputTokens += Number(p.held_output);
@@ -76,16 +79,38 @@ export async function allowance(
     if (
       p.qualified &&
       !p.quarantined_at &&
+      grant.allowed_providers.includes(p.provider) &&
+      p.source_mode === grant.source_mode &&
+      p.route_source_mode === grant.source_mode &&
+      p.provider_id === p.route_provider_id &&
       p.route_fingerprint === p.fingerprint &&
       bound > 0 &&
       outputPerCall >= Number(p.snapshot.minimumOutputTokens ?? 1) &&
       outputPerCall <= p.max_output_tokens
-    )
-      result.eligibleCalls += Math.min(
-        Math.floor(Number(p.available_input) / bound),
-        Math.floor(Number(p.available_output) / outputPerCall),
-      );
+    ) {
+      const existing = routes.get(p.provider);
+      routes.set(p.provider, {
+        provider: p.provider,
+        providerId: p.route_provider_id,
+        sourceMode: p.route_source_mode,
+        routeFingerprint: p.fingerprint,
+        inputBound: Math.max(existing?.inputBound ?? 0, bound),
+        minimumOutputTokens: Math.max(
+          existing?.minimumOutputTokens ?? 1,
+          Number(p.snapshot.minimumOutputTokens ?? 1),
+        ),
+        maximumOutputTokens: p.max_output_tokens,
+      });
+    }
   }
+  for (const group of tokenAllowanceGroups(packs, [...routes.values()], {
+    grantId: grant.id,
+    now,
+  }))
+    result.eligibleCalls += Math.min(
+      Math.floor(group.availableInput / group.route.inputBound),
+      Math.floor(group.availableOutput / outputPerCall),
+    );
   const counts = (
     await db.query(
       `SELECT

@@ -1742,8 +1742,8 @@ export function TokenOrderPage({ id }: { id: string }) {
                   </div>
                   <PackCard pack={resource.data.pack} />
                   <p className="inference-muted">
-                    Use this agent’s API key at <code>/api/v1</code>. Token redemption is included
-                    in the prepaid price.
+                    Use this agent’s API key at <code>/api/v1</code> to combine compatible packs
+                    from the same provider. Token redemption is included in the prepaid price.
                   </p>
                 </section>
               )}
