@@ -114,34 +114,6 @@
   align-items: center;
   margin: 0;
 }
-.inference-state {
-  display: inline-block;
-  background: var(--bg);
-  border: 1px solid var(--line-strong);
-  border-radius: 6px;
-  padding: 4px 8px;
-  font-size: 11px;
-  white-space: nowrap;
-  color: var(--muted);
-}
-.inference-state-active,
-.inference-state-awarded,
-.inference-state-settled {
-  color: #83d4ae;
-  border-color: #2f5142;
-  background: #17271f;
-}
-.inference-state-open,
-.inference-state-dispatching {
-  color: var(--accent);
-  border-color: #664326;
-  background: var(--accent-soft);
-}
-.inference-state-outcome_unknown,
-.inference-state-needs_reconciliation {
-  color: #eab975;
-  border-color: #6d5430;
-}
 .inference-mode {
   display: block;
   font-size: 10px;

@@ -30,29 +30,6 @@
 .key-list {
   margin-bottom: 20px;
 }
-.key-list table {
-  width: 100%;
-  border-collapse: collapse;
-  text-align: left;
-  font-size: 12px;
-}
-.key-list th {
-  padding: 12px;
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 500;
-  white-space: nowrap;
-}
-.key-list td {
-  padding: 15px 12px;
-  border-top: 1px solid var(--line);
-  vertical-align: top;
-}
-.key-list td strong {
-  display: block;
-  font-size: 13px;
-  font-weight: 550;
-}
 .key-prefix {
   display: block;
   margin-top: 5px;
@@ -73,17 +50,6 @@
   max-width: 230px;
   line-height: 1.7;
   color: var(--soft);
-}
-.key-status {
-  display: inline-flex;
-  border: 1px solid var(--line);
-  padding: 3px 7px;
-  border-radius: 5px;
-  color: var(--success, #66d6a1);
-  white-space: nowrap;
-}
-.key-status.inactive {
-  color: var(--muted);
 }
 .key-setup p,
 .key-create-form fieldset p,
@@ -198,14 +164,6 @@
   .key-limit-fields {
     grid-template-columns: 1fr;
   }
-  .key-list table {
-    min-width: 850px;
-  }
-}
-
-.key-list .table-scroll {
-  overflow-x: auto;
-  max-width: 100%;
 }
 .key-setup-grid > div {
   min-width: 0;

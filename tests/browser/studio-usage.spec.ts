@@ -117,6 +117,9 @@ test('forecast, purchased quota and usage are distinct and the reservation limit
   const card = page.getByRole('region', { name: 'Model usage estimate' });
   await expect(card.getByRole('heading', { name: 'Model usage' })).toBeVisible();
   await expect(card.getByText('Initial estimate', { exact: false })).toBeVisible();
+  const usage = card.getByRole('table', { name: 'Token forecast and usage' });
+  await expect(usage).toHaveJSProperty('tagName', 'TABLE');
+  await expect(usage.getByRole('columnheader')).toHaveText(['Tokens', 'Input', 'Output']);
   await expect(card.getByRole('rowheader', { name: 'Expected task' })).toBeVisible();
   await expect(card.getByRole('rowheader', { name: 'Purchased', exact: true })).toBeVisible();
   await expect(card.getByRole('cell', { name: '1.8%', exact: true })).toBeVisible();

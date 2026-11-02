@@ -1,10 +1,17 @@
-import { TableViewport } from './table';
+import {
+  TableViewport,
+  TablePanel,
+  TableTabs,
+  TableFooter,
+  TableIdentity,
+  TableState,
+  TableStatus,
+} from './table';
 import { usdToCents } from '../shared/money';
 import { useState, type FormEvent } from 'react';
 import { Copy, KeyRound, Plus, RefreshCw, ShieldCheck, X } from 'lucide-react';
 import { api, ApiError, dateTime, money, post } from './api';
 import {
-  EmptyState,
   ErrorBox,
   LoadMore,
   Link,
@@ -173,26 +180,26 @@ export function DeveloperKeys() {
         </p>
       )}
       <ErrorBox
-        error={list.error || (!creating && !revoking && !created ? error : '')}
+        error={(list.data ? list.error : '') || (!creating && !revoking && !created ? error : '')}
         retry={list.error ? list.reload : undefined}
       />
-      <section className="card key-list">
-        <div className="section-heading">
+      <TablePanel className="key-list" label="API keys">
+        <TableTabs actions={<span className="muted-text">Up to 20 active keys</span>}>
           <h2>Your keys</h2>
-          <span>Up to 20 active keys</span>
-        </div>
+        </TableTabs>
         {list.loading ? (
-          <Spinner label="Loading API keys" />
+          <TableState loading title="Loading API keys" />
+        ) : !list.data && list.error ? (
+          <TableState error={list.error} onRetry={list.reload} />
         ) : !list.data?.items.length ? (
-          <EmptyState
-            icon={<KeyRound size={24} />}
+          <TableState
             title="Connect your first client"
             description="Create a read-only key, then choose additional permissions when your agent needs them."
           >
             <button className="button secondary" onClick={openCreate}>
               Create key
             </button>
-          </EmptyState>
+          </TableState>
         ) : (
           <TableViewport label="API keys" minWidth={1040} className="table-scroll">
             <table>
@@ -219,8 +226,11 @@ export function DeveloperKeys() {
                   return (
                     <tr key={key.id}>
                       <td>
-                        <strong>{key.name}</strong>
-                        <code className="key-prefix">{key.prefix.slice(0, 18)}…</code>
+                        <TableIdentity
+                          icon={<KeyRound size={17} />}
+                          title={key.name}
+                          subtitle={<code>{key.prefix.slice(0, 18)}…</code>}
+                        />
                       </td>
                       <td>
                         <details>
@@ -244,14 +254,14 @@ export function DeveloperKeys() {
                       <td>{key.lastUsedAt ? dateTime(key.lastUsedAt) : 'Never'}</td>
                       <td>{dateTime(key.expiresAt)}</td>
                       <td>
-                        <span className={`key-status ${inactive ? 'inactive' : ''}`}>
+                        <TableStatus tone={inactive ? 'neutral' : 'success'}>
                           {key.revokedAt ? 'Revoked' : expired ? 'Expired' : 'Active'}
-                        </span>
+                        </TableStatus>
                       </td>
                       <td className="actions-cell">
                         {!key.revokedAt && (
                           <button
-                            className="text-button"
+                            className="button secondary small"
                             onClick={() => {
                               setError('');
                               setRevoking(key);
@@ -268,13 +278,16 @@ export function DeveloperKeys() {
             </table>
           </TableViewport>
         )}
-        <LoadMore
-          available={!!list.nextCursor}
-          loading={list.loadingMore}
-          onLoad={() => void list.loadMore()}
-          error={list.moreError}
-        />
-      </section>
+        <TableFooter count={list.data?.items.length} noun="keys">
+          {' '}
+          <LoadMore
+            available={!!list.nextCursor}
+            loading={list.loadingMore}
+            onLoad={() => void list.loadMore()}
+            error={list.moreError}
+          />
+        </TableFooter>
+      </TablePanel>
       <section className="card key-setup">
         <div className="section-heading">
           <h2>Use your key</h2>

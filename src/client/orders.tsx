@@ -1,4 +1,14 @@
-import { TableViewport } from './table';
+import {
+  TableViewport,
+  TablePanel,
+  TableToolbar,
+  TableTabs,
+  TableFooter,
+  TableActions,
+  TableIdentity,
+  TableState,
+  TableStatus,
+} from './table';
 import { useEffect, useMemo, useState } from 'react';
 import {
   ArrowLeft,
@@ -6,7 +16,6 @@ import {
   CalendarClock,
   Clock3,
   Layers3,
-  ListOrdered,
   Plus,
   Radio,
   RefreshCw,
@@ -23,10 +32,8 @@ import type {
 } from '../shared/orders';
 import { dateTime, money } from './api';
 import {
-  EmptyState,
   ErrorBox,
   Link,
-  Spinner,
   StatusPill,
   remaining,
   useNavigate,
@@ -136,26 +143,26 @@ export function Orders({ search }: { search: string }) {
           </Link>
         </div>
       </header>
-      {!filtered && !cursor && list.data && !items.length && <PurchaseCards compact />}
+      <PurchaseCards compact />
       <div className="purchase-history-heading">
         <h2>Order history</h2>
         <p>Track VM auctions and AI token purchases.</p>
       </div>
-      <section className="card market-orders">
-        <div className="record-view-bar">
+      <TablePanel className="market-orders" label="Orders">
+        <TableTabs>
           <RecordViews
             label="Order views"
             value={status === 'history' ? 'archive' : status === 'attention' ? null : status}
             onChange={(view) => filter('status', view === 'archive' ? 'history' : view)}
           />
-        </div>
+        </TableTabs>
         {status === 'history' && (
           <ArchiveNote>
             Completed, cancelled and unmatched purchases. Order details and billing history remain
             available.
           </ArchiveNote>
         )}
-        <div className="market-filterbar orders-filters">
+        <TableToolbar label="Filter orders">
           <div className="orders-filter-fields">
             <label className="field">
               <span>Type</span>
@@ -210,36 +217,21 @@ export function Orders({ search }: { search: string }) {
             <RefreshCw size={14} className={list.refreshing ? 'spin' : undefined} />
             Refresh
           </button>
-        </div>
-        {list.error && (
+        </TableToolbar>
+        {list.error && list.data && (
           <div className="orders-error">
             <ErrorBox error={list.error} retry={list.reload} />
           </div>
         )}
         {list.loading ? (
-          <div className="orders-loading">
-            <span className="sr-only">
-              <Spinner label="Loading orders" />
-            </span>
-            <div aria-hidden="true">
-              {Array.from({ length: 4 }, (_, i) => (
-                <div className="orders-skeleton-row" key={i}>
-                  <span />
-                  <div>
-                    <i />
-                    <i />
-                  </div>
-                  <span />
-                  <span />
-                </div>
-              ))}
-            </div>
-          </div>
+          <TableState loading title="Loading orders" />
+        ) : !list.data && list.error ? (
+          <TableState error={list.error} onRetry={list.reload} />
         ) : items.length ? (
           <>
             <TableViewport
               label="Orders"
-              minWidth={920}
+              minWidth={1040}
               className="market-table-scroll orders-table-scroll"
               tabIndex={0}
               role="region"
@@ -266,17 +258,17 @@ export function Orders({ search }: { search: string }) {
                   {items.map((item) => (
                     <tr key={item.key}>
                       <td className="orders-identity-cell">
-                        <div className="orders-identity">
-                          <span className={`orders-kind-icon ${item.kind}`} aria-hidden="true">
-                            {item.kind === 'agreement' ? (
-                              <Layers3 size={16} />
+                        <TableIdentity
+                          icon={
+                            item.kind === 'agreement' ? (
+                              <Layers3 size={17} />
                             ) : item.kind === 'token' ? (
-                              <Sparkles size={16} />
+                              <Sparkles size={17} />
                             ) : (
-                              <Radio size={16} />
-                            )}
-                          </span>
-                          <div className="orders-identity-copy">
+                              <Radio size={17} />
+                            )
+                          }
+                          title={
                             <Link
                               href={item.detailUrl}
                               className="market-order-title"
@@ -284,46 +276,49 @@ export function Orders({ search }: { search: string }) {
                             >
                               {item.title || 'Environment order'}
                             </Link>
-                            <div className="orders-reference">
-                              <span>
-                                {item.kind === 'agreement'
-                                  ? 'Historical capacity booking'
-                                  : item.kind === 'token'
-                                    ? `AI tokens · ${item.tokenMode === 'instant' ? 'Instant' : 'Auction'}`
-                                    : 'Instant auction'}
-                              </span>
-                              {item.source?.kind === 'api_key' && (
-                                <span title={`Created through Broker API key ${item.source.keyId}`}>
-                                  API
+                          }
+                          subtitle={
+                            <>
+                              <div className="orders-reference">
+                                <span>
+                                  {item.kind === 'agreement'
+                                    ? 'Historical capacity booking'
+                                    : item.kind === 'token'
+                                      ? `AI tokens · ${item.tokenMode === 'instant' ? 'Instant' : 'Auction'}`
+                                      : 'Instant auction'}
                                 </span>
-                              )}
-                              <code title={`Created ${dateTime(item.createdAt)}`}>
-                                {item.reference}
-                              </code>
-                            </div>
-                            {item.kind === 'token' && (
-                              <div className="orders-created">
-                                {item.modelId} · {(item.inputTokens ?? 0).toLocaleString()} input /{' '}
-                                {(item.outputTokens ?? 0).toLocaleString()} output
+                                {item.source?.kind === 'api_key' && (
+                                  <span
+                                    title={`Created through Broker API key ${item.source.keyId}`}
+                                  >
+                                    API
+                                  </span>
+                                )}
+                                <code title={`Created ${dateTime(item.createdAt)}`}>
+                                  {item.reference}
+                                </code>
                               </div>
-                            )}
-                            <time
-                              className="orders-created"
-                              dateTime={item.createdAt}
-                              title={dateTime(item.createdAt)}
-                            >
-                              Created {shortDay(item.createdAt)}
-                            </time>
-                          </div>
-                        </div>
+                              {item.kind === 'token' && (
+                                <div className="orders-created">
+                                  {item.modelId} · {(item.inputTokens ?? 0).toLocaleString()} input
+                                  / {(item.outputTokens ?? 0).toLocaleString()} output
+                                </div>
+                              )}
+                              <time
+                                className="orders-created"
+                                dateTime={item.createdAt}
+                                title={dateTime(item.createdAt)}
+                              >
+                                Created {shortDay(item.createdAt)}
+                              </time>
+                            </>
+                          }
+                        />
                       </td>
                       <td>
                         <div className="orders-status-cell">
                           {item.kind === 'agreement' && item.status === 'open' ? (
-                            <span className="status-pill status-open">
-                              <span />
-                              Legacy record
-                            </span>
+                            <TableStatus tone="warning">Legacy record</TableStatus>
                           ) : (
                             <StatusPill status={item.status} />
                           )}
@@ -430,30 +425,32 @@ export function Orders({ search }: { search: string }) {
                         )}
                       </td>
                       <td className="orders-actions-cell actions-cell">
-                        <div className="market-row-actions">
-                          <Link
-                            href={item.detailUrl}
-                            className="button secondary small orders-view"
-                          >
+                        <TableActions>
+                          <Link href={item.detailUrl} className="button secondary small">
                             View
                             <ArrowRight size={13} />
                           </Link>
                           {item.kind !== 'token' && item.vmUrl && (
-                            <Link href={item.vmUrl} className="text-link orders-secondary-action">
-                              <SquareTerminal size={12} />
-                              Environment
+                            <Link
+                              href={item.vmUrl}
+                              className="icon-button orders-secondary-action"
+                              aria-label="Environment"
+                              title="Open environment"
+                            >
+                              <SquareTerminal size={15} />
                             </Link>
                           )}
                           {item.kind !== 'token' && item.retryUrl && (
                             <Link
                               href={item.retryUrl}
-                              className="text-link orders-secondary-action"
+                              className="icon-button orders-secondary-action"
+                              aria-label="Try again · review"
+                              title="Review another auction"
                             >
-                              <RotateCcw size={12} />
-                              Try again · review
+                              <RotateCcw size={15} />
                             </Link>
                           )}
-                        </div>
+                        </TableActions>
                       </td>
                     </tr>
                   ))}
@@ -463,8 +460,7 @@ export function Orders({ search }: { search: string }) {
           </>
         ) : (
           <div className="orders-empty">
-            <EmptyState
-              icon={<ListOrdered size={22} />}
+            <TableState
               title={status === 'history' ? 'No archived orders yet' : 'No orders in this view'}
               description={
                 status === 'history'
@@ -488,15 +484,11 @@ export function Orders({ search }: { search: string }) {
                   New purchase
                 </Link>
               )}
-            </EmptyState>
+            </TableState>
           </div>
         )}
-        <footer className="market-pagination orders-pagination">
+        <TableFooter count={list.data?.items.length} noun="orders">
           <div className="orders-page-summary">
-            <span>
-              {items.length} orders on this page <span className="orders-separator">·</span> Newest
-              first
-            </span>
             <span className="orders-update-status">
               {list.error
                 ? 'Refresh needed'
@@ -527,8 +519,8 @@ export function Orders({ search }: { search: string }) {
               </button>
             )}
           </div>
-        </footer>
-      </section>
+        </TableFooter>
+      </TablePanel>
     </div>
   );
 }

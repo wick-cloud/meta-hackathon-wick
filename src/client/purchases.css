@@ -224,14 +224,18 @@
   color: var(--accent);
 }
 .purchase-choices.is-compact {
-  gap: 14px;
-  margin-bottom: 26px;
+  gap: 12px;
+  margin-bottom: 24px;
 }
 .is-compact .purchase-choice {
-  padding: 18px 20px;
-  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 20px;
+  align-content: start;
+  padding: 16px;
 }
 .is-compact .purchase-choice-top {
+  grid-column: 1 / -1;
   gap: 10px;
   margin-bottom: 12px;
 }
@@ -245,20 +249,23 @@
   height: 16px;
 }
 .is-compact .purchase-choice > h2 {
-  font-size: 17px;
+  grid-column: 1;
+  font-size: 16px;
   margin-bottom: 5px;
 }
 .is-compact .purchase-choice > p {
+  grid-column: 1;
   font-size: 12px;
   line-height: 1.6;
   max-width: none;
-  padding-right: 145px;
-  min-height: 39px;
+  min-height: 0;
 }
 .is-compact .purchase-choice-actions {
-  position: absolute;
-  right: 20px;
-  bottom: 19px;
+  grid-column: 2;
+  grid-row: 2 / 4;
+  align-self: end;
+  justify-self: end;
+  margin: 0;
 }
 .is-compact .purchase-choice-actions .button {
   min-height: 34px;
@@ -409,13 +416,16 @@
   .purchase-choice-badge {
     display: none;
   }
-  .is-compact .purchase-choice > p {
-    padding-right: 0;
+}
+@media (max-width: 1200px) {
+  .is-compact .purchase-choice {
+    grid-template-columns: minmax(0, 1fr);
   }
   .is-compact .purchase-choice-actions {
-    position: static;
-    margin-top: 16px;
-    align-self: flex-start;
+    grid-column: 1;
+    grid-row: auto;
+    justify-self: start;
+    margin-top: 14px;
   }
 }
 @media (max-width: 700px) {
@@ -468,15 +478,6 @@
   }
   .is-compact .purchase-choice {
     padding: 17px;
-  }
-  .is-compact .purchase-choice > p {
-    padding-right: 0;
-    min-height: 0;
-  }
-  .is-compact .purchase-choice-actions {
-    position: static;
-    align-self: flex-start;
-    margin-top: 14px;
   }
   .is-compact .purchase-choice-top {
     margin-bottom: 10px;

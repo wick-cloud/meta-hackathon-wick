@@ -304,29 +304,6 @@
 .agent-table th:last-child {
   width: 10%;
 }
-.agent-table td,
-.agent-table th {
-  white-space: nowrap;
-  padding: 16px;
-}
-.agent-table th {
-  padding-top: 12px;
-  padding-bottom: 12px;
-  background: var(--bg);
-}
-.agent-table th:first-child,
-.agent-table td:first-child {
-  padding-left: 20px;
-}
-.agent-table th:last-child,
-.agent-table td:last-child {
-  padding-right: 20px;
-  text-align: right;
-}
-.agent-table tbody tr:hover,
-.agent-table tbody tr:focus-within {
-  background: var(--surface-hover);
-}
 .agent-open-link {
   display: inline-flex;
   align-items: center;
@@ -336,12 +313,6 @@
 }
 .agent-open-link:hover {
   color: var(--accent);
-}
-.agent-table td small {
-  display: block;
-  font-size: 11px;
-  color: var(--muted);
-  margin-top: 4px;
 }
 .agent-table .money-column {
   text-align: right;
@@ -353,17 +324,6 @@
 }
 .agent-table td.money-column small {
   font-weight: 400;
-}
-.agent-table-filters {
-  display: flex;
-  justify-content: space-between;
-  gap: 16px;
-  align-items: center;
-  padding: 16px 20px;
-  border-bottom: 1px solid var(--line);
-}
-.agent-table-filters .field {
-  margin: 0;
 }
 .agent-search {
   display: flex;
@@ -388,29 +348,6 @@
 }
 .agent-status-filter {
   width: 150px;
-}
-.agent-table-footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 14px;
-  padding: 15px 20px;
-  border-top: 1px solid var(--line);
-  font-size: 12px;
-  color: var(--muted);
-}
-.agent-table-footer .button {
-  font-size: 12px;
-}
-.agent-table-shell {
-  padding: 0 !important;
-  overflow: hidden;
-}
-.agent-table-shell .table-scroll {
-  position: relative;
-}
-.agent-table-shell > .loading-row {
-  padding: 30px 20px;
 }
 .agent-detail .page-heading {
   margin-bottom: 14px;
@@ -531,10 +468,6 @@
   .buying-workspace .card,
   .buying-receipt {
     padding: 18px;
-  }
-  .agent-table-filters {
-    flex-wrap: wrap;
-    padding: 14px;
   }
   .agent-search {
     flex-basis: 100%;

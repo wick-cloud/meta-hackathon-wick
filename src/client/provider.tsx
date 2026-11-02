@@ -1,6 +1,16 @@
-import { TableViewport } from './table';
+import {
+  TableActions,
+  TableFooter,
+  TableIdentity,
+  TablePanel,
+  TableState,
+  TableStatus,
+  TableToolbar,
+  TableViewport,
+} from './table';
+import './provider-console.css';
 import { isMoneyCents, moneyUnits } from '../shared/money';
-import { useEffect, useState, type FormEvent } from 'react';
+import { Fragment, useEffect, useState, type FormEvent } from 'react';
 import {
   Activity,
   ArrowRight,
@@ -8,6 +18,7 @@ import {
   CheckCircle2,
   Clock3,
   CircleDollarSign,
+  ChevronDown,
   Cpu,
   Eye,
   Globe2,
@@ -136,6 +147,29 @@ export function ProviderCapacity() {
           {provider.simulated ? 'Simulated demo supply' : 'Wick-managed allocation'}
         </span>
       </PageHeader>
+      <nav className="provider-setup-guide" aria-label="Provider setup">
+        <span className="provider-setup-label">Start selling</span>
+        <ol>
+          <li>
+            <Link href="/provider/offerings">
+              <span>1</span> Publish an offering <ArrowRight size={14} />
+            </Link>
+          </li>
+          <li>
+            <Link href="/provider/policy">
+              <span>2</span> Set bidding policy <ArrowRight size={14} />
+            </Link>
+          </li>
+          <li>
+            <Link href="/provider/requests">
+              <span>3</span> Review buyer requests <ArrowRight size={14} />
+            </Link>
+          </li>
+        </ol>
+        <Link className="provider-setup-ai" href="/provider/inference">
+          Sell AI capacity <ArrowRight size={14} />
+        </Link>
+      </nav>
       {provider.cloudProvider && (
         <div className="info-note">
           <Server size={18} />
@@ -211,8 +245,8 @@ export function ProviderCapacity() {
             <Settings2 size={18} />
           </div>
           <p className="muted-text">
-            Set the total slots this account makes available. Existing reservations and booked
-            windows remain protected.
+            Set the total slots this account makes available. Existing reservations and historical
+            capacity commitments remain protected.
           </p>
           <p>
             <Link className="text-link" href="/provider/policy">
@@ -712,7 +746,8 @@ function ProviderRequestCard({
     >(null),
     [busy, setBusy] = useState(''),
     [error, setError] = useState(''),
-    [success, setSuccess] = useState(false);
+    [success, setSuccess] = useState(false),
+    [expanded, setExpanded] = useState(false);
   const ended = new Date(request.closesAt).getTime() <= now || request.status !== 'open';
   async function propose() {
     setBusy('muse');
@@ -756,103 +791,147 @@ function ProviderRequestCard({
     }
   }
   return (
-    <article className="card provider-request">
-      <div className="provider-request-top">
-        <span className="quiet-badge">
-          <Radio size={13} />
-          {ended ? 'Auction closed' : `${remaining(request.closesAt, now)} remaining`}
-        </span>
-        <span className="small-muted">{request.id.slice(0, 8)}</span>
-      </div>
-      <h3>{request.description || 'Environment request'}</h3>
-      <div className="request-spec-tags">
-        <span>
-          <Cpu size={13} />
-          {request.requirements.cpu} vCPU
-        </span>
-        <span>
-          <Layers3 size={13} />
-          {request.requirements.memoryGb} GiB RAM
-        </span>
-        <span>
-          <Globe2 size={13} />
-          {regionName(request.region)}
-        </span>
-        <span>
-          <Clock3 size={13} />
-          {request.durationMinutes} min
-        </span>
-      </div>
-      <div className="request-budget">
-        <span>Customer’s maximum total</span>
-        <strong>{money(request.maxPriceCents)}</strong>
-      </div>
-      {success ? (
-        <SuccessBox>Your bid is accepted and capacity is reserved.</SuccessBox>
-      ) : (
-        <form onSubmit={bid}>
-          <MoneyInput
-            id={`bid-${request.id}`}
-            label="Your total bid (USD)"
-            value={price}
-            onChange={setPrice}
-            min={1}
-            disabled={ended}
+    <Fragment>
+      <tr>
+        <td>
+          <TableIdentity
+            icon={<Server size={17} />}
+            title={request.description || 'Environment request'}
+            subtitle={<code>{request.id.slice(0, 8)}</code>}
           />
-          <ProviderRevenueSplit grossCents={price} />
-          <div className="provider-request-actions">
+        </td>
+        <td>
+          <TableStatus tone={ended ? 'neutral' : 'warning'}>
+            {ended ? 'Auction closed' : `${remaining(request.closesAt, now)} remaining`}
+          </TableStatus>
+        </td>
+        <td className="provider-resource-cell">
+          {request.requirements.cpu} vCPU · {request.requirements.memoryGb} GiB
+          <small>{regionName(request.region)}</small>
+        </td>
+        <td className="numeric-cell">{request.durationMinutes} min</td>
+        <td className="numeric-cell">{money(request.maxPriceCents)}</td>
+        <td className="actions-cell">
+          <TableActions>
             <button
               type="button"
-              className="button muse-button"
-              onClick={() => void propose()}
-              disabled={!!busy || ended}
+              className="button secondary small"
+              aria-expanded={expanded}
+              aria-controls={`bid-details-${request.id}`}
+              onClick={() => setExpanded(!expanded)}
             >
-              {busy === 'muse' ? (
-                <Spinner label="Considering" />
-              ) : (
-                <>
-                  <Sparkles size={15} />
-                  Ask Muse
-                </>
-              )}
+              {expanded ? 'Hide bid' : 'Review bid'}
+              <ChevronDown size={14} className={expanded ? 'provider-chevron-open' : ''} />
             </button>
-            <button className="button primary" disabled={!!busy || ended}>
-              {busy === 'bid' ? (
-                <Spinner label="Submitting" />
-              ) : (
-                <>
-                  Submit bid
-                  <ArrowRight size={15} />
-                </>
-              )}
-            </button>
-          </div>
-        </form>
-      )}
-      <ErrorBox error={error} />
-      {proposal && (
-        <>
-          <div className="proposal-decision">
-            {proposal.decision === 'decline' ? (
-              <>
-                <X size={15} />
-                Muse recommends declining
-              </>
+          </TableActions>
+        </td>
+      </tr>
+      <tr className="provider-expansion-row" hidden={!expanded}>
+        <td colSpan={6}>
+          <article
+            id={`bid-details-${request.id}`}
+            className="provider-request provider-expanded-content"
+            aria-label={`Bid for ${request.description || request.id.slice(0, 8)}`}
+          >
+            <div className="provider-request-top">
+              <span className="quiet-badge">
+                <Radio size={13} />
+                {ended ? 'Auction closed' : `${remaining(request.closesAt, now)} remaining`}
+              </span>
+              <span className="small-muted">{request.id.slice(0, 8)}</span>
+            </div>
+            <h3>{request.description || 'Environment request'}</h3>
+            <div className="request-spec-tags">
+              <span>
+                <Cpu size={13} />
+                {request.requirements.cpu} vCPU
+              </span>
+              <span>
+                <Layers3 size={13} />
+                {request.requirements.memoryGb} GiB RAM
+              </span>
+              <span>
+                <Globe2 size={13} />
+                {regionName(request.region)}
+              </span>
+              <span>
+                <Clock3 size={13} />
+                {request.durationMinutes} min
+              </span>
+            </div>
+            <div className="request-budget">
+              <span>Customer’s maximum total</span>
+              <strong>{money(request.maxPriceCents)}</strong>
+            </div>
+            {success ? (
+              <SuccessBox>Your bid is accepted and capacity is reserved.</SuccessBox>
             ) : (
+              <form onSubmit={bid}>
+                <MoneyInput
+                  id={`bid-${request.id}`}
+                  label="Your total bid (USD)"
+                  value={price}
+                  onChange={setPrice}
+                  min={1}
+                  disabled={ended}
+                />
+                <ProviderRevenueSplit grossCents={price} />
+                <div className="provider-request-actions">
+                  <button
+                    type="button"
+                    className="button muse-button"
+                    onClick={() => void propose()}
+                    disabled={!!busy || ended}
+                  >
+                    {busy === 'muse' ? (
+                      <Spinner label="Considering" />
+                    ) : (
+                      <>
+                        <Sparkles size={15} />
+                        Ask Muse
+                      </>
+                    )}
+                  </button>
+                  <button className="button primary" disabled={!!busy || ended}>
+                    {busy === 'bid' ? (
+                      <Spinner label="Submitting" />
+                    ) : (
+                      <>
+                        Submit bid
+                        <ArrowRight size={15} />
+                      </>
+                    )}
+                  </button>
+                </div>
+              </form>
+            )}
+            <ErrorBox error={error} />
+            {proposal && (
               <>
-                <Check size={15} />
-                Suggested total: {money(proposal.totalPriceCents)}
+                <div className="proposal-decision">
+                  {proposal.decision === 'decline' ? (
+                    <>
+                      <X size={15} />
+                      Muse recommends declining
+                    </>
+                  ) : (
+                    <>
+                      <Check size={15} />
+                      Suggested total: {money(proposal.totalPriceCents)}
+                    </>
+                  )}
+                </div>
+                <ReceiptCard
+                  receipt={proposal.receipt}
+                  mode={proposal.mode || modes.muse}
+                  modelCalled={proposal.modelCalled}
+                />
               </>
             )}
-          </div>
-          <ReceiptCard
-            receipt={proposal.receipt}
-            mode={proposal.mode || modes.muse}
-            modelCalled={proposal.modelCalled}
-          />
-        </>
-      )}
-    </article>
+          </article>
+        </td>
+      </tr>
+    </Fragment>
   );
 }
 export function ProviderRequests() {
@@ -878,8 +957,8 @@ export function ProviderRequests() {
         </span>
         <div>
           <h3>
-            {dashboard.data?.capacity.available ?? '—'} available slots · {items.length} loaded
-            requests
+            {dashboard.data?.capacity.available ?? '—'} available slots ·{' '}
+            {data ? items.length : '—'} loaded requests
           </h3>
           <p>
             Manual and automatic bids honor your saved price floor and spare slots. Late offers are
@@ -887,47 +966,79 @@ export function ProviderRequests() {
           </p>
         </div>
         <span className="quiet-badge">
-          Automatic bids and counteroffers {dashboard.data?.policy.autoBid ? 'on' : 'paused'}
+          Automatic bids and counteroffers{' '}
+          {dashboard.data ? (dashboard.data.policy.autoBid ? 'on' : 'paused') : 'unavailable'}
         </span>
       </div>
       <ErrorBox
-        error={error || dashboard.error}
+        error={(data ? error : '') || dashboard.error}
         retry={() => {
           reload();
           dashboard.reload();
         }}
       />
-      {loading ? (
-        <Spinner label="Loading marketplace requests" />
-      ) : items.length ? (
-        <div className="provider-requests-grid">
-          {items.map((request) => (
-            <ProviderRequestCard
-              key={request.id}
-              request={request}
-              basePriceCents={dashboard.data?.policy.basePriceCents ?? DEFAULT_PRICE_CENTS}
-              onBid={() => {
-                reload();
-                dashboard.reload();
-              }}
-            />
-          ))}
-        </div>
-      ) : (
-        <section className="card">
-          <EmptyState
-            icon={<Radio size={26} />}
-            title="A quiet moment in the marketplace"
-            description="New customer requests appear here during their 30-second auctions. This view refreshes automatically."
+      <TablePanel label="Buyer requests">
+        <TableToolbar>
+          <div>
+            <h2>Open requests</h2>
+            <p className="field-hint">30-second auctions · lowest eligible total wins</p>
+          </div>
+          <span className="small-muted">{data ? items.length : '—'} loaded</span>
+        </TableToolbar>
+        {loading ? (
+          <TableState loading title="Loading marketplace requests" />
+        ) : error && !data ? (
+          <TableState error={error} onRetry={reload} />
+        ) : items.length ? (
+          <TableViewport embedded label="Buyer requests" minWidth={1020}>
+            <table className="provider-requests-table">
+              <caption className="sr-only">Buyer requests</caption>
+              <thead>
+                <tr>
+                  <th scope="col">Request</th>
+                  <th scope="col">Auction</th>
+                  <th scope="col">Resources / region</th>
+                  <th scope="col" className="numeric-cell">
+                    Duration
+                  </th>
+                  <th scope="col" className="numeric-cell">
+                    Buyer maximum
+                  </th>
+                  <th scope="col" className="actions-cell">
+                    Action
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((request) => (
+                  <ProviderRequestCard
+                    key={request.id}
+                    request={request}
+                    basePriceCents={dashboard.data?.policy.basePriceCents ?? DEFAULT_PRICE_CENTS}
+                    onBid={() => {
+                      reload();
+                      dashboard.reload();
+                    }}
+                  />
+                ))}
+              </tbody>
+            </table>
+          </TableViewport>
+        ) : (
+          <TableState
+            title="No open buyer requests"
+            description="New customer requests appear during their 30-second auctions. This view refreshes automatically."
           />
-        </section>
-      )}
-      <LoadMore
-        available={!!nextCursor}
-        loading={loadingMore}
-        onLoad={() => void loadMore()}
-        error={moreError}
-      />
+        )}
+        <TableFooter count={data?.items.length} noun="requests">
+          <LoadMore
+            available={!!nextCursor}
+            loading={loadingMore}
+            onLoad={() => void loadMore()}
+            error={moreError}
+          />
+        </TableFooter>
+      </TablePanel>
     </>
   );
 }
@@ -953,6 +1064,7 @@ export function ProviderOfferings() {
       priceCents: DEFAULT_PRICE_CENTS,
     }),
     [showForm, setShowForm] = useState(false),
+    [expandedOffering, setExpandedOffering] = useState<string | null>(null),
     [busy, setBusy] = useState(''),
     [actionError, setActionError] = useState(''),
     [success, setSuccess] = useState(''),
@@ -1063,15 +1175,15 @@ export function ProviderOfferings() {
           {showForm ? 'Close form' : 'New offering'}
         </button>
       </PageHeader>
-      <div className="offering-muse-banner">
+      <div className="provider-assist-bar">
         <span className="icon-tile violet">
           <Sparkles size={22} />
         </span>
         <div>
-          <h3>Let demand point the way.</h3>
+          <h3>Supply recommendations</h3>
           <p>
-            Muse can suggest approved configurations from recent unmatched demand. The server checks
-            your saved limits and calculates every suggested total. Review before publishing.
+            Suggest approved configurations from recent buyer demand. Review configurations and
+            policy-checked totals before publishing.
           </p>
           <span>
             {modes.muse === 'fixture'
@@ -1091,8 +1203,8 @@ export function ProviderOfferings() {
         </button>
       </div>
       <ErrorBox
-        error={error || actionError || dashboard.error}
-        retry={error ? reload : dashboard.error ? dashboard.reload : undefined}
+        error={(data ? error : '') || actionError || dashboard.error}
+        retry={data && error ? reload : dashboard.error ? dashboard.reload : undefined}
       />
       {success && <SuccessBox>{success}</SuccessBox>}
       {suggestions && (
@@ -1272,80 +1384,160 @@ export function ProviderOfferings() {
           </form>
         </section>
       )}
-      {loading ? (
-        <Spinner label="Loading your offerings" />
-      ) : data?.items.length ? (
-        <div className="offerings-grid">
-          {data.items.map((item) => {
-            const config = catalog.find((c) => c.id === item.catalogId);
-            return (
-              <article
-                key={item.id}
-                className={`card offering-card ${!item.active ? 'offering-inactive' : ''}`}
-              >
-                <div className="offering-card-top">
-                  <span className="icon-tile neutral">
-                    <Server size={23} />
-                  </span>
-                  <span className={`quiet-badge ${item.active ? 'green-badge' : ''}`}>
-                    {item.active ? 'Published' : 'Inactive'}
-                  </span>
-                </div>
-                <h3>{item.name}</h3>
-                <p>{item.description}</p>
-                <div className="request-spec-tags">
-                  <span>{config?.cpu ?? '—'} vCPU</span>
-                  <span>{config?.memoryGb ?? '—'} GiB RAM</span>
-                  <span>{config?.region || 'Approved configuration'}</span>
-                </div>
-                <div className="offering-price">
-                  <strong>{money(item.priceCents)}</strong>
-                  <span>
-                    {item.pricing
-                      ? 'Published 30 minute baseline · review current quote before bidding'
-                      : 'fixed rental total'}
-                  </span>
-                </div>
-                <p className="field-hint">
-                  New rentals: you keep 85%; Broker receives 15% of the accepted total.
-                </p>
-                <div className="offering-card-footer">
-                  <span>
-                    Revision {item.revision}
-                    <span className="middle-dot">·</span>Demo supply
-                  </span>
-                  <button
-                    className="text-button"
-                    onClick={() => void toggle(item)}
-                    disabled={!!busy}
-                  >
-                    {busy === item.id ? 'Updating…' : item.active ? 'Unpublish' : 'Publish'}
-                  </button>
-                </div>
-              </article>
-            );
-          })}
-        </div>
-      ) : (
-        <section className="card">
-          <EmptyState
-            icon={<Layers3 size={26} />}
-            title="Your next offering starts here"
+      <TablePanel label="Instant offerings">
+        <TableToolbar>
+          <div>
+            <h2>Published supply</h2>
+            <p className="field-hint">Approved configurations and fixed rental totals</p>
+          </div>
+          <button className="button secondary small" onClick={reload}>
+            <RefreshCw size={14} />
+            Refresh
+          </button>
+        </TableToolbar>
+        {loading ? (
+          <TableState loading title="Loading your offerings" />
+        ) : error && !data ? (
+          <TableState error={error} onRetry={reload} />
+        ) : data?.items.length ? (
+          <TableViewport embedded label="Instant offerings" minWidth={960}>
+            <table className="provider-offerings-table">
+              <caption className="sr-only">Instant offerings</caption>
+              <thead>
+                <tr>
+                  <th scope="col">Offering</th>
+                  <th scope="col">Status</th>
+                  <th scope="col">Resources</th>
+                  <th scope="col">Region</th>
+                  <th scope="col" className="numeric-cell">
+                    Published total
+                  </th>
+                  <th scope="col" className="actions-cell">
+                    Action
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.items.map((item) => {
+                  const config = catalog.find((c) => c.id === item.catalogId);
+                  const expanded = expandedOffering === item.id;
+                  return (
+                    <Fragment key={item.id}>
+                      <tr>
+                        <td>
+                          <TableIdentity
+                            icon={<Server size={17} />}
+                            title={item.name}
+                            subtitle={config?.name || 'Approved configuration'}
+                          />
+                        </td>
+                        <td>
+                          <TableStatus tone={item.active ? 'success' : 'neutral'}>
+                            {item.active ? 'Published' : 'Inactive'}
+                          </TableStatus>
+                        </td>
+                        <td className="provider-resource-cell">
+                          {config?.cpu ?? '—'} vCPU · {config?.memoryGb ?? '—'} GiB
+                        </td>
+                        <td>{config ? regionName(config.region) : '—'}</td>
+                        <td className="numeric-cell">
+                          {money(item.priceCents)}
+                          <small>
+                            {item.pricing ? '30 minute baseline' : 'Fixed rental total'}
+                          </small>
+                        </td>
+                        <td className="actions-cell">
+                          <TableActions>
+                            <button
+                              type="button"
+                              className="button secondary small"
+                              aria-expanded={expanded}
+                              aria-controls={`offering-details-${item.id}`}
+                              onClick={() => setExpandedOffering(expanded ? null : item.id)}
+                            >
+                              {expanded ? 'Hide details' : 'Manage offering'}
+                              <ChevronDown
+                                size={14}
+                                className={expanded ? 'provider-chevron-open' : ''}
+                              />
+                            </button>
+                          </TableActions>
+                        </td>
+                      </tr>
+                      <tr className="provider-expansion-row" hidden={!expanded}>
+                        <td colSpan={6}>
+                          <section
+                            id={`offering-details-${item.id}`}
+                            className="provider-expanded-content"
+                            aria-label={`${item.name} details`}
+                          >
+                            <div className="section-heading">
+                              <div>
+                                <h3>{item.name}</h3>
+                                <p className="muted-text">{item.description}</p>
+                              </div>
+                              <span className="small-muted">Revision {item.revision}</span>
+                            </div>
+                            <DetailRow label="Supported durations">
+                              {config?.durationMinutes.map((n) => `${n} min`).join(' · ') ||
+                                'Unavailable configuration'}
+                            </DetailRow>
+                            <DetailRow label="Supply">
+                              {dashboard.data?.provider.simulated === false
+                                ? 'Wick-managed allocation'
+                                : 'Simulated demo supply'}
+                            </DetailRow>
+                            <p className="field-hint">
+                              {item.pricing
+                                ? 'Published 30 minute baseline · review the current quote before bidding. '
+                                : ''}
+                              You keep 85%; Broker receives 15% of the accepted rental total.
+                            </p>
+                            <div className="form-actions">
+                              <button
+                                className="button secondary small"
+                                onClick={() => void toggle(item)}
+                                disabled={!!busy}
+                              >
+                                {busy === item.id
+                                  ? 'Updating…'
+                                  : item.active
+                                    ? 'Unpublish'
+                                    : 'Publish'}
+                              </button>
+                              <span className="field-hint">
+                                Applies to future bids. Awarded rentals retain their frozen quote.
+                              </span>
+                            </div>
+                          </section>
+                        </td>
+                      </tr>
+                    </Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
+          </TableViewport>
+        ) : (
+          <TableState
+            title="No offerings published"
             description="Choose an approved configuration and a fixed total price to publish your first offering."
           >
             <button className="button primary" onClick={() => setShowForm(true)}>
               <Plus size={15} />
               New offering
             </button>
-          </EmptyState>
-        </section>
-      )}
-      <LoadMore
-        available={!!nextCursor}
-        loading={loadingMore}
-        onLoad={() => void loadMore()}
-        error={moreError}
-      />
+          </TableState>
+        )}
+        <TableFooter count={data?.items.length} noun="offerings">
+          <LoadMore
+            available={!!nextCursor}
+            loading={loadingMore}
+            onLoad={() => void loadMore()}
+            error={moreError}
+          />
+        </TableFooter>
+      </TablePanel>
       <div className="info-note">
         <ShieldCheck size={17} />
         <p>
@@ -1400,40 +1592,42 @@ export function ProviderEarnings() {
       <div className="stats-grid">
         <StatCard
           label="Assessed instant-rental gross"
-          value={moneyMicros(gross)}
+          value={data ? moneyMicros(gross) : '—'}
           note="Loaded records with a frozen split"
           icon={<CircleDollarSign size={18} />}
         />
         <StatCard
           label="Instant-rental commission"
-          value={moneyMicros(fee)}
+          value={data ? moneyMicros(fee) : '—'}
           note="15% of the assessed gross"
           icon={<Layers3 size={18} />}
         />
         <StatCard
           label="Instant-rental net revenue"
-          value={moneyMicros(net)}
+          value={data ? moneyMicros(net) : '—'}
           note="85%, before your compute costs"
           icon={<CheckCircle2 size={18} />}
         />
       </div>
-      <ErrorBox error={error} retry={reload} />
-      <section className="card">
-        <div className="section-heading">
+      <ErrorBox error={data ? error : ''} retry={reload} />
+      <TablePanel label="Rental revenue">
+        <TableToolbar>
           <h2>Rental revenue</h2>
           <span>
-            {items.length} loaded{nextCursor ? ' · more available' : ''}
+            {data ? items.length : '—'} loaded{nextCursor ? ' · more available' : ''}
           </span>
-        </div>
-        <p className="field-hint">
+        </TableToolbar>
+        <p className="field-hint provider-panel-note">
           Totals cover only loaded records with an assessed split. Historical rentals without a
           frozen commission are unchanged and excluded. Fractions of a cent are preserved so Broker
           receives exactly 15%.
         </p>
         {loading ? (
-          <Spinner label="Loading provider earnings" />
+          <TableState loading />
+        ) : error && !data ? (
+          <TableState error={error} onRetry={reload} />
         ) : items.length ? (
-          <TableViewport label="Rental revenue" minWidth={1000} className="table-scroll">
+          <TableViewport embedded label="Rental revenue" minWidth={1000} className="table-scroll">
             <table>
               <caption className="sr-only">Rental revenue</caption>
               <thead>
@@ -1456,7 +1650,12 @@ export function ProviderEarnings() {
               <tbody>
                 {items.map((item) => (
                   <tr key={item.id} data-invoice-id={item.id}>
-                    <td>{item.id.slice(0, 8)}</td>
+                    <td>
+                      <TableIdentity
+                        icon={<CircleDollarSign size={16} />}
+                        title={<code>{item.id.slice(0, 8)}</code>}
+                      />
+                    </td>
                     <td>{item.catalogName || item.vmId.slice(0, 8)}</td>
                     <td>{shortDate(item.createdAt)}</td>
                     <td className="money-cell numeric-cell">{money(item.totalCents)}</td>
@@ -1471,9 +1670,9 @@ export function ProviderEarnings() {
                         : 'Not assessed'}
                     </td>
                     <td>
-                      <span className="quiet-badge">
+                      <TableStatus>
                         {item.revenueShare ? 'Recorded · no payout' : 'Historical · unchanged'}
-                      </span>
+                      </TableStatus>
                     </td>
                   </tr>
                 ))}
@@ -1481,19 +1680,20 @@ export function ProviderEarnings() {
             </table>
           </TableViewport>
         ) : (
-          <EmptyState
-            icon={<CircleDollarSign size={27} />}
+          <TableState
             title="Your first rental starts the record"
             description="A revenue split appears after a rental becomes ready. Failed or cancelled attempts before readiness create no earnings."
           />
         )}
-        <LoadMore
-          available={!!nextCursor}
-          loading={loadingMore}
-          onLoad={() => void loadMore()}
-          error={moreError}
-        />
-      </section>
+        <TableFooter count={data?.items.length} noun="records">
+          <LoadMore
+            available={!!nextCursor}
+            loading={loadingMore}
+            onLoad={() => void loadMore()}
+            error={moreError}
+          />
+        </TableFooter>
+      </TablePanel>
       <AgreementCharges provider />
     </>
   );
@@ -1519,8 +1719,7 @@ function ActivityList({ items }: { items: ActivityItem[] }) {
       ))}
     </div>
   ) : (
-    <EmptyState
-      icon={<Activity size={25} />}
+    <TableState
       title="Your activity will appear here"
       description="Capacity updates, bid decisions, and lifecycle changes are recorded as metadata."
     />
@@ -1541,24 +1740,28 @@ export function ProviderActivity() {
           Refresh
         </button>
       </PageHeader>
-      <ErrorBox error={error} retry={reload} />
-      <section className="card">
-        <div className="section-heading">
+      <ErrorBox error={data ? error : ''} retry={reload} />
+      <TablePanel label="Provider activity" className="provider-activity-panel">
+        <TableToolbar>
           <h2>Provider activity</h2>
           <span>Metadata only</span>
-        </div>
+        </TableToolbar>
         {loading ? (
-          <Spinner label="Loading activity" />
+          <TableState loading />
+        ) : error && !data ? (
+          <TableState error={error} onRetry={reload} />
         ) : (
           <ActivityList items={data?.items || []} />
         )}
-        <LoadMore
-          available={!!nextCursor}
-          loading={loadingMore}
-          onLoad={() => void loadMore()}
-          error={moreError}
-        />
-      </section>
+        <TableFooter count={data?.items.length} noun="events">
+          <LoadMore
+            available={!!nextCursor}
+            loading={loadingMore}
+            onLoad={() => void loadMore()}
+            error={moreError}
+          />
+        </TableFooter>
+      </TablePanel>
     </>
   );
 }
@@ -1637,8 +1840,8 @@ export function AdminConfig({ onUpdated }: { onUpdated: () => void }) {
           icon={<ShieldCheck size={18} />}
         />
       </div>
-      <section className="card admin-catalog">
-        <div className="section-heading">
+      <TablePanel label="Catalog configurations" className="provider-catalog-panel">
+        <TableToolbar>
           <div>
             <h2>Wick configuration catalog</h2>
             <p>
@@ -1665,8 +1868,13 @@ export function AdminConfig({ onUpdated }: { onUpdated: () => void }) {
               </>
             )}
           </button>
-        </div>
-        <TableViewport label="Catalog configurations" minWidth={820} className="table-scroll">
+        </TableToolbar>
+        <TableViewport
+          embedded
+          label="Catalog configurations"
+          minWidth={820}
+          className="table-scroll"
+        >
           <table>
             <caption className="sr-only">Catalog configurations</caption>
             <thead>
@@ -1731,7 +1939,8 @@ export function AdminConfig({ onUpdated }: { onUpdated: () => void }) {
             description="Sync metadata from the selected Wick adapter, then review and approve supported configurations."
           />
         )}
-      </section>
+        <TableFooter count={catalog.length} noun="configurations" />
+      </TablePanel>
       <div className="provider-two-column">
         <section className="card">
           <h2>Customer VM limit</h2>

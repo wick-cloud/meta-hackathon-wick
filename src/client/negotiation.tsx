@@ -1,7 +1,16 @@
-import { TableViewport } from './table';
+import {
+  TableActions,
+  TableFooter,
+  TableIdentity,
+  TablePanel,
+  TableState,
+  TableStatus,
+  TableToolbar,
+  TableViewport,
+} from './table';
 import './negotiation.css';
 import { useEffect, useState, type FormEvent } from 'react';
-import { ArrowRight, ChevronLeft, Sparkles } from 'lucide-react';
+import { ArrowRight, ChevronLeft, Layers3, RefreshCw, Sparkles } from 'lucide-react';
 import {
   museLabel,
   DEFAULT_PRICE_CENTS,
@@ -543,38 +552,118 @@ export function AlternativeList() {
       <PageHeader
         eyebrow="SAVED BUYER INTENTS"
         title="Alternatives"
-        description="Nonbinding requirements and proposals stay separate from rentals until you accept an exact offer."
-      />
-      <Link href="/alternatives/new" className="button primary">
-        Review a new intent
-        <ArrowRight size={16} />
-      </Link>
-      <ErrorBox error={error} retry={reload} />
-      {loading ? (
-        <Spinner label="Loading saved alternatives" />
-      ) : data?.items.length ? (
-        <div className="negotiation-cards">
-          {data.items.map((intent) => (
-            <section className="card" key={intent.id}>
-              <h2>{intent.description}</h2>
-              <DesiredSummary desired={intent.desired} />
-              <p>
-                {intent.status} ·{' '}
-                {intent.sourceMode === 'fixture' ? 'Fixture rental source' : 'Wick rental source'}
-              </p>
-              <Link href={`/alternatives/${intent.id}`} className="button secondary">
-                Review alternatives
-                <ArrowRight size={16} />
-              </Link>
-            </section>
-          ))}
-        </div>
-      ) : (
-        <EmptyState
-          title="No saved intents yet"
-          description="Start with exactly what you want, including requirements unavailable in the current catalog."
-        />
-      )}
+        description="Review nonbinding requirements and proposals before accepting an exact offer."
+      >
+        <Link href="/alternatives/new" className="button primary">
+          Review a new intent
+          <ArrowRight size={16} />
+        </Link>
+      </PageHeader>
+      <TablePanel label="Saved alternatives">
+        <TableToolbar>
+          <div>
+            <h2>Saved intents</h2>
+            <p className="field-hint">No rental starts until you accept an exact offer.</p>
+          </div>
+          <button className="button secondary small" onClick={reload}>
+            <RefreshCw size={14} />
+            Refresh
+          </button>
+        </TableToolbar>
+        <ErrorBox error={data ? error : ''} retry={reload} />
+        {loading ? (
+          <TableState loading />
+        ) : error && !data ? (
+          <TableState error={error} onRetry={reload} />
+        ) : data?.items.length ? (
+          <>
+            <TableViewport embedded label="Saved alternatives" minWidth={1000}>
+              <table className="alternatives-table">
+                <caption className="sr-only">Saved alternatives</caption>
+                <thead>
+                  <tr>
+                    <th scope="col">Intent</th>
+                    <th scope="col">Status</th>
+                    <th scope="col">Requirements</th>
+                    <th scope="col">Region</th>
+                    <th scope="col" className="numeric-cell">
+                      Maximum total
+                    </th>
+                    <th scope="col">Created</th>
+                    <th scope="col" className="actions-cell">
+                      Action
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.items.map((intent) => (
+                    <tr key={intent.id}>
+                      <td>
+                        <TableIdentity
+                          icon={<Layers3 size={17} />}
+                          title={
+                            <Link href={`/alternatives/${intent.id}`}>{intent.description}</Link>
+                          }
+                          subtitle={<code>{intent.id.slice(0, 8)}</code>}
+                        />
+                      </td>
+                      <td>
+                        <TableStatus
+                          tone={
+                            intent.status === 'accepted'
+                              ? 'success'
+                              : intent.status === 'open'
+                                ? 'warning'
+                                : 'neutral'
+                          }
+                        >
+                          {intent.status === 'open'
+                            ? 'Open'
+                            : intent.status === 'accepted'
+                              ? 'Accepted'
+                              : 'Resolved'}
+                        </TableStatus>
+                        <small>
+                          {intent.sourceMode === 'fixture'
+                            ? 'Fixture rental source'
+                            : 'Wick rental source'}
+                        </small>
+                      </td>
+                      <td>
+                        {intent.desired.cpu} vCPU · {intent.desired.memoryGb} GiB
+                        <small>
+                          {intent.desired.durationMinutes} min
+                          {intent.desired.gpu ? ` · ${intent.desired.gpu}` : ''}
+                        </small>
+                      </td>
+                      <td>{regionName(intent.desired.region)}</td>
+                      <td className="numeric-cell">{money(intent.desired.maxPriceCents)}</td>
+                      <td>{dateTime(intent.createdAt)}</td>
+                      <td className="actions-cell">
+                        <TableActions>
+                          <Link
+                            href={`/alternatives/${intent.id}`}
+                            className="button secondary small"
+                          >
+                            Review alternatives
+                            <ArrowRight size={14} />
+                          </Link>
+                        </TableActions>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </TableViewport>
+          </>
+        ) : (
+          <TableState
+            title="No saved intents yet"
+            description="Start with exactly what you want, including requirements unavailable in the current catalog."
+          />
+        )}
+        <TableFooter count={data?.items.length} noun="intents" />
+      </TablePanel>
     </>
   );
 }
@@ -739,42 +828,53 @@ export function AlternativeDetail({ id }: { id: string }) {
           <p>
             {selected.providerName} · {selected.catalogName}
           </p>
-          <TableViewport label="Alternative comparison" minWidth={680} className="table-scroll">
-            <table>
-              <caption className="sr-only">Alternative comparison</caption>
-              <thead>
-                <tr>
-                  <th scope="col">Dimension</th>
-                  <th scope="col">Originally requested</th>
-                  <th scope="col">Reviewed alternative</th>
-                </tr>
-              </thead>
-              <tbody>
-                {[
-                  ['vCPUs', selected.before.cpu, selected.after.cpu],
-                  ['Memory (GiB)', selected.before.memoryGb, selected.after.memoryGb],
-                  ['GPU', selected.before.gpu || 'None', selected.after.gpu || 'None'],
-                  ['Region', regionName(selected.before.region), regionName(selected.after.region)],
-                  [
-                    'Duration (minutes)',
-                    selected.before.durationMinutes,
-                    selected.after.durationMinutes,
-                  ],
-                  [
-                    'Maximum total',
-                    money(selected.before.maxPriceCents),
-                    money(intent.flexibility.hardMaxPriceCents),
-                  ],
-                ].map(([label, before, after]) => (
-                  <tr key={label}>
-                    <th scope="row">{label}</th>
-                    <td>{before}</td>
-                    <td>{after}</td>
+          <TablePanel embedded label="Alternative comparison">
+            <TableViewport
+              embedded
+              label="Alternative comparison"
+              minWidth={680}
+              className="table-scroll"
+            >
+              <table>
+                <caption className="sr-only">Alternative comparison</caption>
+                <thead>
+                  <tr>
+                    <th scope="col">Dimension</th>
+                    <th scope="col">Originally requested</th>
+                    <th scope="col">Reviewed alternative</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </TableViewport>
+                </thead>
+                <tbody>
+                  {[
+                    ['vCPUs', selected.before.cpu, selected.after.cpu],
+                    ['Memory (GiB)', selected.before.memoryGb, selected.after.memoryGb],
+                    ['GPU', selected.before.gpu || 'None', selected.after.gpu || 'None'],
+                    [
+                      'Region',
+                      regionName(selected.before.region),
+                      regionName(selected.after.region),
+                    ],
+                    [
+                      'Duration (minutes)',
+                      selected.before.durationMinutes,
+                      selected.after.durationMinutes,
+                    ],
+                    [
+                      'Maximum total',
+                      money(selected.before.maxPriceCents),
+                      money(intent.flexibility.hardMaxPriceCents),
+                    ],
+                  ].map(([label, before, after]) => (
+                    <tr key={label}>
+                      <th scope="row">{label}</th>
+                      <td>{before}</td>
+                      <td>{after}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </TableViewport>
+          </TablePanel>
           <DetailRow label="Fixed full rental total">
             {money(selected.totalPriceCents)} · No payment due
           </DetailRow>

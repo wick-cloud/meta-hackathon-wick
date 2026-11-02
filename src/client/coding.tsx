@@ -33,8 +33,23 @@ import {
   useNow,
   useResource,
 } from './components';
-import { TableViewport } from './table';
-import { baselineTest, codingPolling, jobState, stepState, testResult } from './coding-state';
+import {
+  TableViewport,
+  TablePanel,
+  TableTabs,
+  TableFooter,
+  TableIdentity,
+  TableState,
+  TableStatus,
+} from './table';
+import {
+  baselineTest,
+  codingPolling,
+  jobState,
+  stepState,
+  testResult,
+  type CodingTone,
+} from './coding-state';
 import './coding.css';
 
 const labels: Record<string, string> = {
@@ -48,6 +63,8 @@ const labels: Record<string, string> = {
   failed: 'Failed',
   ready: 'Ready for review',
 };
+const statusTone = (tone: CodingTone) =>
+  tone === 'error' ? 'danger' : tone === 'active' ? 'info' : tone;
 const finished = (job: CodingJob) => ['ready', 'failed', 'stopped'].includes(job.status);
 const Meta = () => (
   <span className="coding-meta">
@@ -57,9 +74,22 @@ const Meta = () => (
 );
 function JobStatus({ job }: { job: CodingJob }) {
   return (
-    <span className={`coding-status ${job.status}`} role="status">
+    <TableStatus
+      role="status"
+      tone={
+        job.status === 'ready'
+          ? 'success'
+          : job.status === 'failed'
+            ? 'danger'
+            : ['needs_allowance', 'uncertain', 'paused'].includes(job.status)
+              ? 'warning'
+              : finished(job)
+                ? 'neutral'
+                : 'info'
+      }
+    >
       {labels[job.status]}
-    </span>
+    </TableStatus>
   );
 }
 interface Options {
@@ -153,7 +183,7 @@ export function CodingStudio({ search = '' }: { search?: string }) {
           </button>
         )}
       </PageHeader>
-      <ErrorBox error={options.error || list.error} />
+      <ErrorBox error={options.error || (list.data ? list.error : '')} />
       {data?.mode === 'fixture' && (
         <div className="coding-notice">
           Fixture environment: coding execution and Meta responses require explicit test adapters.
@@ -165,7 +195,7 @@ export function CodingStudio({ search = '' }: { search?: string }) {
           <form className="coding-panel" onSubmit={openReview}>
             <div className="coding-title">
               <h2>What should Muse work on?</h2>
-              <span className="coding-status">Public GitHub only</span>
+              <TableStatus>Public GitHub only</TableStatus>
             </div>
             <label className="field">
               <span>Public repository URL</span>
@@ -340,35 +370,39 @@ export function CodingStudio({ search = '' }: { search?: string }) {
           </aside>
         </div>
       )}
-      <section className="coding-history">
-        <div className="coding-title">
+      <TablePanel className="coding-history" label="Coding jobs">
+        <TableTabs>
           <h2>Coding jobs</h2>
           <span className="coding-note">Saved across navigation and refresh</span>
-        </div>
+        </TableTabs>
         {list.loading ? (
-          <Spinner label="Loading coding jobs" />
+          <TableState loading title="Loading coding jobs" />
+        ) : !list.data && list.error ? (
+          <TableState error={list.error} onRetry={list.reload} />
         ) : !list.data?.items.length ? (
-          <div className="coding-empty">
-            <Code2 size={24} />
-            <h3>Your next fix starts here.</h3>
-            <p>Pick a public repository, a VM, and a funded agent.</p>
+          <TableState
+            title="Your next fix starts here."
+            description="Pick a public repository, a VM, and a funded agent."
+          >
             {!compose && (
               <button className="button primary" onClick={() => setCompose(true)}>
                 Create a coding task
               </button>
             )}
-          </div>
+          </TableState>
         ) : (
           <TableViewport label="Coding jobs" minWidth={680}>
-            <table className="data-table">
+            <table className="data-table" aria-label="Coding jobs">
               <thead>
                 <tr>
-                  <th>Task</th>
-                  <th>Repository</th>
-                  <th>Status</th>
-                  <th>Meta calls</th>
-                  <th>Created</th>
-                  <th>
+                  <th scope="col">Task</th>
+                  <th scope="col">Repository</th>
+                  <th scope="col">Status</th>
+                  <th scope="col" className="numeric-cell">
+                    Meta calls
+                  </th>
+                  <th scope="col">Created</th>
+                  <th scope="col" className="actions-cell">
                     <span className="sr-only">Action</span>
                   </th>
                 </tr>
@@ -377,8 +411,10 @@ export function CodingStudio({ search = '' }: { search?: string }) {
                 {list.data.items.map((job) => (
                   <tr key={job.id}>
                     <td>
-                      <Link href={'/studio/jobs/' + job.id}>{job.goal.slice(0, 65)}</Link>
-                      <small>CJ-{job.id.slice(0, 8)}</small>
+                      <TableIdentity
+                        title={<Link href={'/studio/jobs/' + job.id}>{job.goal.slice(0, 65)}</Link>}
+                        subtitle={'CJ-' + job.id.slice(0, 8)}
+                      />
                     </td>
                     <td>
                       {job.repositoryUrl.replace('https://github.com/', '')}
@@ -387,10 +423,10 @@ export function CodingStudio({ search = '' }: { search?: string }) {
                     <td>
                       <JobStatus job={job} />
                     </td>
-                    <td>{job.modelCalls}</td>
+                    <td className="numeric-cell">{job.modelCalls}</td>
                     <td>{dateTime(job.createdAt)}</td>
-                    <td>
-                      <Link href={'/studio/jobs/' + job.id}>
+                    <td className="actions-cell">
+                      <Link className="table-open-link" href={'/studio/jobs/' + job.id}>
                         Open <ArrowRight size={14} />
                       </Link>
                     </td>
@@ -400,7 +436,7 @@ export function CodingStudio({ search = '' }: { search?: string }) {
             </table>
           </TableViewport>
         )}
-        <div className="coding-actions">
+        <TableFooter count={list.data?.items.length} noun="jobs">
           {cursor && (
             <Link className="button secondary" href="/studio">
               Newest jobs
@@ -414,8 +450,8 @@ export function CodingStudio({ search = '' }: { search?: string }) {
               Older jobs <ArrowRight size={14} />
             </Link>
           )}
-        </div>
-      </section>
+        </TableFooter>
+      </TablePanel>
       {review && (
         <MarketDialog titleId="coding-review-title" onClose={() => setReview(false)} busy={busy}>
           <h2 id="coding-review-title">Review this coding task</h2>
@@ -487,9 +523,9 @@ function TestRun({ step, current = true }: { step: CodingStep; current?: boolean
     <section className="coding-test-result">
       <div className="coding-title">
         <h3>{baselineTest(step) ? 'Before changes' : 'After changes'}</h3>
-        <span className={'coding-status ' + (stale ? 'warning' : state.tone)}>
+        <TableStatus tone={stale ? 'warning' : statusTone(state.tone)}>
           {stale ? 'Fresh verification needed' : state.label}
-        </span>
+        </TableStatus>
       </div>
       {state.message && <p className="coding-note">{state.message}</p>}
       {stale && (
@@ -611,10 +647,8 @@ export function CodingJobPage({ id }: { id: string }) {
         <span>
           Meta calls <strong>{job.modelCalls}</strong>
         </span>
-        <span className={'coding-status ' + state.tone}>{state.label}</span>
-        {job.mode === 'fixture' && (
-          <span className="coding-status">Fixture job · no live execution</span>
-        )}
+        <TableStatus tone={statusTone(state.tone)}>{state.label}</TableStatus>
+        {job.mode === 'fixture' && <TableStatus>Fixture job · no live execution</TableStatus>}
       </div>
       {(detail.error || error) && (
         <section className="coding-notice error" role="alert">
@@ -742,9 +776,9 @@ export function CodingJobPage({ id }: { id: string }) {
               <>
                 <div className="coding-title">
                   <h2>Latest test result</h2>
-                  <span className={'coding-status ' + (job.testsPassed ? 'success' : 'warning')}>
+                  <TableStatus tone={job.testsPassed ? 'success' : 'warning'}>
                     {job.testsPassed ? 'Passed after last edit' : 'Verification needed'}
-                  </span>
+                  </TableStatus>
                 </div>
                 <code className="coding-test-command">{job.testCommand}</code>
                 {latestTest ? (
@@ -805,11 +839,11 @@ export function CodingJobPage({ id }: { id: string }) {
                           {r?.action?.action ?? 'Model request'}
                           {r?.action?.path ? ' · ' + r.action.path : ''}
                         </span>
-                        <span className={'coding-status ' + outcome.tone}>
+                        <TableStatus tone={statusTone(outcome.tone)}>
                           {step.receipt?.status === 'settled' && outcome.tone === 'success'
                             ? 'Settled'
                             : outcome.label}
-                        </span>
+                        </TableStatus>
                       </summary>
                       {r?.action?.summary && <p>{r.action.summary}</p>}
                       <p className="coding-note">

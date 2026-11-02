@@ -1122,8 +1122,13 @@ test('provider reviews Muse rates, publishes a selling window, and switches to c
   await page.getByLabel('Stop accepting sales').fill('2026-11-01T06:00');
   await page.getByRole('button', { name: 'Save token offering', exact: true }).click();
   const save = f.writes.find((w) => w.path.endsWith('/offering'))!;
-  expect(save.body.salesStartAt).toBeTruthy();
-  expect(Date.parse(save.body.salesEndAt) - Date.parse(save.body.salesStartAt)).toBe(6 * 3600000);
+  // Datetime-local fields preserve the chosen wall times, including a DST transition.
+  const expectedWindow = await page.evaluate(() => ({
+    start: new Date('2026-11-01T00:00').toISOString(),
+    end: new Date('2026-11-01T06:00').toISOString(),
+  }));
+  expect(save.body.salesStartAt).toBe(expectedWindow.start);
+  expect(save.body.salesEndAt).toBe(expectedWindow.end);
   await page.getByRole('link', { name: 'Commitments', exact: true }).click();
   await expect(page).toHaveURL('/provider/inference?tab=commitments');
   await expect(

@@ -43,43 +43,7 @@
 .coding-title h2 {
   margin: 0;
 }
-.coding-status {
-  display: inline-flex;
-  align-items: center;
-  padding: 4px 8px;
-  border-radius: 5px;
-  background: var(--surface-hover);
-  color: var(--muted);
-  font-size: 11px;
-  white-space: nowrap;
-}
-.coding-status.ready {
-  background: #17271d;
-  color: #a1d8b4;
-}
-.coding-status.running,
-.coding-status.needs_allowance,
-.coding-status.uncertain {
-  background: var(--accent-soft);
-  color: var(--accent);
-}
-.coding-status.failed {
-  color: #efa8a8;
-  background: #291a1c;
-}
-.coding-status.success {
-  background: #17271d;
-  color: #a1d8b4;
-}
-.coding-status.error {
-  background: #291a1c;
-  color: #efa8a8;
-}
-.coding-status.warning,
-.coding-status.active {
-  background: var(--accent-soft);
-  color: var(--accent);
-}
+
 .coding-page .field {
   margin-bottom: 17px;
 }
@@ -132,12 +96,6 @@
 .coding-history {
   margin-top: 25px;
 }
-.coding-page table small {
-  display: block;
-  color: var(--muted);
-  font-size: 11px;
-  margin-top: 4px;
-}
 .coding-empty {
   display: flex;
   align-items: center;
@@ -176,7 +134,7 @@
   gap: 7px;
   margin-right: auto;
 }
-.coding-jobbar > span:not(.coding-status) {
+.coding-jobbar > span:not(.table-status) {
   color: var(--muted);
 }
 .coding-jobbar strong {

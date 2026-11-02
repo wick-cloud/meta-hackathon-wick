@@ -2,17 +2,15 @@ import { ArrowRight, Layers3, ShieldCheck, Wallet } from 'lucide-react';
 import type { CreditHistory, CreditWallet } from '../shared/agreements';
 import { dateTime, money } from './api';
 import {
-  EmptyState,
   ErrorBox,
   Link,
   LoadMore,
   PageHeader,
-  Spinner,
   StatCard,
   usePagedResource,
   useResource,
 } from './components';
-import { TableViewport } from './table';
+import { TableViewport, TablePanel, TableTabs, TableFooter, TableState } from './table';
 import './market.css';
 
 export function Credits() {
@@ -30,7 +28,7 @@ export function Credits() {
         </Link>
       </PageHeader>
       <ErrorBox
-        error={wallet.error || history.error}
+        error={wallet.error || (history.data ? history.error : '')}
         retry={() => {
           wallet.reload();
           history.reload();
@@ -67,10 +65,14 @@ export function Credits() {
           standalone VM rentals keep their existing billing.
         </p>
       </div>
-      <section className="card market-panel">
-        <h2>Credit history</h2>
+      <TablePanel label="Credit history">
+        <TableTabs>
+          <h2>Credit history</h2>
+        </TableTabs>
         {history.loading ? (
-          <Spinner label="Loading credit history" />
+          <TableState loading title="Loading credit history" />
+        ) : history.error && !history.data ? (
+          <TableState error={history.error} onRetry={history.reload} />
         ) : history.data?.items.length ? (
           <TableViewport label="Wallet ledger" minWidth={760} className="market-table-scroll">
             <table className="market-table">
@@ -114,19 +116,20 @@ export function Credits() {
             </table>
           </TableViewport>
         ) : (
-          <EmptyState
-            icon={<Wallet size={25} />}
+          <TableState
             title="No credit entries yet"
             description="Credit grants, agent funding and task purchases will appear here."
           />
         )}
-        <LoadMore
-          available={!!history.nextCursor}
-          loading={history.loadingMore}
-          onLoad={() => void history.loadMore()}
-          error={history.moreError}
-        />
-      </section>
+        <TableFooter count={history.data?.items.length} noun="entries">
+          <LoadMore
+            available={!!history.nextCursor}
+            loading={history.loadingMore}
+            onLoad={() => void history.loadMore()}
+            error={history.moreError}
+          />
+        </TableFooter>
+      </TablePanel>
     </>
   );
 }

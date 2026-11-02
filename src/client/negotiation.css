@@ -38,7 +38,20 @@
 }
 
 [aria-label='Final counteroffer review'] .table-scroll {
+  margin: 0;
+}
+
+[aria-label='Final counteroffer review'] > .data-table-panel {
   margin: 20px 0;
+}
+
+.alternatives-table td:first-child {
+  min-width: 240px;
+  max-width: 380px;
+}
+
+.alternatives-table .data-table-identity a:hover {
+  color: var(--accent);
 }
 
 [aria-label='Final counteroffer review'] li {
