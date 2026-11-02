@@ -32,6 +32,12 @@ import {
 import { retirePackLocked } from './market.js';
 import { studioAuthority } from '../coding/studio-budget.js';
 import { seal } from '../coding/artifacts.js';
+import {
+  planTokenAllowance,
+  tokenAllowanceGroups,
+  repairLegacyAllowance,
+  type AllowanceRoute,
+} from './allowance.js';
 
 function inferenceFailure(code: string, id: string, message: string): never {
   try {
@@ -64,24 +70,81 @@ function requireGrantKey(actor: Actor) {
     failure(403, 'grant_key_required', 'Inference requires a grant-bound agent API key.');
   return actor.apiKey.grantId;
 }
-/** Locks grant → routes (sorted) → pack → request, also used for recovery and operator settlement. */
+/** Locks grant -> ordered routes -> ordered packs -> request. Allocation rows are immutable. */
 async function lockRequest(db: PoolClient, meta: Row) {
   const grant = (
     await db.query('SELECT * FROM broker_inference_grants WHERE id=$1 FOR UPDATE', [meta.grant_id])
   ).rows[0];
   await db.query('SELECT provider FROM broker_inference_routes ORDER BY provider FOR UPDATE');
-  const pack = (
-    await db.query('SELECT * FROM broker_token_packs WHERE id=$1 FOR UPDATE', [meta.pack_id])
-  ).rows[0];
+  const initial = (await db.query('SELECT * FROM broker_inference_requests WHERE id=$1', [meta.id]))
+    .rows[0];
+  const recorded = (
+    await db.query(
+      'SELECT * FROM broker_inference_allocations WHERE request_id=$1 ORDER BY allocation_order LIMIT 10',
+      [meta.id],
+    )
+  ).rows;
+  // Existing requests predate allocation rows and keep their original exact hold.
+  const rows = recorded.length
+    ? recorded
+    : [
+        {
+          request_id: initial.id,
+          pack_id: initial.pack_id,
+          allocation_order: 0,
+          reserved_input: initial.reserved_input,
+          reserved_output: initial.reserved_output,
+        },
+      ];
+  const packs = (
+    await db.query(
+      'SELECT * FROM broker_token_packs WHERE id=ANY($1::uuid[]) ORDER BY id FOR UPDATE',
+      [rows.map((r) => r.pack_id)],
+    )
+  ).rows;
+  const allocations = rows.map((r) => ({ ...r, pack: packs.find((p) => p.id === r.pack_id)! }));
+  if (
+    allocations.some(
+      (a) =>
+        !a.pack ||
+        a.pack.grant_id !== grant.id ||
+        a.pack.provider !== initial.provider ||
+        a.pack.source_mode !== initial.source_mode,
+    )
+  )
+    throw new Error('Invalid persisted token allocation identity.');
+  const anchor = packs.find((p) => p.id === initial.pack_id)!;
+  if (
+    !anchor ||
+    allocations.some(
+      (a) =>
+        a.pack.provider_id !== anchor.provider_id ||
+        a.pack.route_fingerprint !== anchor.route_fingerprint,
+    ) ||
+    allocations.reduce((n, a) => n + a.reserved_input, 0) !== initial.reserved_input ||
+    allocations.reduce((n, a) => n + a.reserved_output, 0) !== initial.reserved_output
+  )
+    throw new Error('Invalid persisted token allocation conservation.');
   const request = (
     await db.query('SELECT * FROM broker_inference_requests WHERE id=$1 FOR UPDATE', [meta.id])
   ).rows[0];
-  return { grant, pack, request };
+  return { grant, pack: anchor, request, allocations };
+}
+async function packScopedRequest(db: PoolClient, request: Row, packId: string | undefined) {
+  if (!packId) return true;
+  if (request.pack_id !== packId) return false;
+  return !(
+    await db.query(
+      'SELECT 1 FROM broker_inference_allocations WHERE request_id=$1 AND pack_id<>$2 LIMIT 1',
+      [request.id, packId],
+    )
+  ).rowCount;
 }
 async function settleLocked(
   db: PoolClient,
   pack: Row,
   request: Row,
+  allocations: Row[],
   inputTokens: number,
   outputTokens: number,
   rejected: boolean,
@@ -97,37 +160,74 @@ async function settleLocked(
       'usage_exceeds_reservation',
       'Usage exceeds certified bounds. Keep the reservation and resolve the accounting contract violation separately.',
     );
-  const spareInput = request.reserved_input - inputTokens,
-    spareOutput = request.reserved_output - outputTokens;
-  const retiring = pack.status !== 'active';
+  let inputLeft = inputTokens,
+    outputLeft = outputTokens;
+  let removedInput = 0,
+    removedOutput = 0;
+  const deltas = allocations.map((allocation) => {
+    const retiring = allocation.pack.status !== 'active';
+    const usedInput = Math.min(inputLeft, allocation.reserved_input);
+    const usedOutput = Math.min(outputLeft, allocation.reserved_output);
+    inputLeft -= usedInput;
+    outputLeft -= usedOutput;
+    const spareInput = allocation.reserved_input - usedInput;
+    const spareOutput = allocation.reserved_output - usedOutput;
+    removedInput += retiring ? allocation.reserved_input : usedInput;
+    removedOutput += retiring ? allocation.reserved_output : usedOutput;
+    return {
+      pack_id: allocation.pack_id,
+      reserved_input: allocation.reserved_input,
+      reserved_output: allocation.reserved_output,
+      input_tokens: usedInput,
+      output_tokens: usedOutput,
+      available_input: retiring ? 0 : spareInput,
+      available_output: retiring ? 0 : spareOutput,
+      retired_input: retiring ? spareInput : 0,
+      retired_output: retiring ? spareOutput : 0,
+    };
+  });
+  if (inputLeft || outputLeft) throw new Error('Token allocation settlement conservation failed.');
+  const updatedPacks = (
+    await db.query(
+      `UPDATE broker_token_packs p SET held_input=p.held_input-a.reserved_input,held_output=p.held_output-a.reserved_output,
+     consumed_input=p.consumed_input+a.input_tokens,consumed_output=p.consumed_output+a.output_tokens,
+     available_input=p.available_input+a.available_input,available_output=p.available_output+a.available_output,
+     retired_input=p.retired_input+a.retired_input,retired_output=p.retired_output+a.retired_output
+     FROM jsonb_to_recordset($1::jsonb) AS a(pack_id uuid,reserved_input integer,reserved_output integer,
+       input_tokens integer,output_tokens integer,available_input integer,available_output integer,retired_input integer,retired_output integer)
+     WHERE p.id=a.pack_id RETURNING p.*`,
+      [JSON.stringify(deltas)],
+    )
+  ).rows;
   await db.query(
-    `UPDATE broker_token_packs SET held_input=held_input-$2,held_output=held_output-$3,
-    consumed_input=consumed_input+$4,consumed_output=consumed_output+$5,
-    available_input=available_input+$6,available_output=available_output+$7,
-    retired_input=retired_input+$8,retired_output=retired_output+$9 WHERE id=$1`,
-    [
-      pack.id,
-      request.reserved_input,
-      request.reserved_output,
-      inputTokens,
-      outputTokens,
-      retiring ? 0 : spareInput,
-      retiring ? 0 : spareOutput,
-      retiring ? spareInput : 0,
-      retiring ? spareOutput : 0,
-    ],
+    `UPDATE broker_inference_allocations a SET input_tokens=d.input_tokens,output_tokens=d.output_tokens
+     FROM jsonb_to_recordset($2::jsonb) AS d(pack_id uuid,input_tokens integer,output_tokens integer)
+     WHERE a.request_id=$1 AND a.pack_id=d.pack_id`,
+    [request.id, JSON.stringify(deltas)],
   );
   await db.query(
-    `UPDATE broker_inference_routes SET held_calls=held_calls-1,outstanding_input=outstanding_input-$2,outstanding_output=outstanding_output-$3 WHERE provider=$1`,
-    [
-      pack.provider,
-      retiring ? request.reserved_input : inputTokens,
-      retiring ? request.reserved_output : outputTokens,
-    ],
+    'UPDATE broker_inference_routes SET held_calls=held_calls-1,outstanding_input=outstanding_input-$2,outstanding_output=outstanding_output-$3 WHERE provider=$1',
+    [pack.provider, removedInput, removedOutput],
   );
+  const exhausted = updatedPacks.filter(
+    (p) =>
+      p.status === 'active' &&
+      !Number(p.held_input) &&
+      !Number(p.held_output) &&
+      !Number(p.available_input) &&
+      !Number(p.available_output),
+  );
+  if (exhausted.length)
+    await db.query(
+      "UPDATE broker_token_packs SET status='settled',retirement_reason='quota_exhausted',refund_evidence=NULL WHERE id=ANY($1::uuid[]) AND status='active' AND held_input=0 AND held_output=0 AND available_input=0 AND available_output=0",
+      [exhausted.map((p) => p.id)],
+    );
+  // Retiring provider-failure packs retain their individual immutable refund ledger.
+  for (const updated of updatedPacks)
+    if (updated.status !== 'active') await retirePackLocked(db, updated, updated.retirement_reason);
   await db.query(
     `UPDATE broker_inference_requests SET status=$2,input_tokens=$3,output_tokens=$4,failure_code=$5,provider_request_id=$6,
-    usage_evidence=$7,resolution_actor=$8,completed_at=clock_timestamp() WHERE id=$1`,
+     usage_evidence=$7,resolution_actor=$8,completed_at=clock_timestamp() WHERE id=$1`,
     [
       request.id,
       rejected ? 'rejected' : 'settled',
@@ -146,21 +246,20 @@ async function settleLocked(
     rejected ? 'usage_released' : 'usage_settled',
     request.id,
     actorId,
-    { inputTokens, outputTokens, ...(evidence ? { evidence } : {}) },
+    {
+      inputTokens,
+      outputTokens,
+      allocations: allocations.map((a) => ({
+        packId: a.pack_id,
+        reservedInputTokens: a.reserved_input,
+        reservedOutputTokens: a.reserved_output,
+      })),
+      ...(evidence ? { evidence } : {}),
+    },
   );
-  const updated = (await db.query('SELECT * FROM broker_token_packs WHERE id=$1', [pack.id]))
-    .rows[0];
-  if (retiring) await retirePackLocked(db, updated, pack.retirement_reason);
-  else if (
-    !Number(updated.held_input) &&
-    !Number(updated.held_output) &&
-    (Number(updated.available_input) < Number(pack.snapshot.minimumInputReservation) ||
-      Number(updated.available_output) < Number(pack.snapshot.minimumOutputTokens ?? 1))
-  )
-    await retirePackLocked(db, updated, 'quota_exhausted');
   await db.query(
     `UPDATE broker_inference_grants g SET status='closed' WHERE g.id=$1 AND g.status='closing'
-    AND held_cents=0 AND NOT EXISTS(SELECT 1 FROM broker_inference_requests WHERE grant_id=g.id AND status NOT IN('settled','rejected','written_off'))`,
+     AND held_cents=0 AND NOT EXISTS(SELECT 1 FROM broker_inference_requests WHERE grant_id=g.id AND status NOT IN('settled','rejected','written_off'))`,
     [request.grant_id],
   );
 }
@@ -177,7 +276,7 @@ export async function settleRequest(
   ).rows[0];
   if (!meta) return;
   await transaction(ctx.pool, async (db) => {
-    const { pack, request } = await lockRequest(db, meta);
+    const { pack, request, allocations } = await lockRequest(db, meta);
     if (['settled', 'rejected', 'written_off'].includes(request.status)) return;
     if (
       result &&
@@ -206,6 +305,7 @@ export async function settleRequest(
       db,
       pack,
       request,
+      allocations,
       result?.inputTokens ?? 0,
       result?.outputTokens ?? 0,
       !result,
@@ -407,7 +507,7 @@ async function completeInternal(
       )
     ).rows[0];
     if (prior) {
-      if (actor.apiKey?.packId && prior.pack_id !== actor.apiKey.packId)
+      if (!(await packScopedRequest(db, prior, actor.apiKey?.packId)))
         failure(403, 'pack_scope', 'This request belongs to another token batch.');
       if (prior.input_fingerprint !== fingerprint)
         failure(
@@ -447,6 +547,7 @@ async function completeInternal(
     ).rowCount;
     if ((pending ?? 0) >= 2)
       failure(429, 'grant_busy', 'This grant has two active or unresolved inference requests.');
+    await repairLegacyAllowance(db, grantId);
     const packs = (
       await db.query(
         `SELECT * FROM broker_token_packs WHERE grant_id=$1 AND status='active' AND expires_at>clock_timestamp() AND($2::uuid IS NULL OR id=$2)
@@ -455,16 +556,13 @@ async function completeInternal(
       )
     ).rows;
     let requiredOutputMinimum: number | undefined;
-    for (const pack of packs) {
-      const route = routes.find((r) => r.provider === pack.provider);
-      const native = rt.routes.get(pack.provider as InferenceProvider);
+    const qualified: AllowanceRoute[] = [];
+    for (const route of routes) {
+      const native = rt.routes.get(route.provider as InferenceProvider);
       if (
-        !route ||
         !native ||
-        !grant.allowed_providers.includes(pack.provider) ||
-        pack.source_mode !== grant.source_mode ||
-        pack.route_fingerprint !== native.fingerprint ||
-        route.held_calls >= route.max_concurrent
+        !grant.allowed_providers.includes(route.provider) ||
+        route.source_mode !== grant.source_mode
       )
         continue;
       try {
@@ -477,26 +575,57 @@ async function completeInternal(
         requiredOutputMinimum = Math.min(requiredOutputMinimum ?? minimumOutput, minimumOutput);
         continue;
       }
-      const inputBound = inputReservation(native, input);
-      const outputBound = source
-        ? Math.min(input.max_tokens, Number(pack.available_output))
-        : input.max_tokens;
+      qualified.push({
+        provider: route.provider,
+        providerId: route.provider_id,
+        sourceMode: grant.source_mode,
+        routeFingerprint: native.fingerprint,
+        inputBound: inputReservation(native, input),
+        minimumOutputTokens: minimumOutput,
+        maximumOutputTokens: native.maximumOutputTokens,
+      });
+    }
+    const groups = tokenAllowanceGroups(packs, qualified, {
+      grantId,
+      now: await clock(db),
+      packId: actor.apiKey?.packId,
+    });
+    let busy = false;
+    for (const group of groups) {
+      const plan = planTokenAllowance([group], {
+        maxOutputTokens: input.max_tokens,
+        minimumOutputReservation: source
+          ? Math.min(input.max_tokens, MIN_TASK_OUTPUT_RESERVATION)
+          : input.max_tokens,
+        allowReducedOutput: Boolean(source),
+      });
+      if (!plan) continue;
+      const route = routes.find((r) => r.provider === group.route.provider)!;
+      if (route.held_calls >= route.max_concurrent) {
+        busy = true;
+        continue;
+      }
+      const native = rt.routes.get(group.route.provider as InferenceProvider)!;
+      const now = await clock(db);
       if (
-        input.max_tokens > native.maximumOutputTokens ||
-        Number(pack.available_input) < inputBound ||
-        Number(pack.available_output) < outputBound ||
-        outputBound <
-          Math.max(
-            minimumOutput,
-            Math.min(input.max_tokens, source ? MIN_TASK_OUTPUT_RESERVATION : input.max_tokens),
-          )
+        new Date(grant.expires_at) <= now ||
+        plan.allocations.some((a) => new Date(a.pack.expires_at) <= now)
       )
         continue;
-      const now = await clock(db);
-      if (new Date(grant.expires_at) <= now || new Date(pack.expires_at) <= now) break;
+      const pack = plan.allocations[0]!.pack;
+      const rows = plan.allocations.map((a, i) => ({
+        pack_id: a.pack.id,
+        allocation_order: i,
+        reserved_input: a.reservedInput,
+        reserved_output: a.reservedOutput,
+      }));
       await db.query(
-        'UPDATE broker_token_packs SET available_input=available_input-$2,available_output=available_output-$3,held_input=held_input+$2,held_output=held_output+$3 WHERE id=$1',
-        [pack.id, inputBound, outputBound],
+        `UPDATE broker_token_packs p SET available_input=p.available_input-a.reserved_input,
+         available_output=p.available_output-a.reserved_output,held_input=p.held_input+a.reserved_input,
+         held_output=p.held_output+a.reserved_output
+         FROM jsonb_to_recordset($1::jsonb) AS a(pack_id uuid,reserved_input integer,reserved_output integer)
+         WHERE p.id=a.pack_id`,
+        [JSON.stringify(rows)],
       );
       await db.query(
         'UPDATE broker_inference_routes SET held_calls=held_calls+1 WHERE provider=$1',
@@ -505,7 +634,7 @@ async function completeInternal(
       const request = (
         await db.query(
           `INSERT INTO broker_inference_requests(grant_id,pack_id,buyer_id,source_key_id,provider,source_mode,operation_key,input_fingerprint,reserved_input,reserved_output,deadline_at,source_job_id,source_task_id)
-        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,clock_timestamp()+interval '120 seconds',$11,$12) RETURNING *`,
+           VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,clock_timestamp()+interval '120 seconds',$11,$12) RETURNING *`,
           [
             grantId,
             pack.id,
@@ -515,16 +644,22 @@ async function completeInternal(
             pack.source_mode,
             operationKey,
             fingerprint,
-            inputBound,
-            outputBound,
+            plan.inputBound,
+            plan.outputBound,
             source?.kind === 'coding' ? source.id : null,
             source?.kind === 'studio' ? source.id : null,
           ],
         )
       ).rows[0];
+      await db.query(
+        `INSERT INTO broker_inference_allocations(request_id,pack_id,allocation_order,reserved_input,reserved_output)
+         SELECT $1,a.pack_id,a.allocation_order,a.reserved_input,a.reserved_output
+         FROM jsonb_to_recordset($2::jsonb) AS a(pack_id uuid,allocation_order smallint,reserved_input integer,reserved_output integer)`,
+        [request.id, JSON.stringify(rows)],
+      );
       if (source?.kind === 'studio') {
         const linked = await db.query(
-          `UPDATE broker_studio_plan_attempts SET request_id=$3,failure_code=NULL WHERE task_id=$1 AND attempt=$2 AND request_id IS NULL`,
+          'UPDATE broker_studio_plan_attempts SET request_id=$3,failure_code=NULL WHERE task_id=$1 AND attempt=$2 AND request_id IS NULL',
           [source.id, source.planAttempt, request.id],
         );
         if (!linked.rowCount)
@@ -535,11 +670,22 @@ async function completeInternal(
           );
       }
       await event(db, grantId, `reserve:${request.id}`, 'usage_reserved', request.id, actor.id, {
-        inputTokens: inputBound,
-        outputTokens: outputBound,
+        inputTokens: plan.inputBound,
+        outputTokens: plan.outputBound,
+        allocations: rows.map((a) => ({
+          packId: a.pack_id,
+          inputTokens: a.reserved_input,
+          outputTokens: a.reserved_output,
+        })),
       });
-      return { request, native, pack };
+      return { request, native, pack, allocations: plan.allocations };
     }
+    if (busy)
+      failure(
+        429,
+        'inference_busy',
+        'Compatible prepaid inference capacity is currently occupied. No additional allowance is needed.',
+      );
     if (requiredOutputMinimum)
       failure(
         409,
@@ -549,10 +695,10 @@ async function completeInternal(
     failure(
       409,
       'token_allowance_exceeded',
-      'No qualified prepaid pack can reserve this input bound and max_tokens. Buy another pack or reduce max_tokens.',
+      'No compatible prepaid allowance can reserve this input bound and max_tokens. Buy another pack or reduce max_tokens.',
     );
   });
-  const { request, native, pack } = reservation;
+  const { request, native, pack, allocations } = reservation;
   try {
     await transaction(ctx.pool, async (db) => {
       await authority(db, actor, 'inference:use');
@@ -571,11 +717,31 @@ async function completeInternal(
         ])
       ).rows[0];
       await assertRoute(ctx, route, grant.source_mode);
-      const currentPack = (
-        await db.query('SELECT * FROM broker_token_packs WHERE id=$1 FOR UPDATE', [pack.id])
-      ).rows[0];
-      if (currentPack.status !== 'active')
-        failure(409, 'pack_retired', 'The pack was retired before dispatch.');
+      const currentPacks = (
+        await db.query(
+          'SELECT * FROM broker_token_packs WHERE id=ANY($1::uuid[]) ORDER BY id FOR UPDATE',
+          [allocations.map((a) => a.pack.id)],
+        )
+      ).rows;
+      const now = await clock(db);
+      if (
+        currentPacks.length !== allocations.length ||
+        currentPacks.some(
+          (p) =>
+            p.status !== 'active' ||
+            new Date(p.expires_at) <= now ||
+            p.grant_id !== grantId ||
+            p.provider !== route.provider ||
+            p.provider_id !== route.provider_id ||
+            p.source_mode !== grant.source_mode ||
+            p.route_fingerprint !== native.fingerprint,
+        )
+      )
+        failure(
+          409,
+          'pack_retired',
+          'A prepaid allocation expired, retired or changed identity before dispatch.',
+        );
       const changed = await db.query(
         `UPDATE broker_inference_requests SET status='dispatching',dispatch_started_at=clock_timestamp()
         WHERE id=$1 AND status='reserved' AND deadline_at>clock_timestamp()`,
@@ -668,11 +834,11 @@ export async function receipt(ctx: AppContext, actor: Actor, id: string) {
     ])
   ).rows[0];
   if (!meta) failure(404, 'not_found', 'Inference receipt not found.');
-  if (actor.apiKey?.packId && meta.pack_id !== actor.apiKey.packId)
-    failure(404, 'not_found', 'Inference receipt not found.');
   return transaction(ctx.pool, async (db) => {
     await authority(db, actor, 'inference:read');
     await lockedGrant(db, actor, meta.grant_id);
+    if (!(await packScopedRequest(db, meta, actor.apiKey?.packId)))
+      failure(404, 'not_found', 'Inference receipt not found.');
     return receiptView(
       (await db.query('SELECT * FROM broker_inference_requests WHERE id=$1', [id])).rows[0],
     );
@@ -686,14 +852,14 @@ export async function recoverRequest(ctx: AppContext, id: string) {
   ).rows[0];
   if (!meta) return;
   await transaction(ctx.pool, async (db) => {
-    const { pack, request } = await lockRequest(db, meta);
+    const { pack, request, allocations } = await lockRequest(db, meta);
     if (
       new Date(request.deadline_at) > (await clock(db)) ||
       ['settled', 'rejected', 'written_off', 'needs_reconciliation'].includes(request.status)
     )
       return;
     if (request.status === 'reserved') {
-      await settleLocked(db, pack, request, 0, 0, true, 'never_dispatched', null);
+      await settleLocked(db, pack, request, allocations, 0, 0, true, 'never_dispatched', null);
     } else {
       await db.query(
         "UPDATE broker_inference_requests SET status='needs_reconciliation' WHERE id=$1",
@@ -725,7 +891,7 @@ export async function resolveRequest(ctx: AppContext, actor: Actor, id: string, 
   if (!meta) failure(404, 'not_found', 'Inference request not found.');
   return transaction(ctx.pool, async (db) => {
     await authority(db, actor);
-    const { pack, request } = await lockRequest(db, meta);
+    const { pack, request, allocations } = await lockRequest(db, meta);
     const prior = (
       await db.query(
         'SELECT details FROM broker_inference_events WHERE grant_id=$1 AND operation_key=$2',
@@ -743,6 +909,7 @@ export async function resolveRequest(ctx: AppContext, actor: Actor, id: string, 
       db,
       pack,
       request,
+      allocations,
       input.inputTokens,
       input.outputTokens,
       input.rejected,
@@ -789,7 +956,7 @@ export async function writeOffRequest(ctx: AppContext, actor: Actor, id: string,
   if (!meta) failure(404, 'not_found', 'Inference request not found.');
   return transaction(ctx.pool, async (db) => {
     await authority(db, actor);
-    const { grant, pack, request } = await lockRequest(db, meta);
+    const { grant, pack, request, allocations } = await lockRequest(db, meta);
     const operation = `write-off:${id}:${input.operationKey}`;
     const prior = (
       await db.query(
@@ -815,35 +982,50 @@ export async function writeOffRequest(ctx: AppContext, actor: Actor, id: string,
       request.input_tokens !== null ||
       request.output_tokens !== null ||
       grant.status !== 'closing' ||
-      pack.status !== 'retiring' ||
-      !['owner_closed', 'expired'].includes(pack.retirement_reason)
+      allocations.some(
+        (a) =>
+          a.pack.status !== 'retiring' ||
+          !['owner_closed', 'expired'].includes(a.pack.retirement_reason),
+      )
     )
       failure(
         409,
         'write_off_unavailable',
         'Only an overdue unresolved manual call in an owner-closed or expired retiring pack can be written off.',
       );
-    const inputRate = pack.snapshot.costInputRate,
-      outputRate = pack.snapshot.costOutputRate;
-    if (
-      !Number.isSafeInteger(inputRate) ||
-      !Number.isSafeInteger(outputRate) ||
-      inputRate < 0 ||
-      outputRate < 0
-    )
-      failure(
-        409,
-        'write_off_cost_unknown',
-        'Frozen native cost rates are required for write-off.',
-      );
-    const reservedCost =
-      BigInt(request.reserved_input) * BigInt(inputRate) +
-      BigInt(request.reserved_output) * BigInt(outputRate);
-    await db.query(
-      `UPDATE broker_token_packs SET held_input=held_input-$2,held_output=held_output-$3,
-       retired_input=retired_input+$2,retired_output=retired_output+$3 WHERE id=$1`,
-      [pack.id, request.reserved_input, request.reserved_output],
-    );
+    let reservedCost = 0n;
+    const deltas = allocations.map((a) => {
+      const inputRate = a.pack.snapshot.costInputRate,
+        outputRate = a.pack.snapshot.costOutputRate;
+      if (
+        !Number.isSafeInteger(inputRate) ||
+        !Number.isSafeInteger(outputRate) ||
+        inputRate < 0 ||
+        outputRate < 0
+      )
+        failure(
+          409,
+          'write_off_cost_unknown',
+          'Frozen native cost rates are required for write-off.',
+        );
+      reservedCost +=
+        BigInt(a.reserved_input) * BigInt(inputRate) +
+        BigInt(a.reserved_output) * BigInt(outputRate);
+      return {
+        pack_id: a.pack_id,
+        reserved_input: a.reserved_input,
+        reserved_output: a.reserved_output,
+      };
+    });
+    const updatedPacks = (
+      await db.query(
+        `UPDATE broker_token_packs p SET held_input=p.held_input-a.reserved_input,held_output=p.held_output-a.reserved_output,
+       retired_input=p.retired_input+a.reserved_input,retired_output=p.retired_output+a.reserved_output
+       FROM jsonb_to_recordset($1::jsonb) AS a(pack_id uuid,reserved_input integer,reserved_output integer)
+       WHERE p.id=a.pack_id RETURNING p.*`,
+        [JSON.stringify(deltas)],
+      )
+    ).rows;
     await db.query(
       `UPDATE broker_inference_routes SET held_calls=held_calls-1,
        outstanding_input=outstanding_input-$2,outstanding_output=outstanding_output-$3 WHERE provider=$1`,
@@ -864,17 +1046,27 @@ export async function writeOffRequest(ctx: AppContext, actor: Actor, id: string,
       originalUsageEvidence: request.usage_evidence,
       reservedInputTokens: request.reserved_input,
       reservedOutputTokens: request.reserved_output,
-      costInputRateMicrosPerMillion: inputRate,
-      costOutputRateMicrosPerMillion: outputRate,
+      ...(allocations.length === 1
+        ? {
+            costInputRateMicrosPerMillion: pack.snapshot.costInputRate,
+            costOutputRateMicrosPerMillion: pack.snapshot.costOutputRate,
+          }
+        : {}),
+      allocations: allocations.map((a) => ({
+        packId: a.pack_id,
+        reservedInputTokens: a.reserved_input,
+        reservedOutputTokens: a.reserved_output,
+        costInputRateMicrosPerMillion: a.pack.snapshot.costInputRate,
+        costOutputRateMicrosPerMillion: a.pack.snapshot.costOutputRate,
+      })),
       reservedCostExposureMicros: ((reservedCost + 999999n) / 1000000n).toString(),
       actualUsageKnown: false,
       nativeInvoiceKnown: false,
       liabilityOwner: 'platform',
       buyerMoneyChanged: false,
     });
-    const updated = (await db.query('SELECT * FROM broker_token_packs WHERE id=$1', [pack.id]))
-      .rows[0];
-    await retirePackLocked(db, updated, pack.retirement_reason);
+    for (const updated of updatedPacks)
+      await retirePackLocked(db, updated, updated.retirement_reason);
     await db.query(
       `UPDATE broker_inference_grants g SET status='closed' WHERE id=$1 AND status='closing'
        AND held_cents=0 AND NOT EXISTS(SELECT 1 FROM broker_inference_requests

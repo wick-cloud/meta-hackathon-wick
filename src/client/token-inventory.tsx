@@ -419,6 +419,11 @@ function ConnectBatch({ id, onClose }: { id: string; onClose: () => void }) {
             Use this key inside your VM to redeem only this batch’s prepaid quota. It cannot buy
             tokens, add funding or access VM controls.
           </p>
+          <p className="token-connect-note">
+            To combine remaining quota from compatible batches, use your{' '}
+            <Link href={`/agents/${pack.grantId}`}>agent’s API key</Link>. A batch key stays limited
+            to this batch.
+          </p>
           <label className="field">
             <span>OpenAI-compatible base URL</span>
             <input readOnly value={baseUrl} />

@@ -121,6 +121,7 @@ export function Studio({ search = '' }: { search?: string }) {
     [repo, setRepo] = useState(''),
     [budget, setBudget] = useState(DEFAULT_PRICE_USD),
     [duration, setDuration] = useState('30'),
+    [modelProvider, setModelProvider] = useState('automatic'),
     [instant, setInstant] = useState(true),
     [test, setTest] = useState(''),
     [review, setReview] = useState(false),
@@ -166,6 +167,7 @@ export function Studio({ search = '' }: { search?: string }) {
         budgetCents: amount,
         durationMinutes: Number(duration),
         allowInstant: instant,
+        ...(modelProvider !== 'automatic' ? { allowedProviders: [modelProvider] } : {}),
         ...(test.trim() ? { testCommand: test.trim() } : {}),
       });
       navigate('/studio/tasks/' + task.id);
@@ -291,6 +293,20 @@ export function Studio({ search = '' }: { search?: string }) {
             </label>
             <details className="studio-advanced">
               <summary>Advanced · completion checks</summary>
+              <label className="field">
+                <span>Model provider</span>
+                <select
+                  value={modelProvider}
+                  onChange={(e) => {
+                    setModelProvider(e.target.value);
+                    change();
+                  }}
+                >
+                  <option value="automatic">Automatic · lowest eligible price</option>
+                  <option value="baseten">Baseten only</option>
+                  <option value="modal">Modal only</option>
+                </select>
+              </label>
               <label className="field">
                 <span>Test command · optional</span>
                 <input
@@ -463,6 +479,16 @@ export function Studio({ search = '' }: { search?: string }) {
               <dd>{repo}</dd>
             </div>
             <div>
+              <dt>Model provider</dt>
+              <dd>
+                {modelProvider === 'automatic'
+                  ? 'Automatic · lowest eligible price'
+                  : modelProvider === 'baseten'
+                    ? 'Baseten only'
+                    : 'Modal only'}
+              </dd>
+            </div>
+            <div>
               <dt>Instant model fallback</dt>
               <dd>{instant ? 'Allowed within budget' : 'Disabled'}</dd>
             </div>
@@ -592,10 +618,17 @@ function UsageEstimate({ usage }: { usage: StudioUsage }) {
           Additional purchases never increase your spending ceiling.
         </p>
         <p>
-          Purchase floor: {count(usage.inputReservationFloor)} input /{' '}
-          {count(usage.outputReservationFloor)} output tokens. Additional purchases must fit your
-          remaining task budget.
+          {usage.refillProvider ? 'Next request reservation floor' : 'Purchase floor'}:{' '}
+          {count(usage.inputReservationFloor)} input / {count(usage.outputReservationFloor)} output
+          tokens. Additional purchases must fit your remaining task budget.
         </p>
+        {usage.refillProvider && (
+          <p>
+            Existing {usage.refillProvider === 'baseten' ? 'Baseten' : 'Modal'} quota before this
+            refill: {count(usage.existingInput ?? 0)} input / {count(usage.existingOutput ?? 0)}{' '}
+            output tokens. Only the shortfall is purchased; compatible packs are used together.
+          </p>
+        )}
         <p>
           {f.validation
             ? `Held-out check: ${f.validation.samples} tasks; input error ${(f.validation.inputError * 100).toFixed(1)}%, output error ${(f.validation.outputError * 100).toFixed(1)}%.`

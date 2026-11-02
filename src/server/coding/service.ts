@@ -766,7 +766,7 @@ export async function processCodingJob(ctx: AppContext, id: string) {
                 ? 'uncertain'
                 : 'paused',
             !meta && code === 'token_allowance_exceeded'
-              ? 'No single qualified pack can reserve this call. Buy allowance for this agent, then resume.'
+              ? 'No compatible prepaid token pool can reserve this call. Buy allowance for this agent, then resume.'
               : meta
                 ? 'The Meta request has a receipt but its result needs review. No generation will be resent.'
                 : 'Meta admission failed. Check the grant and route before resuming.',

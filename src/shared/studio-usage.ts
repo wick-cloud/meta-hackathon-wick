@@ -27,6 +27,9 @@ export interface StudioUsage {
   inputReservationFloor: number;
   outputReservationFloor: number;
   reservationLimited: boolean;
+  refillProvider?: 'modal' | 'baseten' | null;
+  existingInput?: number;
+  existingOutput?: number;
   settledInput: number;
   settledOutput: number;
   purchasedInput: number;

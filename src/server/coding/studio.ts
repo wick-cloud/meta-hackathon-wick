@@ -2,7 +2,11 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type { Actor, CatalogItem } from '../../shared/types.js';
 import type { StudioDetail, StudioTask, StudioStatus, StudioPlan } from '../../shared/studio.js';
-import { INFERENCE_MODEL_ID, type InferenceProvider } from '../../shared/inference.js';
+import {
+  INFERENCE_MODEL_ID,
+  INFERENCE_PROVIDERS,
+  type InferenceProvider,
+} from '../../shared/inference.js';
 import {
   addCents,
   subtractCents,
@@ -40,6 +44,11 @@ import {
   offeringOpen,
 } from '../inference/market.js';
 import { completeStudioTask, completionSchema } from '../inference/gateway.js';
+import {
+  tokenAllowanceGroups,
+  planTokenAllowance,
+  type AllowanceRoute,
+} from '../inference/allowance.js';
 import {
   boundedJson,
   inputReservation,
@@ -80,6 +89,15 @@ const taskInput = z
     budgetCents: moneyAmount(100_000_000, 1),
     durationMinutes: z.union([z.literal(15), z.literal(30), z.literal(60)]).default(30),
     allowInstant: z.boolean().default(true),
+    allowedProviders: z
+      .array(z.enum(INFERENCE_PROVIDERS))
+      .min(1)
+      .max(2)
+      .refine(
+        (values) => new Set(values).size === values.length,
+        'Choose each model provider once.',
+      )
+      .optional(),
     testCommand: z.string().trim().min(1).max(500).optional(),
   })
   .strict();
@@ -302,7 +320,9 @@ export async function createStudioTask(
   }
   if (!ctx.wick.runCommand) throw new HttpError(409, 'Task execution is unavailable.');
   const until = new Date(Date.now() + input.durationMinutes * 60000),
-    routes = await modelRoutes(ctx, until),
+    routes = (await modelRoutes(ctx, until)).filter(
+      (route) => !input.allowedProviders || input.allowedProviders.includes(route.provider),
+    ),
     candidates = await computeCandidates(ctx, input.durationMinutes);
   if (!routes.length)
     throw new HttpError(
@@ -638,9 +658,92 @@ async function repositoryContext(t: Row) {
   );
   return { files: entries.map((x) => x.path), manifests };
 }
+async function existingModelAllowance(
+  ctx: AppContext,
+  t: Row,
+  messages: { role: 'system' | 'user' | 'assistant'; content: string }[],
+  g: Row,
+) {
+  const [routeRows, packRows] = await Promise.all([
+    ctx.pool.query(
+      'SELECT * FROM broker_inference_routes WHERE provider=ANY($1::text[]) ORDER BY provider',
+      [g.allowed_providers],
+    ),
+    ctx.pool.query(
+      `SELECT * FROM broker_token_packs WHERE grant_id=$1 AND status='active'
+         AND expires_at>clock_timestamp() ORDER BY expires_at,id LIMIT 11`,
+      [t.grant_id],
+    ),
+  ]);
+  const qualified: AllowanceRoute[] = [];
+  for (const row of routeRows.rows) {
+    const native = ctx.inference?.routes.get(row.provider as InferenceProvider);
+    if (
+      !native ||
+      t.model_output > native.maximumOutputTokens ||
+      t.model_output < (native.minimumOutputTokens ?? 1)
+    )
+      continue;
+    try {
+      await assertRoute(ctx, row, g.source_mode);
+    } catch {
+      continue;
+    }
+    qualified.push({
+      provider: row.provider,
+      providerId: row.provider_id,
+      sourceMode: row.source_mode,
+      routeFingerprint: native.fingerprint,
+      inputBound: inputReservation(native, { messages }),
+      minimumOutputTokens: native.minimumOutputTokens ?? 1,
+      maximumOutputTokens: native.maximumOutputTokens,
+    });
+  }
+  return {
+    routes: qualified,
+    groups: tokenAllowanceGroups(packRows.rows, qualified, {
+      grantId: t.grant_id,
+      now: new Date(),
+    }),
+  };
+}
+async function resumeExistingAllowance(
+  ctx: AppContext,
+  t: Row,
+  actor: Actor,
+  groups: ReturnType<typeof tokenAllowanceGroups>,
+): Promise<boolean> {
+  if (
+    !t.coding_job_id ||
+    !planTokenAllowance(groups, {
+      maxOutputTokens: t.model_output,
+      minimumOutputReservation: Math.min(t.model_output, MIN_TASK_OUTPUT_RESERVATION),
+      allowReducedOutput: true,
+    })
+  )
+    return false;
+  await controlCoding(ctx, actor, t.coding_job_id, 'resume');
+  await stage(ctx, t, 'running');
+  return true;
+}
 async function buyModelAllowance(ctx: AppContext, t: Row, actor: Actor, instant = false) {
+  const messages = await nextModelMessages(ctx, t);
+  const g = (
+    await ctx.pool.query(
+      'SELECT available_cents,max_purchase_cents,allowed_providers,source_mode FROM broker_inference_grants WHERE id=$1',
+      [t.grant_id],
+    )
+  ).rows[0];
+  // Purchased entitlement does not depend on whether its seller is currently
+  // publishing new supply. The gateway and Studio use the same pool admission.
+  const allowance = t.coding_job_id
+    ? await existingModelAllowance(ctx, t, messages, g)
+    : { routes: [], groups: [] };
+  const groups = allowance.groups;
+  if (await resumeExistingAllowance(ctx, t, actor, groups)) return;
   const routes = (await modelRoutes(ctx, new Date(t.deadline_at))).filter(
-    (r) => Number(r.max_output_tokens) >= t.model_output,
+    (r) =>
+      Number(r.max_output_tokens) >= t.model_output && g.allowed_providers.includes(r.provider),
   );
   if (!routes.length) {
     await stage(
@@ -651,52 +754,55 @@ async function buyModelAllowance(ctx: AppContext, t: Row, actor: Actor, instant 
     );
     return;
   }
-  const messages = await nextModelMessages(ctx, t);
-  if (t.coding_job_id) {
-    const packs = (
-      await ctx.pool.query(
-        `SELECT provider,route_fingerprint,available_input,available_output FROM broker_token_packs
-       WHERE grant_id=$1 AND status='active' AND expires_at>clock_timestamp() ORDER BY expires_at,id LIMIT 10`,
-        [t.grant_id],
-      )
-    ).rows;
-    if (
-      packs.some((p) => {
-        const route = routes.find((r) => r.provider === p.provider);
-        const native = ctx.inference!.routes.get(p.provider);
-        return (
-          route &&
-          native &&
-          p.route_fingerprint === native.fingerprint &&
-          Number(p.available_input) >= inputReservation(native, { messages }) &&
-          Number(p.available_output) >= Math.min(t.model_output, MIN_TASK_OUTPUT_RESERVATION)
-        );
-      })
-    ) {
-      await controlCoding(ctx, actor, t.coding_job_id, 'resume');
-      await stage(ctx, t, 'running');
-      return;
-    }
+  const biddingRoutes = routes.filter((r) => instant || r.auto_bid);
+  if (!biddingRoutes.length) {
+    if (!instant && t.allow_instant) await buyModelAllowance(ctx, t, actor, true);
+    else
+      await stage(
+        ctx,
+        t,
+        'needs_attention',
+        'No model provider is bidding. No additional allowance was purchased.',
+      );
+    return;
   }
   const bound = Math.max(
-    ...routes.map((r) => inputReservation(ctx.inference!.routes.get(r.provider)!, { messages })),
+    ...biddingRoutes.map((r) =>
+      inputReservation(ctx.inference!.routes.get(r.provider)!, { messages }),
+    ),
   );
-  const estimate = await ensureUsageEstimate(ctx, t, bound),
+  const estimate = await ensureUsageEstimate(
+      ctx,
+      t,
+      bound,
+      t.purchase_round > 0
+        ? biddingRoutes.map((route) => {
+            const group = groups.find((g) => g.route.provider === route.provider);
+            return {
+              route,
+              inputFloor: inputReservation(ctx.inference!.routes.get(route.provider)!, {
+                messages,
+              }),
+              availableInput: group?.availableInput ?? 0,
+              availableOutput: group?.availableOutput ?? 0,
+            };
+          })
+        : undefined,
+      t.purchase_round > 0 ? allowance.routes : undefined,
+    ),
     inputTokens = estimate.input_tokens,
-    outputTokens = estimate.output_tokens;
-  const g = (
-    await ctx.pool.query(
-      'SELECT available_cents,max_purchase_cents FROM broker_inference_grants WHERE id=$1',
-      [t.grant_id],
-    )
-  ).rows[0];
+    outputTokens = estimate.output_tokens,
+    requiredProvider = estimate.required_provider as InferenceProvider | null;
   const available = Math.min(Number(g.available_cents), Number(g.max_purchase_cents)),
-    asks = routes
-      .filter(
-        (r) =>
-          inputReservation(ctx.inference!.routes.get(r.provider)!, { messages }) <= inputTokens,
-      )
-      .filter((r) => instant || r.auto_bid)
+    asks = biddingRoutes
+      .filter((r) => !requiredProvider || r.provider === requiredProvider)
+      .filter((r) => {
+        const group = groups.find((g) => g.route.provider === r.provider);
+        return (
+          inputReservation(ctx.inference!.routes.get(r.provider)!, { messages }) <=
+          inputTokens + (group?.availableInput ?? 0)
+        );
+      })
       .map((r) => packPrice(r, inputTokens, outputTokens, instant).priceCents);
   if (!asks.length) {
     if (!instant && t.allow_instant) await buyModelAllowance(ctx, t, actor, true);
@@ -724,28 +830,62 @@ async function buyModelAllowance(ctx: AppContext, t: Row, actor: Actor, instant 
   if (instant) {
     const q = (
       await quotes(ctx, actor, { grantId: t.grant_id, inputTokens, outputTokens })
-    ).items.find((q) => q.priceCents <= available && routes.some((r) => r.provider === q.provider));
+    ).items.find(
+      (q) =>
+        q.priceCents <= available &&
+        (!requiredProvider || q.provider === requiredProvider) &&
+        routes.some((r) => r.provider === q.provider),
+    );
     if (!q) {
       await stage(ctx, t, 'needs_attention', 'No instant model quote fits the remaining budget.');
       return;
     }
     quoteId = q.quoteId;
   }
-  const order = await createTokenOrder(
-    ctx,
-    actor,
-    {
-      operationKey: `studio:${t.id}:model:${t.purchase_round}:${instant ? 'instant' : 'auction'}`,
-      grantId: t.grant_id,
-      mode: instant ? 'instant' : 'auction',
-      inputTokens,
-      outputTokens,
-      maxTotalCents: available,
-      ...(quoteId ? { quoteId } : {}),
-    },
-    undefined,
-    source,
-  );
+  // A concurrent settled call may have released held allowance while this
+  // estimate was being prepared. Reuse that allowance before placing an order.
+  if (
+    t.coding_job_id &&
+    (await resumeExistingAllowance(
+      ctx,
+      t,
+      actor,
+      (await existingModelAllowance(ctx, t, messages, g)).groups,
+    ))
+  )
+    return;
+  let order;
+  try {
+    order = await createTokenOrder(
+      ctx,
+      actor,
+      {
+        operationKey: `studio:${t.id}:model:${t.purchase_round}:${instant ? 'instant' : 'auction'}`,
+        grantId: t.grant_id,
+        mode: instant ? 'instant' : 'auction',
+        inputTokens,
+        outputTokens,
+        maxTotalCents: available,
+        ...(quoteId ? { quoteId } : {}),
+      },
+      undefined,
+      source,
+      requiredProvider ?? undefined,
+      estimate.required_routes ?? undefined,
+    );
+  } catch (error) {
+    if (
+      (error as { code?: string }).code === 'allowance_available' &&
+      (await resumeExistingAllowance(
+        ctx,
+        t,
+        actor,
+        (await existingModelAllowance(ctx, t, messages, g)).groups,
+      ))
+    )
+      return;
+    throw error;
+  }
   await stage(ctx, t, 'model_auction');
   await studioEvent(
     ctx,
@@ -928,6 +1068,33 @@ export async function processStudioTask(
         }
         if (order.status === 'open') return;
         if (order.status !== 'awarded') {
+          if (order.status === 'cancelled' && order.provider_constraint && t.coding_job_id) {
+            const grant = (
+              await ctx.pool.query(
+                'SELECT allowed_providers,source_mode FROM broker_inference_grants WHERE id=$1',
+                [t.grant_id],
+              )
+            ).rows[0];
+            if (
+              await resumeExistingAllowance(
+                ctx,
+                t,
+                actor,
+                (await existingModelAllowance(ctx, t, await nextModelMessages(ctx, t), grant))
+                  .groups,
+              )
+            )
+              continue;
+          }
+          if (order.provider_constraint) {
+            await stage(
+              ctx,
+              t,
+              'needs_attention',
+              'The existing quota or eligible supply changed before this refill was awarded. No additional pack was charged. Review the token balance before buying more.',
+            );
+            return;
+          }
           if (order.mode === 'auction' && t.allow_instant) {
             await buyModelAllowance(ctx, t, actor, true);
             return;

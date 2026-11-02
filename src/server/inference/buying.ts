@@ -23,6 +23,7 @@ import {
   runtime,
 } from './data.js';
 import { allowance, decisionView, policyView, FIXTURE_BUYING_INPUT_BOUND } from './buying-guard.js';
+import { repairLegacyAllowance } from './allowance.js';
 import {
   createTokenOrder,
   OFFER_SELECT,
@@ -206,6 +207,8 @@ export async function evaluateBuying(
     await authority(db, actor);
     const grant = await lockedGrant(db, actor, id, true);
     activeMode(ctx, grant);
+    await db.query('SELECT provider FROM broker_inference_routes ORDER BY provider FOR UPDATE');
+    await repairLegacyAllowance(db, id);
     const policy = (
       await db.query(
         'SELECT * FROM broker_inference_buying_policies WHERE grant_id=$1 FOR UPDATE',

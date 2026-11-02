@@ -92,6 +92,24 @@ describe('Studio token usage estimator', () => {
       sizeUsagePurchase(f, { input: 8000, output: 800, calls: 8 }, 8000, 1024, 1).inputTokens,
     ).toBe(8000);
   });
+  it('buys only the missing token dimensions without buffering existing allowance again', () => {
+    const f = {
+      ...forecastUsage(usageFeatures('Add a utility.'), []),
+      expectedInput: 9000,
+      expectedOutput: 1800,
+      expectedCalls: 9,
+    };
+    const progress = { input: 15000, output: 1500, calls: 15 };
+    const refill = sizeUsagePurchase(f, progress, 8000, 1024, 3, { input: 9000, output: 0 });
+    expect(refill.inputTokens).toBe(100); // Desired 9,100 less the already paid 9,000.
+    expect(refill.outputTokens).toBe(1024);
+    const outputOnly = sizeUsagePurchase(f, progress, 8000, 1024, 3, { input: 18000, output: 0 });
+    expect(outputOnly.inputTokens).toBe(1); // Minimum positive dimension of a token pack.
+    expect(outputOnly.outputTokens).toBe(1024);
+    const inputOnly = sizeUsagePurchase(f, progress, 8000, 1024, 3, { input: 0, output: 4000 });
+    expect(inputOnly.inputTokens).toBe(9100);
+    expect(inputOnly.outputTokens).toBe(1);
+  });
   it('buys near the reported task estimate rather than an extra full-context pack', () => {
     const f = {
       ...forecastUsage(usageFeatures('Add a small utility and test it.'), []),

@@ -1,8 +1,11 @@
 import type { Pool, PoolClient } from 'pg';
 import type { StudioUsage, UsageForecast } from '../../shared/studio-usage.js';
+import type { InferenceProvider } from '../../shared/inference.js';
 import type { AppContext } from '../context.js';
 import { HttpError } from '../context.js';
 import type { Row } from '../marketplace/data.js';
+import { packPrice } from '../inference/market.js';
+import type { AllowanceRoute } from '../inference/allowance.js';
 import {
   forecastUsage,
   sizeUsagePurchase,
@@ -54,7 +57,19 @@ export async function taskUsage(db: Db, t: Row) {
 export const TRAINING_SELECT = `SELECT features,input_tokens,output_tokens,model_calls
  FROM broker_studio_usage_samples WHERE buyer_id=$1 AND source_mode=$2 AND model_output=$3 AND estimator_version=$4
  ORDER BY completed_at DESC,task_id DESC LIMIT $5`;
-export async function ensureUsageEstimate(ctx: AppContext, t: Row, inputFloor: number) {
+export interface UsagePurchaseSupply {
+  route: Row;
+  inputFloor: number;
+  availableInput: number;
+  availableOutput: number;
+}
+export async function ensureUsageEstimate(
+  ctx: AppContext,
+  t: Row,
+  inputFloor: number,
+  refillSupply?: UsagePurchaseSupply[],
+  requiredRoutes?: readonly AllowanceRoute[],
+) {
   const existing = (
     await ctx.pool.query(
       'SELECT * FROM broker_studio_usage_estimates WHERE task_id=$1 AND purchase_round=$2',
@@ -91,11 +106,39 @@ export async function ensureUsageEstimate(ctx: AppContext, t: Row, inputFloor: n
   // New packs leave room for a useful coding response; existing residual quota
   // may still serve a smaller call through the gateway's hard native cap.
   const outputFloor = Math.min(t.model_output, 1024);
-  const sized = sizeUsagePurchase(forecast, progress, inputFloor, outputFloor, t.purchase_round);
+  const choices = refillSupply?.map((supply) => {
+    const sized = sizeUsagePurchase(
+      forecast,
+      progress,
+      supply.inputFloor,
+      outputFloor,
+      t.purchase_round,
+      { input: supply.availableInput, output: supply.availableOutput },
+    );
+    return {
+      supply,
+      sized,
+      price: packPrice(supply.route, sized.inputTokens, sized.outputTokens).priceCents,
+    };
+  });
+  choices?.sort(
+    (a, b) =>
+      a.price - b.price ||
+      a.sized.inputTokens + a.sized.outputTokens - b.sized.inputTokens - b.sized.outputTokens ||
+      String(a.supply.route.provider).localeCompare(String(b.supply.route.provider)),
+  );
+  const selected = choices?.[0];
+  const sized =
+    selected?.sized ??
+    sizeUsagePurchase(forecast, progress, inputFloor, outputFloor, t.purchase_round);
+  const requiredProvider = (selected?.supply.route.provider ?? null) as InferenceProvider | null;
+  const existingInput = selected?.supply.availableInput ?? 0;
+  const existingOutput = selected?.supply.availableOutput ?? 0;
+  inputFloor = selected?.supply.inputFloor ?? inputFloor;
   const inserted = (
     await ctx.pool.query(
-      `INSERT INTO broker_studio_usage_estimates(task_id,purchase_round,forecast,input_tokens,output_tokens,input_floor,output_floor,reservation_limited)
-     SELECT id,$3,$4,$5,$6,$7,$8,$9 FROM broker_studio_tasks WHERE id=$1 AND lease_token=$2 AND lease_until>clock_timestamp()
+      `INSERT INTO broker_studio_usage_estimates(task_id,purchase_round,forecast,input_tokens,output_tokens,input_floor,output_floor,reservation_limited,required_provider,existing_input,existing_output,required_routes)
+     SELECT id,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13 FROM broker_studio_tasks WHERE id=$1 AND lease_token=$2 AND lease_until>clock_timestamp()
      ON CONFLICT(task_id,purchase_round) DO NOTHING RETURNING *`,
       [
         t.id,
@@ -107,6 +150,10 @@ export async function ensureUsageEstimate(ctx: AppContext, t: Row, inputFloor: n
         inputFloor,
         outputFloor,
         sized.reservationLimited,
+        requiredProvider,
+        existingInput,
+        existingOutput,
+        requiredRoutes?.length ? JSON.stringify(requiredRoutes) : null,
       ],
     )
   ).rows[0];
@@ -137,6 +184,9 @@ export async function studioUsage(db: Db, t: Row): Promise<StudioUsage | null> {
     inputReservationFloor: estimate.input_floor,
     outputReservationFloor: estimate.output_floor,
     reservationLimited: estimate.reservation_limited,
+    refillProvider: estimate.required_provider ?? null,
+    existingInput: Number(estimate.existing_input ?? 0),
+    existingOutput: Number(estimate.existing_output ?? 0),
     settledInput: totals.input,
     settledOutput: totals.output,
     purchasedInput: totals.purchasedInput,
