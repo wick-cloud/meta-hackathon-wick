@@ -2,6 +2,8 @@ import { Fragment, useEffect, useRef, useState, type FormEvent } from 'react';
 import {
   Activity,
   ArrowRight,
+  ArrowLeft,
+  Check,
   Box,
   ChevronDown,
   CircleDollarSign,
@@ -14,7 +16,6 @@ import {
   Settings2,
   ShieldCheck,
   Sparkles,
-  TerminalSquare,
   X,
   Wallet,
   KeyRound,
@@ -31,6 +32,8 @@ import {
   type Session,
 } from './api';
 import { ErrorBox, Link, NavigationContext, SessionContext, Spinner } from './components';
+import { Brand } from './brand';
+import { HomePage } from './homepage';
 import { NewEnvironment, RequestReview, AuctionPage, VMDetail, Invoices } from './buyer';
 import { MyVMs } from './vm-inventory';
 import { AlternativeComposer, AlternativeDetail, AlternativeList } from './negotiation';
@@ -76,24 +79,20 @@ const providerNavigation: NavigationItem[] = [
   { path: '/keys', label: 'API keys', icon: KeyRound },
 ];
 
-function Brand() {
-  return (
-    <div className="brand">
-      <span className="brand-mark" aria-hidden="true">
-        w
-      </span>
-      <span>
-        wick
-        <span className="brand-divider" /> <span className="brand-product">broker</span>
-      </span>
-    </div>
-  );
-}
-function Login({ session, onSignedIn }: { session: Session; onSignedIn: () => Promise<void> }) {
+function Login({
+  session,
+  onSignedIn,
+  intent,
+}: {
+  session: Session;
+  onSignedIn: () => Promise<void>;
+  intent: 'buy' | 'sell' | null;
+}) {
   const [email, setEmail] = useState(''),
     [password, setPassword] = useState(''),
     [busy, setBusy] = useState(false),
     [error, setError] = useState('');
+  const seller = intent === 'sell';
   async function submit(event: FormEvent) {
     event.preventDefault();
     setBusy(true);
@@ -108,58 +107,65 @@ function Login({ session, onSignedIn }: { session: Session; onSignedIn: () => Pr
     }
   }
   return (
-    <div className="login-page">
-      <div className="login-story">
-        <Brand />
-        <div className="login-story-content">
-          <span className="label-on-dark">YOUR NEXT ENVIRONMENT, SORTED.</span>
-          <h1>
-            Less setup.
-            <br />
-            More possibility.
+    <div className="broker-auth">
+      <header className="broker-auth-header">
+        <Link href="/" aria-label="Wick Broker home">
+          <Brand />
+        </Link>
+        <Link href="/" className="broker-auth-back">
+          <ArrowLeft size={14} /> Back to marketplace
+        </Link>
+      </header>
+      <main className="broker-auth-main">
+        <section className="broker-auth-story" aria-labelledby="login-story-title">
+          <span className="home-eyebrow">
+            {seller
+              ? 'THE SUPPLY SIDE'
+              : intent === 'buy'
+                ? 'THE DEMAND SIDE'
+                : 'YOUR MARKETPLACE WORKSPACE'}
+          </span>
+          <h1 id="login-story-title">
+            {seller
+              ? 'Your capacity. Your bidding limits.'
+              : intent === 'buy'
+                ? 'Your workload. A market of possibilities.'
+                : 'A clear view of every bid.'}
           </h1>
           <p>
-            Describe what you need. Let providers compete. Open your terminal and take it from
-            there.
+            {seller
+              ? 'Publish approved capacity, set your price floors and compete for demand within the limits you control.'
+              : 'Find compute and AI tokens, review provider bids, and keep every purchase within your budget.'}
           </p>
-          <div className="login-visual">
-            <div className="visual-window">
-              <div className="visual-dots">
-                <i />
-                <i />
-                <i />
-                <span>your environment</span>
-              </div>
-              <div className="visual-command">
-                <span>~</span> Ready when you are
-                <span className="visual-cursor" />
-              </div>
-              <div className="visual-footer">
-                <span>
-                  <i />
-                  Private environment
-                </span>
-                <span>Yours to explore</span>
-              </div>
-            </div>
-            <div className="visual-float">
-              <ShieldCheck size={19} />
-              <div>
-                <strong>A clear price. Your own terminal.</strong>
-                <span>Finite rentals, no surprises.</span>
-              </div>
-            </div>
-          </div>
-        </div>
-        <div className="login-story-footer">
-          Built for a little less friction.<span>Wick Broker v1</span>
-        </div>
-      </div>
-      <div className="login-panel">
-        <div className="login-form-wrap">
-          <span className="eyebrow">WELCOME BACK</span>
-          <h2>Your workspace awaits.</h2>
-          <p>Sign in to your invited Wick Broker account.</p>
+          <ul className="broker-auth-points">
+            {(seller
+              ? [
+                  'Publish compute and AI capacity',
+                  'Control automatic bids and spare capacity',
+                  'Track awards and earnings records',
+                ]
+              : [
+                  'Define the resources and maximum total',
+                  'Let eligible providers compete',
+                  'Track your orders, environments and tokens',
+                ]
+            ).map((point) => (
+              <li key={point}>
+                <Check size={15} />
+                {point}
+              </li>
+            ))}
+          </ul>
+        </section>
+        <section className="broker-auth-form" aria-labelledby="login-form-title">
+          <h2 id="login-form-title">
+            {seller
+              ? 'Sign in to sell capacity.'
+              : intent === 'buy'
+                ? 'Sign in to buy resources.'
+                : 'Welcome back.'}
+          </h2>
+          <p>Use your invited Wick Broker account.</p>
           <form onSubmit={submit}>
             <label className="field" htmlFor="email">
               <span>Email</span>
@@ -191,8 +197,7 @@ function Login({ session, onSignedIn }: { session: Session; onSignedIn: () => Pr
                 <Spinner label="Signing in" />
               ) : (
                 <>
-                  Sign in
-                  <ArrowRight size={17} />
+                  Sign in <ArrowRight size={17} />
                 </>
               )}
             </button>
@@ -202,27 +207,21 @@ function Login({ session, onSignedIn }: { session: Session; onSignedIn: () => Pr
             <span>Invite-only access. Ask your administrator for an account.</span>
           </div>
           {(session.modes.wick === 'fixture' || session.modes.muse === 'fixture') && (
-            <div className="login-demo">
-              <span className="demo-dot" />
-              <div>
-                <strong>Demo environment</strong>
-                <p>
-                  {session.modes.wick === 'fixture'
-                    ? 'VMs and terminal use an explicit fixture. '
-                    : ''}
-                  {session.modes.muse === 'fixture'
-                    ? 'Muse responses are fixtures, not model calls. '
-                    : ''}
-                  {session.modes.wick === 'real'
-                    ? 'VMs use the configured Wick account’s credits. Customer invoices are demo records; no payment is collected.'
-                    : 'Supply and customer pricing are simulated.'}
-                </p>
-              </div>
+            <div className="broker-auth-mode">
+              <strong>Demo environment</strong>
+              <p>
+                {session.modes.wick === 'fixture'
+                  ? 'VMs and terminals use explicit fixtures. '
+                  : 'VMs use the configured Wick account’s credits. '}
+                {session.modes.muse === 'fixture'
+                  ? 'Muse responses are fixtures, not model calls. '
+                  : ''}
+                Customer prices and earnings are pilot records. No payment is collected.
+              </p>
             </div>
           )}
-        </div>
-        <div className="login-bottom">Your commands stay between you and your environment.</div>
-      </div>
+        </section>
+      </main>
     </div>
   );
 }
@@ -352,17 +351,26 @@ export default function App() {
         )}
       </div>
     );
+  const path = location.split('?')[0]!;
+  const search = location.includes('?') ? location.slice(location.indexOf('?')) : '';
+  const intent = new URLSearchParams(search).get('intent');
   if (!session.user)
     return (
       <NavigationContext.Provider value={navigate}>
         <SessionContext.Provider value={session}>
-          <Login session={session} onSignedIn={refreshSession} />
+          {path === '/' ? (
+            <HomePage />
+          ) : (
+            <Login
+              session={session}
+              onSignedIn={refreshSession}
+              intent={intent === 'buy' || intent === 'sell' ? intent : null}
+            />
+          )}
         </SessionContext.Provider>
       </NavigationContext.Provider>
     );
   const user = session.user;
-  const path = location.split('?')[0]!;
-  const search = location.includes('?') ? location.slice(location.indexOf('?')) : '';
   const navigation =
     user.role === 'provider'
       ? providerNavigation

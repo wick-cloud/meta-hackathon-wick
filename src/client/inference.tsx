@@ -1,4 +1,13 @@
-import { TableViewport } from './table';
+import {
+  TableViewport,
+  TablePanel,
+  TableToolbar,
+  TableTabs,
+  TableFooter,
+  TableIdentity,
+  TableState,
+  TableStatus,
+} from './table';
 import { moneyUnits, MIN_ORDER_PRICE_CENTS } from '../shared/money';
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import {
@@ -87,7 +96,26 @@ const labels: Record<string, string> = {
 };
 function State({ value }: { value: string }) {
   return (
-    <span className={`inference-state inference-state-${value}`}>{labels[value] ?? value}</span>
+    <TableStatus
+      tone={
+        ['active', 'awarded', 'settled'].includes(value)
+          ? 'success'
+          : [
+                'open',
+                'dispatching',
+                'closing',
+                'retiring',
+                'outcome_unknown',
+                'needs_reconciliation',
+              ].includes(value)
+            ? 'warning'
+            : value === 'rejected'
+              ? 'danger'
+              : 'neutral'
+      }
+    >
+      {labels[value] ?? value}
+    </TableStatus>
   );
 }
 function useOperationKey() {
@@ -288,9 +316,12 @@ export function Agents({ search = '' }: { search?: string }) {
         </button>
       </PageHeader>
       <ErrorBox error={catalog.error} retry={catalog.reload} />
-      <ErrorBox error={list.error} retry={list.reload} />
-      <section className="card agent-table-shell">
-        <div className="agent-table-filters">
+      <ErrorBox error={list.data ? list.error : ''} retry={list.reload} />
+      <TablePanel className="agent-table-shell" label="Agents">
+        <TableTabs>
+          <h2>Agent budgets</h2>
+        </TableTabs>
+        <TableToolbar label="Search and filter agents">
           <form
             className="agent-search"
             onSubmit={(e) => {
@@ -321,11 +352,13 @@ export function Agents({ search = '' }: { search?: string }) {
               <option value="closed">Closed</option>
             </select>
           </label>
-        </div>
+        </TableToolbar>
         {list.loading ? (
-          <Spinner label="Loading agents" />
+          <TableState loading title="Loading agents" />
+        ) : !list.data && list.error ? (
+          <TableState error={list.error} onRetry={list.reload} />
         ) : list.data?.items.length ? (
-          <TableViewport label="Agent budgets" minWidth={1000} className="table-scroll">
+          <TableViewport label="Agent budgets" minWidth={940} className="table-scroll">
             <table className="agent-table" aria-label="Agent budgets and token allowance">
               <caption className="sr-only">Agent budgets and token allowance</caption>
               <thead>
@@ -348,11 +381,9 @@ export function Agents({ search = '' }: { search?: string }) {
                 {list.data.items.map((grant) => (
                   <tr key={grant.id}>
                     <td>
-                      <div className="agent-table-heading">
-                        <span className="agent-row-icon">
-                          <Bot size={17} />
-                        </span>
-                        <div className="agent-row-name">
+                      <TableIdentity
+                        icon={<Bot size={17} />}
+                        title={
                           <Link
                             className="agent-name-link"
                             title={grant.name}
@@ -360,7 +391,9 @@ export function Agents({ search = '' }: { search?: string }) {
                           >
                             {grant.name}
                           </Link>
-                          <small>
+                        }
+                        subtitle={
+                          <>
                             {grant.buyingPaused
                               ? 'Buying paused'
                               : grant.buyingMode === 'automatic'
@@ -371,9 +404,9 @@ export function Agents({ search = '' }: { search?: string }) {
                                     : 'Review purchases'
                                   : 'Manual buying'}{' '}
                             {grant.mode === 'fixture' && ' · Demo'}
-                          </small>
-                        </div>
-                      </div>
+                          </>
+                        }
+                      />
                     </td>
                     <td>
                       <State
@@ -411,7 +444,7 @@ export function Agents({ search = '' }: { search?: string }) {
                     <td className="actions-cell">
                       <Link
                         href={`/agents/${grant.id}`}
-                        className="agent-open-link"
+                        className="table-open-link"
                         aria-label={`Open ${grant.name}`}
                       >
                         Open <ArrowRight size={13} />
@@ -423,8 +456,7 @@ export function Agents({ search = '' }: { search?: string }) {
             </table>
           </TableViewport>
         ) : (
-          <EmptyState
-            icon={<Bot size={28} />}
+          <TableState
             title={
               q || status !== 'all'
                 ? 'No agents match these filters'
@@ -433,8 +465,7 @@ export function Agents({ search = '' }: { search?: string }) {
             description="Fund an agent, choose its buying limits, and connect its private key."
           />
         )}
-        <div className="agent-table-footer">
-          <span>{list.data?.items.length ?? 0} agents shown</span>
+        <TableFooter count={list.data?.items.length} noun="agents">
           <div className="buying-actions" style={{ margin: 0 }}>
             {cursor && (
               <button className="button secondary" onClick={() => page()}>
@@ -447,8 +478,8 @@ export function Agents({ search = '' }: { search?: string }) {
               </button>
             )}
           </div>
-        </div>
-      </section>
+        </TableFooter>
+      </TablePanel>
       {creating && (
         <MarketDialog titleId="create-agent-title" onClose={() => setCreating(false)} busy={busy}>
           <form onSubmit={create}>
@@ -884,11 +915,14 @@ export function AgentDetail({ id, search = '' }: { id: string; search?: string }
                   />
                 )}
               </section>
-              <section className="card">
-                <h2>Recent token orders</h2>
+              <TablePanel embedded label="Recent token orders">
+                <TableToolbar>
+                  <h2>Recent token orders</h2>
+                </TableToolbar>
                 {detail.orders.length ? (
                   <TableViewport
                     label="Recent token orders"
+                    embedded
                     minWidth={720}
                     className="table-scroll"
                   >
@@ -937,12 +971,15 @@ export function AgentDetail({ id, search = '' }: { id: string; search?: string }
                     Purchases made by you or this agent appear here.
                   </p>
                 )}
-              </section>
-              <section className="card">
-                <h2>Recent inference requests</h2>
+              </TablePanel>
+              <TablePanel embedded label="Recent inference requests">
+                <TableToolbar>
+                  <h2>Recent inference requests</h2>
+                </TableToolbar>
                 {detail.requests.length ? (
                   <TableViewport
                     label="Recent inference requests"
+                    embedded
                     minWidth={720}
                     className="table-scroll"
                   >
@@ -994,7 +1031,7 @@ export function AgentDetail({ id, search = '' }: { id: string; search?: string }
                   Unknown outcomes keep their token reservation until reconciled. Retrying the same
                   request ID never starts another generation.
                 </p>
-              </section>
+              </TablePanel>
             </>
           )}
         </>
@@ -2052,16 +2089,22 @@ export function ProviderInference({ search = '' }: { search?: string }) {
 function ProviderCommitments() {
   const packs = usePagedResource<TokenPack>('/api/provider/inference/packs', 10000);
   return (
-    <section className="card">
-      <h2>Token commitments and earnings</h2>
-      <p className="inference-muted">
-        Revenue comes from charged pack purchases. Unallocated buyer funds incur no fee. Verified
-        refunds reverse the corresponding provider share and commission; no payout is collected
-        here.
-      </p>
-      <ErrorBox error={packs.error} retry={packs.reload} />
+    <TablePanel label="Token commitments and earnings">
+      <TableTabs>
+        <h2>Token commitments and earnings</h2>
+      </TableTabs>
+      <TableToolbar>
+        <p className="inference-muted">
+          Revenue comes from charged pack purchases. Unallocated buyer funds incur no fee. Verified
+          refunds reverse the corresponding provider share and commission; no payout is collected
+          here.
+        </p>
+      </TableToolbar>
+      <ErrorBox error={packs.data ? packs.error : ''} retry={packs.reload} />
       {packs.loading ? (
-        <Spinner label="Loading commitments" />
+        <TableState loading title="Loading commitments" />
+      ) : !packs.data && packs.error ? (
+        <TableState error={packs.error} onRetry={packs.reload} />
       ) : packs.data?.items.length ? (
         <TableViewport label="Provider token commitments" minWidth={1040} className="table-scroll">
           <table>
@@ -2120,16 +2163,20 @@ function ProviderCommitments() {
           </table>
         </TableViewport>
       ) : (
-        <p className="inference-muted">
-          Purchased packs and their exact commission shares will appear here.
-        </p>
+        <TableState
+          title="No token commitments yet"
+          description="Purchased packs and their exact commission shares will appear here."
+        />
       )}
-      <LoadMore
-        available={!!packs.nextCursor}
-        loading={packs.loadingMore}
-        onLoad={() => void packs.loadMore()}
-        error={packs.moreError}
-      />
-    </section>
+      <TableFooter count={packs.data?.items.length} noun="commitments">
+        {' '}
+        <LoadMore
+          available={!!packs.nextCursor}
+          loading={packs.loadingMore}
+          onLoad={() => void packs.loadMore()}
+          error={packs.moreError}
+        />
+      </TableFooter>
+    </TablePanel>
   );
 }

@@ -6,7 +6,7 @@ const providerEmail = process.env.E2E_PROVIDER_EMAIL ?? process.env.SEED_SUPPLIE
 const providerPassword = process.env.SEED_SUPPLIER_A_PASSWORD;
 
 async function signIn(page: Page, email: string, password: string) {
-  await page.goto('/');
+  await page.goto('/login');
   await page.getByLabel('Email', { exact: true }).fill(email);
   await page.getByLabel('Password', { exact: true }).fill(password);
   const signedIn = page.waitForResponse(
@@ -388,7 +388,12 @@ test('provider reviews a server-priced unmet-demand suggestion before publishing
     offeringId = offering.id;
     expect(offering.priceCents).toBe(result.proposals[0].priceCents);
     expect(offering.catalogId).toBe(result.proposals[0].catalogId);
-    await expect(providerPage.getByRole('heading', { name, exact: true })).toBeVisible();
+    await expect(
+      providerPage
+        .getByRole('table', { name: 'Instant offerings', exact: true })
+        .getByText(name, { exact: true })
+        .first(),
+    ).toBeVisible();
     expect((await (await page.request.get('/api/vms')).json()).items.length).toBe(baselineVms);
   } finally {
     if (offeringId)

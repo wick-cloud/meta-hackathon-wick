@@ -175,3 +175,46 @@ test('resource choices fit mobile and remain reachable with keyboard navigation'
   await page.keyboard.press('Escape');
   await expect(page.getByRole('dialog', { name: 'Workspace navigation' })).toHaveCount(0);
 });
+
+for (const width of [1440, 1280, 390]) {
+  test(`compact purchase actions stay separate from their description at ${width}px`, async ({
+    page,
+  }) => {
+    const writes = await buyer(page);
+    await page.setViewportSize({ width, height: 1000 });
+    await page.goto('/orders');
+    const cards = page.locator('.purchase-choices.is-compact .purchase-choice');
+    await expect(cards).toHaveCount(2);
+    await page.evaluate(() => document.fonts.ready);
+    for (const card of await cards.all()) {
+      const paragraph = await card.locator(':scope > p').boundingBox();
+      const action = await card.locator('.purchase-choice-actions').boundingBox();
+      const bounds = await card.boundingBox();
+      expect(paragraph).not.toBeNull();
+      expect(action).not.toBeNull();
+      expect(bounds).not.toBeNull();
+      const horizontalOverlap =
+        Math.min(paragraph!.x + paragraph!.width, action!.x + action!.width) -
+        Math.max(paragraph!.x, action!.x);
+      const verticalOverlap =
+        Math.min(paragraph!.y + paragraph!.height, action!.y + action!.height) -
+        Math.max(paragraph!.y, action!.y);
+      expect(
+        horizontalOverlap <= 0 || verticalOverlap <= 0,
+        'description and purchase action do not overlap',
+      ).toBe(true);
+      expect(action!.x).toBeGreaterThanOrEqual(bounds!.x);
+      expect(action!.x + action!.width).toBeLessThanOrEqual(bounds!.x + bounds!.width);
+      expect(action!.y + action!.height).toBeLessThanOrEqual(bounds!.y + bounds!.height);
+    }
+    await expect(page.getByRole('heading', { name: 'Orders', exact: true })).toHaveCSS(
+      'font-size',
+      '28px',
+    );
+    expect(writes).toEqual([]);
+    await page.screenshot({
+      path: test.info().outputPath(`purchase-cards-${width}.png`),
+      fullPage: true,
+    });
+  });
+}

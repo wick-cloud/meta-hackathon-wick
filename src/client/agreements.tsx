@@ -11,7 +11,7 @@ import {
   StatusPill,
   useResource,
 } from './components';
-import { TableViewport } from './table';
+import { TableViewport, TablePanel, TableTabs, TableFooter, TableState } from './table';
 import './market.css';
 
 export const hourly = (cents: number) => `${money(cents)} / VM-hour`;
@@ -100,10 +100,13 @@ export function AgreementDetail({ id }: { id: string }) {
           icon={<Archive size={18} />}
         />
       </div>
-      <section className="card market-panel">
-        <h2>Booking history</h2>
+      <TablePanel embedded label="Booking history">
+        <TableTabs>
+          <h2>Booking history</h2>
+        </TableTabs>
         {bookings.length ? (
           <TableViewport
+            embedded
             label="Historical capacity bookings"
             minWidth={860}
             className="market-table-scroll"
@@ -112,10 +115,14 @@ export function AgreementDetail({ id }: { id: string }) {
               <caption className="sr-only">Historical capacity bookings</caption>
               <thead>
                 <tr>
-                  <th>Provider</th>
-                  <th>Access window</th>
-                  <th>Quantity</th>
-                  <th className="numeric-cell">Accepted total</th>
+                  <th scope="col">Provider</th>
+                  <th scope="col">Access window</th>
+                  <th scope="col" className="numeric-cell">
+                    Quantity
+                  </th>
+                  <th scope="col" className="numeric-cell">
+                    Accepted total
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -129,7 +136,7 @@ export function AgreementDetail({ id }: { id: string }) {
                       {zonedTime(b.startsAt, a.timeZone)}
                       <div className="market-meta">Until {zonedTime(b.endsAt, a.timeZone)}</div>
                     </td>
-                    <td>{b.quantity} slots</td>
+                    <td className="numeric-cell">{b.quantity} slots</td>
                     <td className="numeric-cell">
                       {money(b.totalCents)}
                       <div className="market-meta">
@@ -143,17 +150,20 @@ export function AgreementDetail({ id }: { id: string }) {
             </table>
           </TableViewport>
         ) : (
-          <EmptyState
-            icon={<Archive size={24} />}
+          <TableState
             title="No capacity was booked"
             description="This record has no accepted provider commitments."
           />
         )}
-      </section>
+        <TableFooter count={bookings.length} noun="bookings" />
+      </TablePanel>
       {activations.length > 0 && (
-        <section className="card market-panel">
-          <h2>Environment history</h2>
+        <TablePanel embedded label="Environment history">
+          <TableTabs>
+            <h2>Environment history</h2>
+          </TableTabs>
           <TableViewport
+            embedded
             label="Historical booking environments"
             minWidth={700}
             className="market-table-scroll"
@@ -162,10 +172,10 @@ export function AgreementDetail({ id }: { id: string }) {
               <caption className="sr-only">Historical booking environments</caption>
               <thead>
                 <tr>
-                  <th>Environment</th>
-                  <th>Status</th>
-                  <th>Created</th>
-                  <th>Rental end</th>
+                  <th scope="col">Environment</th>
+                  <th scope="col">Status</th>
+                  <th scope="col">Created</th>
+                  <th scope="col">Rental end</th>
                 </tr>
               </thead>
               <tbody>
@@ -193,7 +203,8 @@ export function AgreementDetail({ id }: { id: string }) {
               </tbody>
             </table>
           </TableViewport>
-        </section>
+          <TableFooter count={activations.length} noun="environments" />
+        </TablePanel>
       )}
     </>
   );

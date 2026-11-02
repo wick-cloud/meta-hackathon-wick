@@ -1,4 +1,13 @@
-import { TableViewport } from './table';
+import {
+  TableViewport,
+  TablePanel,
+  TableToolbar,
+  TableTabs,
+  TableFooter,
+  TableIdentity,
+  TableActions,
+  TableState,
+} from './table';
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import {
   ArrowDownWideNarrow,
@@ -26,7 +35,6 @@ import {
   rentalSourceLabel,
 } from './api';
 import {
-  EmptyState,
   ErrorBox,
   Link,
   MarketDialog,
@@ -167,8 +175,20 @@ export function MyVMs({ search = '' }: { search?: string }) {
         {copied ? 'VM ID copied.' : ''}
       </span>
       {!confirm && <ErrorBox error={actionError} />}
-      <section className="card vm-inventory-panel" aria-label="VM inventory">
-        <div className="vm-panel-toolbar">
+      <TablePanel className="vm-inventory-panel" label="VM inventory">
+        <TableTabs
+          actions={
+            <button
+              className="icon-button"
+              aria-label="Refresh VMs"
+              aria-busy={list.refreshing}
+              disabled={list.refreshing}
+              onClick={list.reload}
+            >
+              <RefreshCw size={16} className={list.refreshing ? 'spin' : undefined} />
+            </button>
+          }
+        >
           <RecordViews
             label="VM views"
             value={
@@ -180,22 +200,13 @@ export function MyVMs({ search = '' }: { search?: string }) {
             }
             onChange={(view) => filter({ status: view === 'archive' ? 'past' : view })}
           />
-          <button
-            className="icon-button"
-            aria-label="Refresh VMs"
-            aria-busy={list.refreshing}
-            disabled={list.refreshing}
-            onClick={list.reload}
-          >
-            <RefreshCw size={16} className={list.refreshing ? 'spin' : undefined} />
-          </button>
-        </div>
+        </TableTabs>
         {status === 'past' && (
           <ArchiveNote>
             Completed VMs and their rental history. VMs awaiting cleanup stay in Active.
           </ArchiveNote>
         )}
-        <div className="vm-table-controls">
+        <TableToolbar label="Search and filter virtual machines">
           <form className="vm-search" role="search" onSubmit={submitSearch}>
             <Search size={16} />
             <input
@@ -262,15 +273,16 @@ export function MyVMs({ search = '' }: { search?: string }) {
               </button>
             )}
           </div>
-        </div>
-        <ErrorBox error={list.error} retry={list.reload} />
-        {!list.data && list.error ? null : list.loading ? (
+        </TableToolbar>
+        <ErrorBox error={list.data ? list.error : ''} retry={list.reload} />
+        {!list.data && list.error ? (
+          <TableState error={list.error} onRetry={list.reload} />
+        ) : list.loading ? (
           <div className="vm-list-empty">
-            <Spinner label="Loading VMs" />
+            <TableState loading title="Loading VMs" />
           </div>
         ) : !items.length ? (
-          <EmptyState
-            icon={<Server size={28} />}
+          <TableState
             title={
               paged
                 ? 'No VMs on this page'
@@ -308,7 +320,7 @@ export function MyVMs({ search = '' }: { search?: string }) {
                 Create VM
               </Link>
             )}
-          </EmptyState>
+          </TableState>
         ) : (
           <>
             <TableViewport
@@ -358,14 +370,14 @@ export function MyVMs({ search = '' }: { search?: string }) {
                         className={!ongoing && !vm.cleanupPending ? 'vm-history-row' : undefined}
                       >
                         <td>
-                          <div className="vm-environment-cell">
-                            <span className={`vm-row-icon ${running ? 'running' : ''}`}>
-                              <Server size={18} />
-                            </span>
-                            <div>
+                          <TableIdentity
+                            icon={<Server size={17} />}
+                            title={
                               <Link href={`/vms/${vm.id}`} className="vm-name" title={vm.name}>
                                 {vm.name}
                               </Link>
+                            }
+                            subtitle={
                               <div className="vm-id-line">
                                 <code title={vm.id}>{vm.id.slice(0, 8)}</code>
                                 <button
@@ -398,8 +410,8 @@ export function MyVMs({ search = '' }: { search?: string }) {
                                   </span>
                                 )}
                               </div>
-                            </div>
-                          </div>
+                            }
+                          />
                         </td>
                         <td>
                           <StatusPill
@@ -478,7 +490,7 @@ export function MyVMs({ search = '' }: { search?: string }) {
                           )}
                         </td>
                         <td className="actions-cell">
-                          <div className="vm-row-actions">
+                          <TableActions>
                             <Link
                               href={`/vms/${vm.id}`}
                               className={running ? 'button secondary small' : 'vm-details-link'}
@@ -500,7 +512,7 @@ export function MyVMs({ search = '' }: { search?: string }) {
                                 <Trash2 size={15} />
                               </button>
                             )}
-                          </div>
+                          </TableActions>
                         </td>
                       </tr>
                     );
@@ -511,10 +523,7 @@ export function MyVMs({ search = '' }: { search?: string }) {
           </>
         )}
         {list.data && (
-          <footer className="vm-table-footer">
-            <span>
-              {items.length} VM{items.length === 1 ? '' : 's'} on this page
-            </span>
+          <TableFooter count={items.length} noun={items.length === 1 ? 'VM' : 'VMs'}>
             <div>
               <button
                 className="button secondary small"
@@ -533,9 +542,9 @@ export function MyVMs({ search = '' }: { search?: string }) {
                 <ArrowRight size={14} />
               </button>
             </div>
-          </footer>
+          </TableFooter>
         )}
-      </section>
+      </TablePanel>
       {confirm && (
         <MarketDialog
           titleId="terminate-vm-title"

@@ -12,7 +12,7 @@ const adminEmail = process.env.SEED_ADMIN_EMAIL ?? 'admin@demo.wick.local';
 const adminPassword = process.env.SEED_ADMIN_PASSWORD;
 
 async function signIn(page: Page, email: string, password: string) {
-  await page.goto('/');
+  await page.goto('/login');
   await page.getByLabel('Email', { exact: true }).fill(email);
   await page.getByLabel('Password', { exact: true }).fill(password);
   const signedIn = page.waitForResponse(
@@ -37,7 +37,7 @@ test('anonymous visitors cannot read customer environments or provider policy', 
   page,
 }) => {
   await page.goto('/');
-  await expect(page.getByRole('button', { name: 'Sign in', exact: true })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Sign in', exact: true })).toBeVisible();
   expect((await page.request.get('/api/vms')).status()).toBe(401);
   expect((await page.request.get('/api/provider/dashboard')).status()).toBe(401);
   expect((await page.request.get('/api/provider/earnings')).status()).toBe(401);
@@ -341,6 +341,12 @@ test('provider saves capacity and policy, then publishes a reviewed offering', a
     const response = await published;
     expect(response.ok()).toBe(true);
     offeringId = (await response.json()).id;
+    const offeringRow = page
+      .getByRole('table', { name: 'Instant offerings', exact: true })
+      .getByRole('row')
+      .filter({ has: page.getByText(name, { exact: true }) });
+    await expect(offeringRow).toBeVisible();
+    await offeringRow.getByRole('button', { name: 'Manage offering', exact: true }).click();
     await expect(page.getByRole('heading', { name, exact: true })).toBeVisible();
   } finally {
     await page.request.put('/api/provider/capacity', { data: { total: original.capacity.total } });

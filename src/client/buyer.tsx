@@ -1,4 +1,12 @@
-import { TableViewport } from './table';
+import {
+  TableViewport,
+  TablePanel,
+  TableTabs,
+  TableFooter,
+  TableIdentity,
+  TableState,
+  TableStatus,
+} from './table';
 import { lazy, Suspense, useEffect, useState, type FormEvent } from 'react';
 import { fixedQuote, managedPricing } from '../shared/pricing';
 import { parseExplicitBuyerDescription } from '../shared/muse-contracts';
@@ -1316,16 +1324,19 @@ export function Invoices() {
           icon={<ShieldCheck size={18} />}
         />
       </div>
-      <ErrorBox error={error} retry={reload} />
-      <section className="card">
-        <div className="section-heading">
+      <ErrorBox error={data ? error : ''} retry={reload} />
+      <TablePanel label="Instant rental invoices">
+        <TableTabs
+          actions={
+            <span className="small-muted">{nextCursor ? 'More invoices available' : 'USD'}</span>
+          }
+        >
           <h2>Instant rental invoices</h2>
-          <span>
-            {items.length} loaded{nextCursor ? ' · more available' : ''}
-          </span>
-        </div>
+        </TableTabs>
         {loading ? (
-          <Spinner label="Loading invoices" />
+          <TableState loading />
+        ) : error && !data ? (
+          <TableState error={error} onRetry={reload} />
         ) : items.length ? (
           <TableViewport label="Instant rental invoices" minWidth={760} className="table-scroll">
             <table>
@@ -1345,10 +1356,11 @@ export function Invoices() {
                 {items.map((invoice) => (
                   <tr key={invoice.id}>
                     <td>
-                      <span className="inline-icon">
-                        <FileText size={16} />
-                        <strong>{invoice.number || invoice.id.slice(0, 8)}</strong>
-                      </span>
+                      <TableIdentity
+                        icon={<FileText size={16} />}
+                        title={invoice.number || invoice.id.slice(0, 8)}
+                        subtitle={invoice.id.slice(0, 8)}
+                      />
                     </td>
                     <td>
                       <Link className="text-link" href={`/vms/${invoice.vmId}`}>
@@ -1358,7 +1370,7 @@ export function Invoices() {
                     <td>{shortDate(invoice.createdAt)}</td>
                     <td className="money-cell numeric-cell">{money(amount(invoice))}</td>
                     <td>
-                      <span className="quiet-badge">No payment due</span>
+                      <TableStatus>No payment due</TableStatus>
                     </td>
                   </tr>
                 ))}
@@ -1366,19 +1378,20 @@ export function Invoices() {
             </table>
           </TableViewport>
         ) : (
-          <EmptyState
-            icon={<ReceiptText size={27} />}
+          <TableState
             title="Nothing to account for yet"
             description="An invoice appears only after Wick confirms your environment is running and terminal access is available."
           />
         )}
-        <LoadMore
-          available={!!nextCursor}
-          loading={loadingMore}
-          onLoad={() => void loadMore()}
-          error={moreError}
-        />
-      </section>
+        <TableFooter count={data ? items.length : undefined} noun="invoices">
+          <LoadMore
+            available={!!nextCursor}
+            loading={loadingMore}
+            onLoad={() => void loadMore()}
+            error={moreError}
+          />
+        </TableFooter>
+      </TablePanel>
       <AgreementCharges />
       <div className="info-note">
         <ShieldCheck size={17} />

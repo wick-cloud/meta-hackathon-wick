@@ -44,7 +44,11 @@ export function PurchaseCards({ compact = false }: { compact?: boolean }) {
           {!compact && <span className="purchase-choice-badge">Your own terminal</span>}
         </div>
         <h2 id={compact ? 'quick-vm-title' : 'vm-choice-title'}>Launch a VM</h2>
-        <p>A private environment for your code. Choose the resources, region and rental time.</p>
+        <p>
+          {compact
+            ? 'Set your resources and budget. Providers compete in a 30-second auction.'
+            : 'A private environment for your code. Choose the resources, region and rental time.'}
+        </p>
         {!compact && (
           <>
             <div className="purchase-illustration purchase-terminal" aria-hidden="true">
@@ -91,8 +95,9 @@ export function PurchaseCards({ compact = false }: { compact?: boolean }) {
         </div>
         <h2 id={compact ? 'quick-tokens-title' : 'tokens-choice-title'}>Buy AI tokens</h2>
         <p>
-          Prepaid model usage for your agent. Buy input and output tokens within a budget you
-          control.
+          {compact
+            ? 'Auction prepaid input and output tokens for your agent, or review an instant price.'
+            : 'Prepaid model usage for your agent. Buy input and output tokens within a budget you control.'}
         </p>
         {!compact && (
           <>

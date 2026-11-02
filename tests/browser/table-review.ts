@@ -49,6 +49,11 @@ export async function reviewTables(page: Page, info: TestInfo) {
       el.scrollLeft = 0;
     });
     await frame.screenshot({ path: info.outputPath(`${name}.png`) });
+    // Include controls, states and paging in the visual audit, not just the rows.
+    const panel = frame.locator(
+      'xpath=ancestor::*[contains(concat(" ", normalize-space(@class), " "), " data-table-panel ")][1]',
+    );
+    if (await panel.count()) await panel.screenshot({ path: info.outputPath(`${name}-panel.png`) });
     if (layout.horizontalOverflow) {
       await viewport.evaluate((el) => {
         el.scrollLeft = el.scrollWidth;

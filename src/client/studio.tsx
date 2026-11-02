@@ -30,7 +30,15 @@ import {
   useNow,
   useResource,
 } from './components';
-import { TableViewport } from './table';
+import {
+  TableViewport,
+  TablePanel,
+  TableTabs,
+  TableFooter,
+  TableIdentity,
+  TableState,
+  TableStatus,
+} from './table';
 import './studio.css';
 
 const finished = (s: StudioStatus) => ['completed', 'failed', 'stopped'].includes(s);
@@ -56,10 +64,22 @@ const Meta = () => (
   </span>
 );
 const Status = ({ task }: { task: StudioTask }) => (
-  <span className={`studio-status ${task.status}`} role="status">
-    {!finished(task.status) && !task.status.startsWith('needs_') && <span className="studio-dot" />}
+  <TableStatus
+    role="status"
+    tone={
+      task.status === 'completed'
+        ? 'success'
+        : task.status === 'failed'
+          ? 'danger'
+          : task.status.startsWith('needs_')
+            ? 'warning'
+            : finished(task.status)
+              ? 'neutral'
+              : 'info'
+    }
+  >
     {names[task.status]}
-  </span>
+  </TableStatus>
 );
 function Budget({
   task,
@@ -199,7 +219,7 @@ export function Studio({ search = '' }: { search?: string }) {
           </button>
         )}
       </PageHeader>
-      <ErrorBox error={error || list.error || options.error} />
+      <ErrorBox error={error || (list.data ? list.error : '') || options.error} />
       {options.data?.mode === 'fixture' && (
         <div className="studio-notice">
           Fixture demo · purchases, model responses, and VMs are simulated.
@@ -388,30 +408,35 @@ export function Studio({ search = '' }: { search?: string }) {
           </aside>
         </div>
       )}
-      <section className="studio-card studio-history">
-        <div className="studio-section-head">
-          <div>
-            <h2>Your tasks</h2>
-            <p>One saved record for the budget, purchases, work, and result.</p>
-          </div>
-          <Link href="/studio/legacy">
-            Previous coding jobs
-            <ArrowRight size={14} />
-          </Link>
-        </div>
+      <TablePanel className="studio-history" label="Studio tasks">
+        <TableTabs
+          actions={
+            <Link className="table-open-link" href="/studio/legacy">
+              Previous coding jobs <ArrowRight size={14} />
+            </Link>
+          }
+        >
+          <h2>Your tasks</h2>
+        </TableTabs>
         {list.loading && !list.data ? (
-          <Spinner label="Loading tasks" />
+          <TableState loading title="Loading tasks" />
+        ) : !list.data && list.error ? (
+          <TableState error={list.error} onRetry={list.reload} />
         ) : list.data?.items.length ? (
           <TableViewport label="Studio tasks">
-            <table className="studio-table">
+            <table className="studio-table" aria-label="Studio tasks">
               <thead>
                 <tr>
-                  <th>Task</th>
-                  <th>Status</th>
-                  <th>Budget</th>
-                  <th>Spent</th>
-                  <th>Created</th>
-                  <th>
+                  <th scope="col">Task</th>
+                  <th scope="col">Status</th>
+                  <th scope="col" className="numeric-cell">
+                    Budget
+                  </th>
+                  <th scope="col" className="numeric-cell">
+                    Spent
+                  </th>
+                  <th scope="col">Created</th>
+                  <th scope="col" className="actions-cell">
                     <span className="sr-only">Open</span>
                   </th>
                 </tr>
@@ -420,21 +445,24 @@ export function Studio({ search = '' }: { search?: string }) {
                 {list.data.items.map((t) => (
                   <tr key={t.id}>
                     <td>
-                      <Link href={'/studio/tasks/' + t.id}>{t.goal.slice(0, 85)}</Link>
-                      <small>{t.repositoryUrl.replace('https://github.com/', '')}</small>
+                      <TableIdentity
+                        title={<Link href={'/studio/tasks/' + t.id}>{t.goal.slice(0, 85)}</Link>}
+                        subtitle={t.repositoryUrl.replace('https://github.com/', '')}
+                      />
                     </td>
                     <td>
                       <Status task={t} />
                     </td>
-                    <td>{money(t.budgetCents)}</td>
-                    <td>{money(t.spentCents)}</td>
+                    <td className="numeric-cell">{money(t.budgetCents)}</td>
+                    <td className="numeric-cell">{money(t.spentCents)}</td>
                     <td>{dateTime(t.createdAt)}</td>
-                    <td>
+                    <td className="actions-cell">
                       <Link
+                        className="table-open-link"
                         aria-label={'Open task ' + t.goal.slice(0, 40)}
                         href={'/studio/tasks/' + t.id}
                       >
-                        <ArrowRight size={16} />
+                        Open <ArrowRight size={14} />
                       </Link>
                     </td>
                   </tr>
@@ -443,13 +471,12 @@ export function Studio({ search = '' }: { search?: string }) {
             </table>
           </TableViewport>
         ) : (
-          <div className="studio-empty">
-            <Sparkles size={25} />
-            <h3>Your first task starts with a brief.</h3>
-            <p>Studio handles the VM and model purchases for you.</p>
-          </div>
+          <TableState
+            title="Your first task starts with a brief."
+            description="Studio handles the VM and model purchases for you."
+          />
         )}
-        <div className="studio-pagination">
+        <TableFooter count={list.data?.items.length} noun="tasks">
           {cursor && <Link href="/studio">Newest tasks</Link>}
           {list.data?.nextCursor && (
             <Link href={'/studio?cursor=' + encodeURIComponent(list.data.nextCursor)}>
@@ -457,8 +484,8 @@ export function Studio({ search = '' }: { search?: string }) {
               <ArrowRight size={14} />
             </Link>
           )}
-        </div>
-      </section>
+        </TableFooter>
+      </TablePanel>
       {review && (
         <MarketDialog titleId="studio-review" busy={busy} onClose={() => setReview(false)}>
           <h2 id="studio-review">Start this task?</h2>
@@ -568,33 +595,45 @@ function UsageEstimate({ usage }: { usage: StudioUsage }) {
           : 'Initial estimate · learning from completed tasks.'}{' '}
         Includes model reasoning.
       </p>
-      <div className="studio-usage-grid" role="table" aria-label="Token forecast and usage">
-        <div role="row">
-          <span role="columnheader">Tokens</span>
-          <span role="columnheader">Input</span>
-          <span role="columnheader">Output</span>
-        </div>
-        <div role="row">
-          <span role="rowheader">Expected task</span>
-          <strong role="cell">{count(f.expectedInput)}</strong>
-          <strong role="cell">{count(f.expectedOutput)}</strong>
-        </div>
-        <div role="row">
-          <span role="rowheader">Used so far</span>
-          <strong role="cell">{count(usage.settledInput)}</strong>
-          <strong role="cell">{count(usage.settledOutput)}</strong>
-        </div>
-        <div role="row">
-          <span role="rowheader">Purchased</span>
-          <span role="cell">{count(usage.purchasedInput)}</span>
-          <span role="cell">{count(usage.purchasedOutput)}</span>
-        </div>
-        <div role="row">
-          <span role="rowheader">Utilization</span>
-          <span role="cell">{percent(usage.settledInput, usage.purchasedInput)}</span>
-          <span role="cell">{percent(usage.settledOutput, usage.purchasedOutput)}</span>
-        </div>
-      </div>
+      <TableViewport label="Token forecast and usage" embedded minWidth={360}>
+        <table aria-label="Token forecast and usage">
+          <thead>
+            <tr>
+              <th scope="col">Tokens</th>
+              <th scope="col" className="numeric-cell">
+                Input
+              </th>
+              <th scope="col" className="numeric-cell">
+                Output
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <th scope="row">Expected task</th>
+              <td className="numeric-cell">{count(f.expectedInput)}</td>
+              <td className="numeric-cell">{count(f.expectedOutput)}</td>
+            </tr>
+            <tr>
+              <th scope="row">Used so far</th>
+              <td className="numeric-cell">{count(usage.settledInput)}</td>
+              <td className="numeric-cell">{count(usage.settledOutput)}</td>
+            </tr>
+            <tr>
+              <th scope="row">Purchased</th>
+              <td className="numeric-cell">{count(usage.purchasedInput)}</td>
+              <td className="numeric-cell">{count(usage.purchasedOutput)}</td>
+            </tr>
+            <tr>
+              <th scope="row">Utilization</th>
+              <td className="numeric-cell">{percent(usage.settledInput, usage.purchasedInput)}</td>
+              <td className="numeric-cell">
+                {percent(usage.settledOutput, usage.purchasedOutput)}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </TableViewport>
       {usage.unresolvedCalls > 0 && (
         <p role="status">
           {usage.unresolvedCalls} model {usage.unresolvedCalls === 1 ? 'call has' : 'calls have'}{' '}

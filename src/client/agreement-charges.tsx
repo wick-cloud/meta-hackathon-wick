@@ -1,4 +1,11 @@
-import { TableViewport } from './table';
+import {
+  TableViewport,
+  TablePanel,
+  TableTabs,
+  TableToolbar,
+  TableFooter,
+  TableStatus,
+} from './table';
 import type { RevenueShare } from '../shared/types';
 import { dateTime, money, moneyMicros } from './api';
 import { ErrorBox, Link, LoadMore, usePagedResource } from './components';
@@ -35,16 +42,17 @@ export function AgreementCharges({ provider = false }: { provider?: boolean }) {
   if (!items.length)
     return charges.error ? <ErrorBox error={charges.error} retry={charges.reload} /> : null;
   return (
-    <section className="card market-panel">
-      <div className="section-heading">
+    <TablePanel label="Historical capacity charges">
+      <TableTabs actions={<span className="tiny-label">Broker pilot credit</span>}>
         <h2>Historical capacity charges</h2>
-        <span className="tiny-label">Broker pilot credit</span>
-      </div>
-      <p className="market-copy">
-        Existing booked-capacity records are retained for billing history. Failed-start credits
-        reduce the settled charge. The 15% provider fee applies to the net settled charge, with no
-        added buyer fee. No external payment or payout occurs.
-      </p>
+      </TableTabs>
+      <TableToolbar>
+        <p className="table-description">
+          Existing booked-capacity records are retained for billing history. Failed-start credits
+          reduce the settled charge. The 15% provider fee applies to the net settled charge, with no
+          added buyer fee. No external payment or payout occurs.
+        </p>
+      </TableToolbar>
       <ErrorBox error={charges.error} retry={charges.reload} />
       <TableViewport
         label="Historical capacity charges"
@@ -129,7 +137,7 @@ export function AgreementCharges({ provider = false }: { provider?: boolean }) {
                   </>
                 )}
                 <td>
-                  <span className="quiet-badge">Pilot credit · no payout</span>
+                  <TableStatus>Pilot credit · no payout</TableStatus>
                   <div className="market-meta">{c.label}</div>
                 </td>
               </tr>
@@ -137,12 +145,14 @@ export function AgreementCharges({ provider = false }: { provider?: boolean }) {
           </tbody>
         </table>
       </TableViewport>
-      <LoadMore
-        available={!!charges.nextCursor}
-        loading={charges.loadingMore}
-        onLoad={() => void charges.loadMore()}
-        error={charges.moreError}
-      />
-    </section>
+      <TableFooter count={items.length} noun="charges">
+        <LoadMore
+          available={!!charges.nextCursor}
+          loading={charges.loadingMore}
+          onLoad={() => void charges.loadMore()}
+          error={charges.moreError}
+        />
+      </TableFooter>
+    </TablePanel>
   );
 }

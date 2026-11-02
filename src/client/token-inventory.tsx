@@ -1,11 +1,19 @@
-import { TableViewport } from './table';
+import {
+  TableViewport,
+  TablePanel,
+  TableToolbar,
+  TableTabs,
+  TableFooter,
+  TableIdentity,
+  TableState,
+  TableStatus,
+} from './table';
 import { useRef, useState } from 'react';
 import { ArrowLeft, ArrowRight, Copy, KeyRound, RefreshCw, Sparkles, X } from 'lucide-react';
 import type { TokenPack } from '../shared/inference';
 import type { BrokerKeySummary } from '../shared/developer';
 import { ApiError, dateTime, money, post } from './api';
 import {
-  EmptyState,
   ErrorBox,
   Link,
   MarketDialog,
@@ -112,34 +120,40 @@ export function TokenInventory({ search }: { search: string }) {
           Buy token pack
         </Link>
       </PageHeader>
-      <ErrorBox error={list.error} retry={list.reload} />
+      <ErrorBox error={list.data ? list.error : ''} retry={list.reload} />
       {list.loading ? (
-        <Spinner label="Loading purchased tokens" />
+        <TablePanel label="Purchased token batches">
+          <TableState loading title="Loading purchased tokens" />
+        </TablePanel>
+      ) : !list.data && list.error ? (
+        <TablePanel label="Purchased token batches">
+          <TableState error={list.error} onRetry={list.reload} />
+        </TablePanel>
       ) : (
         list.data && (
-          <section className="card token-inventory-card">
-            <div className="record-view-bar">
+          <TablePanel className="token-inventory-card" label="Purchased token batches">
+            <TableTabs>
               <RecordViews
                 label="Token pack views"
                 value={view}
                 onChange={(value) => navigate(listUrl(undefined, value))}
               />
-            </div>
+            </TableTabs>
             {view === 'archive' && (
               <ArchiveNote>
                 Expired, used-up and closed batches after usage settlement. Pending usage stays in
                 Active; purchase and refund records remain available.
               </ArchiveNote>
             )}
-            <div className="token-inventory-heading">
+            <TableToolbar label="Token batch ordering">
               <h2>{view === 'archive' ? 'Archived token batches' : 'Your token batches'}</h2>
               <span>Newest purchases first · 25 per page</span>
-            </div>
+            </TableToolbar>
             {list.data.items.length ? (
               <>
                 <TableViewport
                   label="Purchased token batches"
-                  minWidth={1000}
+                  minWidth={940}
                   className="table-scroll token-inventory-scroll"
                   tabIndex={0}
                   aria-label="Purchased token batches table"
@@ -172,17 +186,17 @@ export function TokenInventory({ search }: { search: string }) {
                         return (
                           <tr key={pack.id}>
                             <td>
-                              <strong>
-                                {provider(pack.provider)}{' '}
-                                <span className="token-inventory-reference">
-                                  #{pack.id.slice(0, 8)}
-                                </span>
-                              </strong>
-                              <small>
-                                {pack.mode === 'fixture'
-                                  ? 'Fixture · simulated'
-                                  : 'Live provider route'}
-                              </small>
+                              <TableIdentity
+                                title={provider(pack.provider)}
+                                subtitle={
+                                  <>
+                                    #{pack.id.slice(0, 8)} ·{' '}
+                                    {pack.mode === 'fixture'
+                                      ? 'Fixture · simulated'
+                                      : 'Live provider route'}
+                                  </>
+                                }
+                              />
                               <div className="token-inventory-links">
                                 <Link href={`/token-orders/${pack.orderId}`}>View purchase</Link>
                                 <Link href={`/agents/${pack.grantId}`}>Agent budget</Link>
@@ -195,11 +209,17 @@ export function TokenInventory({ search }: { search: string }) {
                               <Quota pack={pack} input={false} usable={usable} />
                             </td>
                             <td>
-                              <span
-                                className={`token-batch-status ${usable ? 'is-active' : pack.status === 'retiring' ? 'is-pending' : ''}`}
+                              <TableStatus
+                                tone={
+                                  usable
+                                    ? 'success'
+                                    : pack.status === 'retiring'
+                                      ? 'warning'
+                                      : 'neutral'
+                                }
                               >
                                 {label}
-                              </span>
+                              </TableStatus>
                             </td>
                             <td>
                               <strong
@@ -266,8 +286,7 @@ export function TokenInventory({ search }: { search: string }) {
                 </p>
               </>
             ) : (
-              <EmptyState
-                icon={<Sparkles size={26} />}
+              <TableState
                 title={
                   view === 'archive' && !cursor
                     ? 'No archived token batches yet'
@@ -300,27 +319,25 @@ export function TokenInventory({ search }: { search: string }) {
                       : 'Buy token pack'}
                   <ArrowRight size={15} />
                 </Link>
-              </EmptyState>
+              </TableState>
             )}
-            {(cursor || list.data.nextCursor) && (
-              <div className="token-inventory-pagination">
-                {cursor ? (
-                  <Link href={listUrl()} className="button secondary small">
-                    <ArrowLeft size={14} />
-                    Newest purchases
-                  </Link>
-                ) : (
-                  <span />
-                )}
-                {list.data.nextCursor && (
-                  <Link href={listUrl(list.data.nextCursor)} className="button secondary small">
-                    Older purchases
-                    <ArrowRight size={14} />
-                  </Link>
-                )}
-              </div>
-            )}
-          </section>
+            <TableFooter count={list.data.items.length} noun="batches">
+              {cursor ? (
+                <Link href={listUrl()} className="button secondary small">
+                  <ArrowLeft size={14} />
+                  Newest purchases
+                </Link>
+              ) : (
+                <span />
+              )}
+              {list.data.nextCursor && (
+                <Link href={listUrl(list.data.nextCursor)} className="button secondary small">
+                  Older purchases
+                  <ArrowRight size={14} />
+                </Link>
+              )}
+            </TableFooter>
+          </TablePanel>
         )
       )}
       {connect && (

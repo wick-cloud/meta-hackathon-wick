@@ -14,7 +14,7 @@
   gap: 12px;
 }
 .vm-title-line h1 {
-  font-size: 26px;
+  font-size: 28px;
   letter-spacing: -0.8px;
   font-weight: 600;
 }
@@ -33,26 +33,6 @@
 .vm-header-actions {
   display: flex;
   gap: 9px;
-  align-items: center;
-}
-.vm-workspace .vm-inventory-panel {
-  padding: 0;
-  overflow: hidden;
-}
-.vm-panel-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 15px;
-  padding: 0 18px;
-  border-bottom: 1px solid var(--line);
-}
-.vm-table-controls {
-  padding: 14px 16px;
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
   align-items: center;
 }
 .vm-search {
@@ -135,34 +115,6 @@
 .vm-table th:nth-child(7) {
   width: 154px;
 }
-.vm-environment-cell {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-}
-.vm-environment-cell > div {
-  min-width: 0;
-}
-.vm-row-icon {
-  width: 27px;
-  height: 29px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  display: grid;
-  place-items: center;
-  color: var(--muted);
-  flex-shrink: 0;
-}
-.vm-row-icon svg {
-  width: 15px;
-  height: 15px;
-}
-.vm-row-icon.running {
-  color: var(--success);
-  background: var(--success-soft);
-  border-color: transparent;
-}
 .vm-name {
   display: block;
   overflow: hidden;
@@ -244,12 +196,6 @@
   font-weight: 550;
   white-space: nowrap;
 }
-.vm-row-actions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 5px;
-}
 .vm-details-link {
   display: inline-flex;
   align-items: center;
@@ -276,25 +222,6 @@
 .vm-terminate:hover {
   color: var(--danger);
   background: var(--danger-soft);
-}
-.vm-table-footer {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 13px 16px;
-  border-top: 1px solid var(--line);
-  color: var(--muted);
-  font-size: 11px;
-  gap: 15px;
-}
-.vm-table-footer > div {
-  display: flex;
-  gap: 8px;
-}
-.vm-list-empty {
-  min-height: 220px;
-  display: grid;
-  place-items: center;
 }
 .vm-terminate-copy {
   color: var(--muted);
@@ -327,10 +254,6 @@
   .vm-header-actions > a {
     flex: 1;
   }
-  .vm-table-controls {
-    padding: 12px;
-    gap: 10px;
-  }
   .vm-search {
     max-width: none;
     width: 100%;
@@ -344,8 +267,5 @@
     flex: 1 1 calc(50% - 4px);
     min-width: 0;
     max-width: none;
-  }
-  .vm-table-footer {
-    flex-wrap: wrap;
   }
 }
