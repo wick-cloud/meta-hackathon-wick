@@ -6,7 +6,7 @@ import type { CatalogItem } from '../src/shared/types.js';
 
 // Explicit, bounded inference-only diagnostic. No database, Wick adapter, VM or policy writes.
 if (!process.argv.includes('--live'))
-  throw new Error('Pass --live to authorize seven real Baseten model calls.');
+  throw new Error('Pass --live to authorize five real Baseten model calls.');
 const key = process.env.BASETEN_API_KEY || process.env.META_API_KEY;
 if (!key) throw new Error('Set BASETEN_API_KEY privately before running the live diagnostic.');
 const muse = createMuseAdapter({
@@ -131,43 +131,6 @@ const checks: [string, () => Promise<void>][] = [
       });
       assert.equal(result.modelCalled, true);
       assert.equal(result.selections[0]?.candidateId, 'approved-alternative');
-    },
-  ],
-  [
-    'buyer-agreement-draft',
-    async () => {
-      const result = await muse.draftSchedule!({
-        kind: 'agreement',
-        description:
-          '20 VMs, minimum 12, compute region us-east. Schedule timezone Asia/Singapore, discount hours 00:00 to 06:00 at a maximum $0.10 per VM-hour. Reserve normal-rate continuation until 08:00 at a maximum $0.20 per VM-hour.',
-        catalog,
-      });
-      assert.equal(result.modelCalled, true);
-      assert.equal(result.draft.minimumQuantity, 12);
-      assert.equal(result.draft.targetQuantity, 20);
-      assert.equal(result.draft.timeZone, 'Asia/Singapore');
-      assert.deepEqual(result.draft.continuation, {
-        enabled: true,
-        until: '08:00',
-        maxRateCentsPerHour: 20,
-      });
-    },
-  ],
-  [
-    'provider-schedule-draft',
-    async () => {
-      const result = await muse.draftSchedule!({
-        kind: 'offering',
-        description:
-          'Use catalog smoke-small. Sell 5 slots in timezone Asia/Singapore. Discount hours 00:00 to 06:00 at $0.10 per VM-hour. Actual availability ends at 10:00. Published normal rate $0.20 per VM-hour. Weekdays Monday through Friday.',
-        catalog,
-      });
-      assert.equal(result.modelCalled, true);
-      assert.equal(result.draft.catalogId, 'smoke-small');
-      assert.equal(result.draft.capacityQuantity, 5);
-      assert.equal(result.draft.availableUntil, '10:00');
-      assert.equal(result.draft.discountRateCentsPerHour, 10);
-      assert.equal(result.draft.normalRateCentsPerHour, 20);
     },
   ],
 ];

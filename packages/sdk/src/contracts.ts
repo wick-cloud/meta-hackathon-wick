@@ -1329,7 +1329,7 @@ export const BROKER_OPERATION_SCHEMAS: Record<string, OperationSchema> = {
   },
   'GET /api/orders': {
     operationId: 'listOrders',
-    summary: 'List permanent auction and agreement history',
+    summary: 'List permanent VM auction and AI token order history',
     output: 'OrdersPage',
     paginated: true,
   },

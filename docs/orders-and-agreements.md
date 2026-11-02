@@ -1,4 +1,6 @@
-# Orders and funded scheduled agreements
+# Orders and legacy scheduled records
+
+Scheduled and bulk VM agreements have been retired from the hackathon product. Buyers use instant VM auctions and AI token orders. New agreement/preview/draft and scheduled-supply mutations return HTTP 410; scheduled navigation, composition and publishing are removed. Current CLI/MCP/OpenAPI discovery excludes these operations. The agreement design and verification notes below describe historical behavior, retained for existing financial records and already-funded commitments; they are not instructions for creating new schedules. Legacy billing, unmatched-credit cancellation, existing booked activation and VM cleanup remain supported.
 
 Broker remains one Fastify/React application with PostgreSQL and pg-boss. Ordinary instant auctions still close after 30 seconds and create at most one VM. Scheduled agreements never execute workloads and never automatically start VMs.
 
@@ -57,7 +59,7 @@ npm run typecheck
 npm run build
 ```
 
-`tests/browser/orders-agreements.spec.ts` uses intercepted API fixtures for UI states and performs no allocations. The additional `funded-agreements-e2e.spec.ts` is opt-in with `RUN_FUNDED_AGREEMENT_E2E=1`, requires localhost and explicit fixture/fixture health, and exercises actual auth/PostgreSQL, a full 30-second auction, credit funding, provider publication, all-seven-window approval, actual-clock manual activation, fixture terminal and confirmed cleanup. Keep its seed passwords in the environment. No interception or database clock edit is used in that flow.
+`tests/browser/orders-agreements.spec.ts` uses intercepted API fixtures for UI states and performs no allocations. The former opt-in funded-agreement browser journey was removed with the product feature. Legacy database lifecycle, activation, accounting and cleanup tests remain; retirement browser checks verify that creation and publication are unavailable.
 
 SQL tests cover credit and capacity concurrency, uncertain cleanup, immutable pricing, DST, replay, separate settlement and large-history query plans. Live native cutoff certification is a separate diagnostic and is not implied by these fixture results.
 

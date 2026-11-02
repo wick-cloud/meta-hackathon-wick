@@ -6,17 +6,15 @@ Muse prepares editable proposals. It does not authorize spending, change policie
 
 ## Where Muse is used
 
-| Flow                        | Proposal endpoint                              | What the model contributes                                         | Required next step                                                            |
-| --------------------------- | ---------------------------------------------- | ------------------------------------------------------------------ | ----------------------------------------------------------------------------- |
-| Buyer environment           | `POST /api/muse/translate`                     | Approved configuration and supported resource requirements         | Buyer reviews before starting an auction                                      |
-| Provider capacity strategy  | `POST /api/provider/policy/propose`            | Editable limits using that provider's policy, capacity and catalog | Provider applies reviewed limits with revision and operation key              |
-| Provider bid                | `POST /api/provider/requests/:id/propose`      | Select the server-priced quote or decline                          | Saved policy, capacity and auction deadline are rechecked before any bid hold |
-| Provider offerings          | `POST /api/provider/offerings/propose`         | Select approved candidates from bounded aggregate unmet demand     | Provider reviews and publishes                                                |
-| Buyer alternatives          | `POST /api/intents/:id/propose`                | Select concrete eligible candidate IDs                             | Buyer explicitly accepts a frozen offer                                       |
-| Buyer agreement schedule    | `POST /api/agreements/draft`                   | Extract explicitly stated dates, hours, quantities and price caps  | Buyer edits, obtains the authoritative server quote and consents to funding   |
-| Provider scheduled offering | `POST /api/provider/scheduled-offerings/draft` | Extract an editable discount/availability schedule                 | Provider reviews rates, capacity and cutoff before publishing                 |
+| Flow                       | Proposal endpoint                         | What the model contributes                                         | Required next step                                                            |
+| -------------------------- | ----------------------------------------- | ------------------------------------------------------------------ | ----------------------------------------------------------------------------- |
+| Buyer environment          | `POST /api/muse/translate`                | Approved configuration and supported resource requirements         | Buyer reviews before starting an auction                                      |
+| Provider capacity strategy | `POST /api/provider/policy/propose`       | Editable limits using that provider's policy, capacity and catalog | Provider applies reviewed limits with revision and operation key              |
+| Provider bid               | `POST /api/provider/requests/:id/propose` | Select the server-priced quote or decline                          | Saved policy, capacity and auction deadline are rechecked before any bid hold |
+| Provider offerings         | `POST /api/provider/offerings/propose`    | Select approved candidates from bounded aggregate unmet demand     | Provider reviews and publishes                                                |
+| Buyer alternatives         | `POST /api/intents/:id/propose`           | Select concrete eligible candidate IDs                             | Buyer explicitly accepts a frozen offer                                       |
 
-Both schedule drafts use the same real transport. Unknown facts remain unset; prices are integer USD cents per VM-hour. A draft reserves no credit or capacity, and does not create a VM. The agreement review uses server-confirmed UTC windows and a maximum reservation ceiling; the model cannot bypass that preview or consent. See [Orders and funded agreements](orders-and-agreements.md).
+Scheduled VM drafts have been removed from the hackathon product. Their retired endpoints return HTTP 410 before making a model call.
 
 ## Provider Capacity Manager
 
@@ -85,12 +83,12 @@ Offline tests exercise fixture behavior, exact model/transport envelopes, final-
 
 A controlled live smoke on 2026-10-29 passed all **seven** adapter flows with the exact Baseten model, JSON-schema requests and local validation of final content: translation, capacity policy, bid, offering suggestions, alternatives, buyer agreement draft and provider schedule draft. It used a synthetic approved catalog, made **zero database writes and zero Wick/VM allocations**, and did not deploy Railway. This confirms those inference/adapter paths for that run; it does not establish production deployment status or native VM enforcement.
 
-To repeat that bounded inference-only diagnostic deliberately, supply the private server key locally and run:
+The two schedule draft flows were subsequently retired. To run the five remaining proposal checks deliberately, supply the private server key locally and run:
 
 ```sh
 npx tsx scripts/verify-baseten-muse.ts --live
 ```
 
-The `--live` flag is required and permits seven real Baseten inference calls. The script requires `BASETEN_API_KEY` or its legacy alias, does not connect to PostgreSQL or Wick, and emits a redacted pass/fail summary. Ordinary CI remains fixture-only and does not need inference credentials.
+The `--live` flag is required and permits five real Baseten inference calls. The script requires `BASETEN_API_KEY` or its legacy alias, does not connect to PostgreSQL or Wick, and emits a redacted pass/fail summary. Ordinary CI remains fixture-only and does not need inference credentials.
 
 No database migration is needed to change the Muse transport or model label. Existing policies, holds, accounts, accepted quotes and financial history remain under their normal migration and review rules. Never reseed accounts to switch model modes. Keep one Broker process for the Railway deployment and follow [Railway configuration](RAILWAY.md) when setting private runtime variables. Earlier provider-scale evidence used Muse fixtures; it is a separate verification boundary from the Baseten inference smoke.

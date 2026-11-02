@@ -1,6 +1,5 @@
 import { expect, test, reviewTables, type Page } from './table-review';
 import { revenueShare } from '../../src/shared/pricing';
-import { agreementEstimate, agreementWindows } from '../../src/shared/schedule';
 
 // UI contract fixtures intercept every API request. These tests cannot allocate compute,
 // call Muse, read credentials or change a running Broker database.
@@ -91,8 +90,7 @@ async function fixture(page: Page, role: 'buyer' | 'provider' | 'admin', handler
       path = url.pathname,
       method = req.method();
     const body = req.postDataJSON();
-    // Schedule preview is an authenticated read-only calculation, not an order mutation.
-    if (method !== 'GET' && path !== '/api/agreements/preview') writes.push({ path, body });
+    if (method !== 'GET') writes.push({ path, body });
     const common: Record<string, unknown> = {
       '/api/me': {
         user: { id: 'user-one', name: 'Fixture User', email: `${role}@fixture.invalid`, role },
@@ -120,23 +118,6 @@ async function fixture(page: Page, role: 'buyer' | 'provider' | 'admin', handler
       },
     };
     let response = handler(path, method, body, url) ?? common[path];
-    if (response === undefined && path === '/api/agreements/preview' && method === 'POST') {
-      try {
-        const quote = agreementEstimate(body);
-        response = {
-          maxAmountCents: quote.maximum,
-          minimumAmountCents: quote.minimum,
-          windows: agreementWindows(body),
-          timeZone: body.timeZone,
-        };
-      } catch (error) {
-        await route.fulfill({
-          status: 400,
-          json: { error: error instanceof Error ? error.message : 'Invalid schedule.' },
-        });
-        return;
-      }
-    }
     if (response === undefined) {
       await route.fulfill({ status: 500, json: { error: `Unmocked UI API: ${method} ${path}` } });
       return;
@@ -160,7 +141,7 @@ test('Orders preserves server order across identical source IDs and URL filters;
               key: `agreement:${id}`,
               kind: 'agreement',
               reference: 'AGR-1111',
-              title: 'Scheduled first',
+              title: 'Historical first',
               status: 'open',
               createdAt: iso(-1000),
               closesAt: null,
@@ -199,19 +180,19 @@ test('Orders preserves server order across identical source IDs and URL filters;
   );
   await page.goto('/orders');
   await expect(page.locator('.market-order-title')).toHaveText([
-    'Scheduled first',
+    'Historical first',
     'Auction second',
   ]);
-  await expect(page.getByText('Pending matching', { exact: true })).toBeVisible();
-  await page.getByLabel('Order type', { exact: true }).selectOption('agreement');
-  await expect(page).toHaveURL(/kind=agreement/);
+  await expect(page.getByText('Legacy record', { exact: true })).toBeVisible();
+  await page.getByLabel('Order type', { exact: true }).selectOption('auction');
+  await expect(page).toHaveURL(/kind=auction/);
   await page.getByRole('button', { name: 'Older orders' }).click();
   await expect(page).toHaveURL(/cursor=opaque-cursor/);
   await page.goBack();
   await expect(page).not.toHaveURL(/cursor=/);
   await page.getByRole('button', { name: 'Clear filters', exact: true }).click();
   await expect(page).toHaveURL(/\/orders$/);
-  await page.getByRole('link', { name: 'Scheduled first', exact: true }).click();
+  await page.getByRole('link', { name: 'Historical first', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Seven-day fixture fleet' })).toBeVisible();
   expect(writes).toHaveLength(0);
 });
@@ -509,224 +490,6 @@ test('Auction polling continues after rental expiry until cleanup is confirmed',
   expect(reads).toBe(settledReads);
 });
 
-test('Agreement review reserves the full target maximum and does not start VMs', async ({
-  page,
-}) => {
-  const writes = await fixture(page, 'buyer', (path, method) =>
-    path === '/api/agreements' && method === 'POST'
-      ? detail()
-      : path === `/api/agreements/${id}`
-        ? detail()
-        : undefined,
-  );
-  await page.goto('/agreements/new');
-  await page.getByLabel('Agreement name', { exact: true }).fill('Nightly fleet');
-  await page.getByLabel('Schedule time zone (IANA)', { exact: true }).fill('UTC');
-  await page.getByLabel('Target slots per window', { exact: true }).fill('20');
-  await page.getByLabel('Minimum approved per window', { exact: true }).fill('12');
-  await page.getByLabel('Reserve a normal-rate continuation').check();
-  await page.getByLabel('Maximum normal rate (USD / VM-hour)', { exact: true }).fill('0.20');
-  await page.getByRole('button', { name: 'Review agreement', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Review capacity agreement' })).toBeVisible();
-  await expect(page.getByText('$140.00 maximum', { exact: true })).toBeVisible();
-  await reviewTables(page, test.info());
-  expect(writes).toHaveLength(0);
-  await page.getByLabel('I accept the booked-capacity charges', { exact: false }).check();
-  await page.getByRole('button', { name: 'Fund & request capacity', exact: true }).click();
-  await expect(page).toHaveURL(new RegExp(`/orders/${id}`));
-  expect(writes).toHaveLength(1);
-  expect(writes[0].body).toMatchObject({
-    minimumQuantity: 12,
-    targetQuantity: 20,
-    maxReservationCents: 14000,
-    continuation: { enabled: true, until: '08:00', maxRateCentsPerHour: 20 },
-  });
-  expect(writes[0].body.operationKey).toBeTruthy();
-});
-
-for (const width of [1440, 390]) {
-  test(`billing and wallet tables retain precise amounts at ${width}px`, async ({ page }) => {
-    await page.setViewportSize({ width, height: 1000 });
-    const charge = {
-      id,
-      agreementId: id,
-      windowId: id,
-      description: 'Nightly research capacity',
-      providerName: 'Fixture supplier',
-      quantity: 12,
-      startsAt: iso(-3600000),
-      discountEndsAt: iso(-1800000),
-      endsAt: iso(-1000),
-      discountRateCentsPerHour: 10,
-      normalRateCentsPerHour: 20,
-      grossCents: 135.79,
-      creditCents: 12.34,
-      totalCents: 123.45,
-      feeCents: 0,
-      revenueShare: revenueShare(123.45),
-      createdAt: iso(-1000),
-      currency: 'USD',
-      status: 'pilot-credit',
-      label: 'Booked window settled',
-    };
-    const invoice = {
-      id,
-      number: 'INV-101',
-      vmId: id,
-      catalogName: 'Research workspace',
-      createdAt: iso(-60000),
-      amountCents: 123.45,
-      totalCents: 123.45,
-      revenueShare: revenueShare(123.45),
-    };
-    const writes = await fixture(page, 'buyer', (path) => {
-      if (path === '/api/invoices') return { items: [invoice] };
-      if (path === '/api/agreement-charges') return { items: [charge] };
-      if (path === '/api/credits/history')
-        return {
-          wallet,
-          items: [
-            {
-              id,
-              description: 'Owner-funded credit',
-              kind: 'grant',
-              amountCents: 123.45,
-              reservedDeltaCents: 0,
-              createdAt: iso(-60000),
-            },
-          ],
-        };
-    });
-    await page.goto('/invoices');
-    await expect(
-      page.getByRole('table', { name: 'Instant rental invoices', exact: true }),
-    ).toContainText('$1.2345');
-    await reviewTables(page, test.info());
-    await page.goto('/credits');
-    await expect(page.getByRole('table', { name: 'Wallet ledger', exact: true })).toContainText(
-      '$1.2345',
-    );
-    await reviewTables(page, test.info());
-    const providerWrites = await fixture(page, 'provider', (path) => {
-      if (path === '/api/provider/earnings') return { items: [invoice] };
-      if (path === '/api/provider/agreement-charges') return { items: [charge] };
-    });
-    await page.goto('/provider/earnings');
-    await expect(page.getByRole('table', { name: 'Rental revenue', exact: true })).toContainText(
-      '$1.2345',
-    );
-    await expect(page.getByRole('alert')).toHaveCount(0);
-    expect([...writes, ...providerWrites]).toHaveLength(0);
-  });
-
-  test(`scheduled supply, demand and frozen bookings remain readable at ${width}px`, async ({
-    page,
-  }) => {
-    await page.setViewportSize({ width, height: 1000 });
-    const writes = await fixture(page, 'provider', (path) => {
-      if (path === '/api/provider/scheduled-offerings')
-        return {
-          items: [
-            {
-              id,
-              name: 'Overnight capacity',
-              catalogId: 'micro',
-              timeZone: 'UTC',
-              windowStart: '00:00',
-              windowEnd: '06:00',
-              availableUntil: '08:00',
-              weekdays: [0, 1, 2, 3, 4, 5, 6],
-              capacityQuantity: 5,
-              discountRateCentsPerHour: 10,
-              normalRateCentsPerHour: 20,
-              active: true,
-              deadlineEligible: true,
-              revision: 1,
-            },
-          ],
-        };
-      if (path === '/api/provider/commitments')
-        return {
-          items: [
-            {
-              id,
-              agreementDescription: 'Nightly research fleet',
-              startsAt: iso(3600000),
-              discountEndsAt: iso(6 * 3600000),
-              endsAt: iso(8 * 3600000),
-              timeZone: 'UTC',
-              quantity: 5,
-              runningQuantity: 2,
-              discountRateCentsPerHour: 10,
-              normalRateCentsPerHour: 20,
-              totalCents: 500,
-            },
-          ],
-        };
-      if (path === '/api/provider/agreement-demand')
-        return {
-          items: [
-            {
-              id,
-              description: 'Singapore research fleet',
-              requirements: { cpu: 1, memoryGb: 1 },
-              region: 'us',
-              approvedQuantity: 12,
-              targetQuantity: 20,
-              minimumQuantity: 10,
-              maxDiscountRateCentsPerHour: 10,
-              maxNormalRateCentsPerHour: 20,
-              startsAt: iso(3600000),
-              endsAt: iso(7 * 86400000),
-              timeZone: 'UTC',
-            },
-          ],
-        };
-    });
-    await page.goto('/provider/scheduled');
-    await expect(
-      page.getByRole('table', { name: 'Scheduled offerings', exact: true }),
-    ).toContainText('Overnight capacity');
-    await reviewTables(page, test.info());
-    await page.getByRole('button', { name: 'Capacity calendar', exact: true }).click();
-    await expect(
-      page.getByRole('table', { name: 'Capacity commitments', exact: true }),
-    ).toContainText('$5.00');
-    await reviewTables(page, test.info());
-    await page.getByRole('button', { name: 'Buyer demand', exact: true }).click();
-    await expect(
-      page.getByRole('table', { name: 'Scheduled buyer demand', exact: true }),
-    ).toContainText('Singapore research fleet');
-    expect(writes).toHaveLength(0);
-  });
-}
-
-test('frozen provider bookings preserve exact prices inside their disclosure', async ({ page }) => {
-  const data = {
-    ...detail(),
-    bookings: [
-      {
-        id,
-        providerName: 'Fixture supplier',
-        startsAt: iso(3600000),
-        quantity: 12,
-        discountRateCentsPerHour: 10,
-        normalRateCentsPerHour: 20,
-        totalCents: 123.45,
-      },
-    ],
-  };
-  const writes = await fixture(page, 'buyer', (path) =>
-    path === `/api/agreements/${id}` ? data : undefined,
-  );
-  await page.goto(`/orders/${id}`);
-  await page.getByText('Frozen provider bookings · 1 blocks', { exact: true }).click();
-  await expect(page.getByRole('table', { name: 'Booked providers', exact: true })).toContainText(
-    '$1.2345',
-  );
-  expect(writes).toHaveLength(0);
-});
-
 test('counteroffer comparison makes every changed resource visible before acceptance', async ({
   page,
 }) => {
@@ -780,67 +543,6 @@ test('counteroffer comparison makes every changed resource visible before accept
   await expect(table).toContainText('Originally requested');
   await expect(table.getByRole('rowheader', { name: 'Memory (GiB)', exact: true })).toBeVisible();
   expect(writes).toHaveLength(0);
-});
-
-test('Manual VM starts use the authoritative available slots and a separate confirmation', async ({
-  page,
-}) => {
-  const writes = await fixture(page, 'buyer', (path, method) =>
-    path === `/api/agreements/${id}`
-      ? detail()
-      : path.endsWith('/activate') && method === 'POST'
-        ? { activations: [{ id: 'activation-one' }, { id: 'activation-two' }], replayed: false }
-        : undefined,
-  );
-  await page.goto(`/orders/${id}`);
-  const quantity = page.getByLabel('VMs to start manually', { exact: true });
-  await expect(quantity).toHaveAttribute('max', '3');
-  await quantity.fill('4');
-  await expect(page.getByRole('button', { name: 'Review VM starts' })).toBeDisabled();
-  await quantity.fill('2');
-  await page.getByRole('button', { name: 'Review VM starts' }).click();
-  await expect(page.getByRole('dialog')).toBeVisible();
-  expect(writes).toHaveLength(0);
-  await page.getByRole('button', { name: 'Start VMs', exact: true }).click();
-  await expect(page.getByRole('dialog')).not.toBeVisible();
-  expect(writes).toHaveLength(1);
-  expect(writes[0].body).toMatchObject({ windowId: 'window-one', quantity: 2 });
-  expect(writes[0].body.operationKey).toBeTruthy();
-});
-
-test('Provider schedule separates location from clock and requires publication review', async ({
-  page,
-}) => {
-  const writes = await fixture(page, 'provider', (path, method, body) =>
-    path === '/api/provider/scheduled-offerings'
-      ? method === 'POST'
-        ? { ...body, id, active: true, revision: 1, deadlineEligible: true }
-        : { items: [] }
-      : path === '/api/provider/commitments' || path === '/api/provider/agreement-demand'
-        ? { items: [] }
-        : undefined,
-  );
-  await page.goto('/provider/scheduled');
-  await page.getByRole('button', { name: 'Publish scheduled offering', exact: true }).click();
-  await page.getByLabel('Offering name', { exact: true }).fill('Quiet hours');
-  await page.getByLabel('Schedule time zone (IANA)', { exact: true }).fill('Asia/Singapore');
-  await page.getByRole('button', { name: 'Review publication', exact: true }).click();
-  await expect(page.getByText('Asia/Singapore · Sun, Mon, Tue, Wed, Thu, Fri, Sat')).toBeVisible();
-  await expect(page.getByText('Compute region', { exact: true })).toBeVisible();
-  expect(writes).toHaveLength(0);
-  await page
-    .getByRole('button', { name: 'Publish scheduled offering', exact: true })
-    .last()
-    .click();
-  await expect(page.getByText('Scheduled offering published.', { exact: false })).toBeVisible();
-  expect(writes).toHaveLength(1);
-  expect(writes[0].body).toMatchObject({
-    catalogId: 'micro',
-    timeZone: 'Asia/Singapore',
-    windowEnd: '06:00',
-    availableUntil: '08:00',
-  });
-  expect(writes[0].body.operationKey).toBeTruthy();
 });
 
 test('Orders mobile layout keeps overflow inside the table', async ({ page }) => {
@@ -962,124 +664,6 @@ test('Orders distinguishes the maximum reservation ceiling from actual credit he
   await expect(price).toContainText('Full-term maximum $140.00');
 });
 
-test('Muse prepares an honest fixture draft without creating an agreement', async ({ page }) => {
-  const writes = await fixture(page, 'buyer', (path) =>
-    path === '/api/agreements/draft'
-      ? {
-          draft: {
-            description: 'Prepared quiet-hours fleet',
-            targetQuantity: 20,
-            minimumQuantity: 12,
-            timeZone: 'UTC',
-            region: 'us',
-            requirements: { cpu: 1, memoryGb: 1 },
-          },
-          mode: 'fixture',
-          modelCalled: false,
-          explanation: 'Parsed local fixture fields; review them before submitting.',
-        }
-      : undefined,
-  );
-  await page.goto('/agreements/new');
-  await page
-    .getByLabel('Describe your schedule', { exact: true })
-    .fill('20 slots, minimum 12, overnight in UTC');
-  await page.getByRole('button', { name: 'Prepare draft', exact: true }).click();
-  await expect(page.getByText('Fixture draft · no model call', { exact: true })).toBeVisible();
-  await page.getByRole('button', { name: 'Use draft in form', exact: true }).click();
-  await expect(page.getByLabel('Agreement name', { exact: true })).toHaveValue(
-    'Prepared quiet-hours fleet',
-  );
-  await expect(page.getByLabel('Target slots per window', { exact: true })).toHaveValue('20');
-  expect(writes.map((w) => w.path)).toEqual(['/api/agreements/draft']);
-});
-
-test('A credit-blocked agreement cannot start VMs even when a stale slot count exists', async ({
-  page,
-}) => {
-  const blocked = detail();
-  Object.assign(blocked.agreement, {
-    status: 'open',
-    blockedCode: 'needs_credit',
-    blockedReason: 'Add Broker credit to reserve this agreement.',
-    reservedCents: 0,
-  });
-  const writes = await fixture(page, 'buyer', (path) =>
-    path === `/api/agreements/${id}` ? blocked : undefined,
-  );
-  await page.goto(`/orders/${id}`);
-  await expect(page.getByRole('button', { name: 'Review VM starts' })).toBeDisabled();
-  await expect(
-    page.getByText('Add Broker credit to reserve this agreement.', { exact: true }),
-  ).toBeVisible();
-  expect(writes).toHaveLength(0);
-});
-
-test('An active window changes only its displayed billing segment at the discount boundary', async ({
-  page,
-}) => {
-  await page.clock.install({ time: new Date(now) });
-  const active = detail();
-  active.agreement.windows[0]!.discountEndsAt = iso(5000);
-  const response = {
-    ...active,
-    bookings: [
-      {
-        id: 'booking-one',
-        windowId: 'window-one',
-        providerId: 'supplier-one',
-        providerName: 'Fixture E2B',
-        catalogId: 'micro',
-        quantity: 12,
-        unitPriceCents: 100,
-        totalCents: 1200,
-        startsAt: iso(-60000),
-        discountEndsAt: iso(5000),
-        endsAt: iso(7200000),
-        discountRateCentsPerHour: 10,
-        normalRateCentsPerHour: 20,
-      },
-    ],
-  };
-  const writes = await fixture(page, 'buyer', (path) =>
-    path === `/api/agreements/${id}` ? response : undefined,
-  );
-  await page.goto(`/orders/${id}`);
-  await expect(
-    page.getByText('Current matched rate: $0.10 / VM-hour', { exact: true }),
-  ).toBeVisible();
-  await page.clock.fastForward(6000);
-  await expect(
-    page.getByText('Current matched rate: $0.20 / VM-hour', { exact: true }),
-  ).toBeVisible();
-  await expect(
-    page.getByText('Reserved continuation · matched normal rate now applies.', { exact: false }),
-  ).toBeVisible();
-  expect(writes).toHaveLength(0);
-});
-
-test('Cancelling unmatched capacity requires explicit review and preserves the cancellation key', async ({
-  page,
-}) => {
-  const writes = await fixture(page, 'buyer', (path, method) =>
-    path === `/api/agreements/${id}` || (path.endsWith('/cancel-unmatched') && method === 'POST')
-      ? detail()
-      : undefined,
-  );
-  await page.goto(`/orders/${id}`);
-  await page.getByRole('button', { name: 'Cancel unmatched remainder', exact: true }).click();
-  await expect(page.getByRole('dialog')).toContainText('Booked capacity remains payable');
-  expect(writes).toHaveLength(0);
-  await page
-    .getByRole('dialog')
-    .getByRole('button', { name: 'Cancel unmatched remainder', exact: true })
-    .click();
-  await expect(page.getByRole('dialog')).not.toBeVisible();
-  expect(writes).toHaveLength(1);
-  expect(writes[0]).toMatchObject({ path: `/api/agreements/${id}/cancel-unmatched` });
-  expect(writes[0].body.operationKey).toBeTruthy();
-});
-
 test('Admin pilot credit grant is reviewed and distinct from Wick compute funding', async ({
   page,
 }) => {
@@ -1190,15 +774,14 @@ test('Scheduled VM details use explicit attribution and never describe an additi
   );
   await page.goto('/vms/scheduled-vm');
   await expect(
-    page.getByRole('heading', { name: 'Scheduled capacity · separate clocks', exact: true }),
+    page.getByRole('heading', { name: 'Historical booking · access deadlines', exact: true }),
   ).toBeVisible();
   await expect(
     page.getByText('Part of your agreement · no additional VM charge', { exact: true }),
   ).toBeVisible();
-  await expect(page.getByRole('link', { name: 'View agreement', exact: true })).toHaveAttribute(
-    'href',
-    `/orders/${id}`,
-  );
+  await expect(
+    page.getByRole('link', { name: 'View historical booking', exact: true }),
+  ).toHaveAttribute('href', `/orders/${id}`);
   await expect(
     page.getByText('Only charged after confirmed readiness', { exact: true }),
   ).not.toBeVisible();
@@ -1243,7 +826,7 @@ test('Settled capacity charges render without VM IDs and assess 15% after failed
   );
   await page.goto('/provider/earnings');
   await expect(
-    page.getByRole('heading', { name: 'Scheduled agreement charges', exact: true }),
+    page.getByRole('heading', { name: 'Historical capacity charges', exact: true }),
   ).toBeVisible();
   const row = page.locator('.market-table tr').filter({ hasText: 'Settled scheduled fleet' });
   await expect(row).toContainText('$8.00');
@@ -1251,50 +834,6 @@ test('Settled capacity charges render without VM IDs and assess 15% after failed
   await expect(row).toContainText('$6.80');
   await expect(row).toContainText('Buyer fee $0.00');
   await expect(row).toContainText('no external payment or payout');
-});
-
-test('Committed admission rejection refreshes one failed receipt without a VM link or premature credit', async ({
-  page,
-}) => {
-  let rejected = false;
-  const denied = {
-    id: 'rejected-receipt',
-    windowId: 'window-one',
-    status: 'failed',
-    requestId: null,
-    vmId: null,
-    createdAt: iso(0),
-    endsAt: iso(7200000),
-    failureReason:
-      '[ROUTE_ADMISSION_DENIED] The booked provider route no longer permits admission.',
-  };
-  await fixture(page, 'buyer', (path) =>
-    path === `/api/agreements/${id}`
-      ? { ...detail(), activations: rejected ? [denied] : [] }
-      : undefined,
-  );
-  const attempts: any[] = [];
-  await page.route(`**/api/agreements/${id}/activate`, async (route) => {
-    rejected = true;
-    attempts.push(route.request().postDataJSON());
-    await route.fulfill({ status: 409, json: { error: denied.failureReason } });
-  });
-  await page.goto(`/orders/${id}`);
-  await page.getByRole('button', { name: 'Review VM starts', exact: true }).click();
-  await page.getByRole('button', { name: 'Start VMs', exact: true }).click();
-  await expect(page.getByRole('dialog')).toContainText('ROUTE_ADMISSION_DENIED');
-  // A retry of the still-open review keeps its operation key and the committed receipt.
-  await page.getByRole('button', { name: 'Start VMs', exact: true }).click();
-  await expect.poll(() => attempts.length).toBe(2);
-  expect(attempts[0].operationKey).toBe(attempts[1].operationKey);
-  await page.getByRole('dialog').getByRole('button', { name: 'Back', exact: true }).click();
-  const receipt = page.locator('.market-activation').filter({ hasText: 'VM start rejected' });
-  await expect(receipt).toHaveCount(1);
-  await expect(receipt).toContainText('No environment created');
-  await expect(receipt).toContainText('ROUTE_ADMISSION_DENIED');
-  await expect(receipt).toContainText('adjustments are finalized when the window settles');
-  await expect(receipt.locator('a')).toHaveCount(0);
-  await expect(page.locator('a[href="/vms/null"], a[href="/requests/null"]')).toHaveCount(0);
 });
 
 test('A fully terminal Orders page stops polling while preserving explicit refresh', async ({
@@ -1341,63 +880,6 @@ test('A fully terminal Orders page stops polling while preserving explicit refre
   await expect.poll(() => reads).toBe(initial + 1);
   await page.clock.fastForward(15000);
   expect(reads).toBe(initial + 1);
-});
-
-test('Provider capacity calendar orders loaded windows by start time then ID and labels runtime holds', async ({
-  page,
-}) => {
-  const base = {
-    agreementId: id,
-    providerId: 'supplier-one',
-    providerName: 'Fixture E2B',
-    catalogId: 'micro',
-    windowId: 'window-one',
-    quantity: 12,
-    unitPriceCents: 100,
-    totalCents: 1200,
-    discountEndsAt: iso(7200000),
-    endsAt: iso(10800000),
-    discountRateCentsPerHour: 10,
-    normalRateCentsPerHour: 20,
-    runningQuantity: 2,
-  };
-  const items = [
-    {
-      ...base,
-      id: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
-      startsAt: iso(3600000),
-      agreementDescription: 'Earlier window, higher ID',
-    },
-    {
-      ...base,
-      id: '11111111-1111-4111-8111-111111111111',
-      startsAt: iso(7200000),
-      agreementDescription: 'Later window, lower ID',
-    },
-    {
-      ...base,
-      id: '00000000-0000-4000-8000-000000000000',
-      startsAt: iso(3600000),
-      agreementDescription: 'Earlier window, lower ID',
-    },
-  ];
-  await fixture(page, 'provider', (path) =>
-    path === '/api/provider/commitments'
-      ? { items }
-      : path === '/api/provider/scheduled-offerings' || path === '/api/provider/agreement-demand'
-        ? { items: [] }
-        : undefined,
-  );
-  await page.goto('/provider/scheduled');
-  await page.getByRole('button', { name: 'Capacity calendar', exact: true }).click();
-  await expect(page.locator('.market-table tbody tr td:first-child > strong')).toHaveText([
-    'Earlier window, lower ID',
-    'Earlier window, higher ID',
-    'Later window, lower ID',
-  ]);
-  await expect(
-    page.getByText('2 runtime slots held · idle slots remain paid', { exact: true }),
-  ).toHaveCount(3);
 });
 
 test('Environment mode explains fixture compute and Muse honestly and closes on Escape', async ({
@@ -1466,119 +948,6 @@ test('Mobile navigation traps focus, locks background and restores the toggle on
   expect(writes).toHaveLength(0);
 });
 
-test('Funding estimate rounds each partial-hour VM window before target and minimum totals', async ({
-  page,
-}) => {
-  const writes = await fixture(page, 'buyer', () => undefined);
-  await page.goto('/agreements/new');
-  await page.getByLabel('Agreement name', { exact: true }).fill('Partial-hour capacity');
-  await page.getByLabel('Schedule time zone (IANA)', { exact: true }).fill('UTC');
-  await page.getByLabel('First local date', { exact: true }).fill('2026-10-29');
-  await page.getByLabel('Target slots per window', { exact: true }).fill('20');
-  await page.getByLabel('Minimum approved per window', { exact: true }).fill('12');
-  await page.getByLabel('Window opens', { exact: true }).fill('00:00');
-  await page.getByLabel('Discount ends', { exact: true }).fill('00:17');
-  await page.getByLabel('Maximum discounted rate (USD / VM-hour)', { exact: true }).fill('0.10');
-  const funding = page.locator('.market-two-column > aside');
-  // 17 minutes at ten cents/hour rounds to 2.84 cents for each VM/window.
-  await expect(funding.getByText('Estimated $3.976 maximum', { exact: true })).toBeVisible();
-  await expect(funding).toContainText('Up to $2.3856');
-  await expect(page.getByRole('button', { name: 'Review agreement', exact: true })).toBeEnabled();
-  // One minute rounds to 0.17 cents, rather than a whole-cent minimum.
-  await page.getByLabel('Discount ends', { exact: true }).fill('00:01');
-  await expect(funding.getByText('Estimated $0.238 maximum', { exact: true })).toBeVisible();
-  await expect(funding).toContainText('Up to $0.1428');
-  expect(writes).toHaveLength(0);
-});
-
-test('Server-confirmed DST quote overrides this device and rejected calendars never create an order', async ({
-  page,
-}) => {
-  await page.clock.install({ time: new Date('2025-10-29T12:00:00Z') });
-  const writes = await fixture(page, 'buyer', (path, method, body) => {
-    if (path !== '/api/agreements/preview' || method !== 'POST' || body.windowStart !== '00:00')
-      return undefined;
-    const quote = agreementEstimate(body),
-      windows = agreementWindows(body);
-    const shift = (value: string) => new Date(Date.parse(value) + 3600000).toISOString();
-    const first = windows[0]!;
-    // Model a server/device rule difference even when runtime tzdata versions agree.
-    // Shifting every endpoint equally keeps the valid window's elapsed cost unchanged.
-    windows[0] = {
-      startsAt: shift(first.startsAt),
-      discountEndsAt: shift(first.discountEndsAt),
-      endsAt: shift(first.endsAt),
-    };
-    return {
-      maxAmountCents: quote.maximum,
-      minimumAmountCents: quote.minimum,
-      windows,
-      timeZone: body.timeZone,
-    };
-  });
-  await page.goto('/agreements/new');
-  await page.getByLabel('Agreement name', { exact: true }).fill('Calendar validation');
-  await page.getByLabel('Schedule time zone (IANA)', { exact: true }).fill('America/Vancouver');
-  await page.getByLabel('First local date', { exact: true }).fill('2025-10-30');
-  await page.getByLabel('Target slots per window', { exact: true }).fill('20');
-  await page.getByLabel('Minimum approved per window', { exact: true }).fill('12');
-  await page.getByLabel('Window opens', { exact: true }).fill('00:00');
-  await page.getByLabel('Discount ends', { exact: true }).fill('06:00');
-  await page.getByLabel('Reserve a normal-rate continuation').check();
-  await page.getByLabel('Maximum normal rate (USD / VM-hour)', { exact: true }).fill('0.20');
-  const funding = page.locator('.market-two-column > aside');
-  // Historical DST fixes the funding expectation independently of current timezone changes.
-  await page.getByRole('button', { name: 'Review agreement', exact: true }).click();
-  await expect(
-    page.getByRole('heading', { name: 'Review capacity agreement', exact: true }),
-  ).toBeVisible();
-  await expect(funding.getByText('$142.00 maximum', { exact: true })).toBeVisible();
-  await expect(funding).toContainText('Up to $85.20');
-  await expect(
-    page.getByText(
-      'Time-zone rules differ on this device. Review the server-confirmed schedule below.',
-      { exact: true },
-    ),
-  ).toBeVisible();
-  await expect(
-    page.getByRole('cell', { name: '2025-10-30 08:00:00 UTC', exact: true }),
-  ).toBeVisible();
-  await expect(
-    page.getByRole('cell', { name: '2025-11-02 14:00:00 UTC', exact: true }),
-  ).toBeVisible();
-  expect(writes).toHaveLength(0);
-  await page.getByRole('button', { name: 'Edit request', exact: true }).click();
-  await page.getByLabel('Window opens', { exact: true }).fill('01:30');
-  await page.getByRole('button', { name: 'Review agreement', exact: true }).click();
-  await expect(page.getByRole('alert')).toContainText('daylight-saving transition');
-  await expect(
-    page.getByRole('heading', { name: 'New capacity agreement', exact: true }),
-  ).toBeVisible();
-  await expect(
-    page.getByRole('button', { name: 'Fund & request capacity', exact: true }),
-  ).toHaveCount(0);
-  await page.getByLabel('First local date', { exact: true }).fill('2025-03-09');
-  await page.getByLabel('Window opens', { exact: true }).fill('02:30');
-  await page.getByRole('button', { name: 'Review agreement', exact: true }).click();
-  await expect(page.getByRole('alert')).toContainText('daylight-saving transition');
-  await expect(
-    page.getByRole('button', { name: 'Fund & request capacity', exact: true }),
-  ).toHaveCount(0);
-  await page.getByLabel('First local date', { exact: true }).fill('');
-  await expect(funding.getByRole('heading', { level: 2 })).toHaveText(
-    'Complete the schedule for an estimate',
-  );
-  await expect(funding.getByRole('heading', { level: 2 })).not.toContainText(/\$0|NaN/);
-  await expect(page.getByRole('button', { name: 'Review agreement', exact: true })).toBeDisabled();
-  await page.getByLabel('First local date', { exact: true }).fill('2025-10-30');
-  await page.getByLabel('Window opens', { exact: true }).fill('');
-  await expect(funding.getByRole('heading', { level: 2 })).toHaveText(
-    'Complete the schedule for an estimate',
-  );
-  await expect(page.getByRole('button', { name: 'Review agreement', exact: true })).toBeDisabled();
-  expect(writes).toHaveLength(0);
-});
-
 test('Real Muse policy proposal identifies Spark Open on Baseten and remains an unapplied draft', async ({
   page,
 }) => {
@@ -1638,4 +1007,146 @@ test('Real Muse policy proposal identifies Spark Open on Baseten and remains an 
     0,
   );
   expect(writes.map((write) => write.path)).toEqual(['/api/provider/policy/propose']);
+});
+
+test('VM purchase options no longer advertise schedules and retired deep links cannot create orders', async ({
+  page,
+}) => {
+  const reads: string[] = [];
+  const writes = await fixture(page, 'buyer', (path) => {
+    reads.push(path);
+    return undefined;
+  });
+  await page.goto('/new');
+  await expect(page.getByRole('link', { name: 'Configure VM', exact: true })).toBeVisible();
+  await expect(page.locator('a[href="/agreements/new"]')).toHaveCount(0);
+  await expect(page.getByText(/Schedule bulk capacity|Scheduled VMs · bulk agreement/)).toHaveCount(
+    0,
+  );
+  await page.goto('/new/vm');
+  await expect(page.getByRole('heading', { name: 'Launch a VM', exact: true })).toBeVisible();
+  await expect(page.getByLabel('Choose order type')).toHaveCount(0);
+  await page.goto('/agreements/new');
+  await expect(
+    page.getByRole('heading', { name: 'Scheduled VMs have been removed' }),
+  ).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Launch a VM', exact: true })).toHaveAttribute(
+    'href',
+    '/new/vm',
+  );
+  await expect(page.locator('form')).toHaveCount(0);
+  expect(reads.filter((path) => path.startsWith('/api/agreements'))).toEqual([]);
+  expect(writes).toEqual([]);
+});
+
+test('provider workspace removes scheduled navigation, publication and calendar controls', async ({
+  page,
+}) => {
+  const reads: string[] = [];
+  const writes = await fixture(page, 'provider', (path) => {
+    reads.push(path);
+    return undefined;
+  });
+  await page.goto('/provider/capacity');
+  await expect(page.getByRole('heading', { name: 'Capacity', exact: true })).toBeVisible();
+  await expect(page.locator('a[href="/provider/scheduled"]')).toHaveCount(0);
+  await expect(page.getByText('View booked windows', { exact: true })).toHaveCount(0);
+  await page.goto('/provider/scheduled');
+  await expect(
+    page.getByRole('heading', { name: 'Scheduled VMs have been removed' }),
+  ).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Manage VM offers', exact: true })).toHaveAttribute(
+    'href',
+    '/provider/offerings',
+  );
+  await expect(page.locator('form')).toHaveCount(0);
+  expect(reads.filter((path) => path.startsWith('/api/provider/scheduled'))).toEqual([]);
+  expect(writes).toEqual([]);
+});
+
+test('existing booking history remains read-only and retains accepted prices and environment links', async ({
+  page,
+}) => {
+  const data = detail();
+  data.bookings = [
+    {
+      id: 'booking-one',
+      windowId: 'window-one',
+      providerId: 'supplier-one',
+      providerName: 'Original supplier',
+      catalogId: 'micro',
+      quantity: 12,
+      unitPriceCents: 100,
+      totalCents: 1200,
+      startsAt: iso(-10000),
+      discountEndsAt: iso(-5000),
+      endsAt: iso(10000),
+      discountRateCentsPerHour: 10,
+      normalRateCentsPerHour: 20,
+    },
+  ] as any;
+  data.activations = [
+    {
+      id: 'activation-one',
+      windowId: 'window-one',
+      status: 'terminated',
+      requestId: 'request-one',
+      vmId: 'historical-vm',
+      endsAt: iso(-1000),
+      createdAt: iso(-10000),
+    },
+  ] as any;
+  const writes = await fixture(page, 'buyer', (path) =>
+    path === `/api/agreements/${id}` ? data : undefined,
+  );
+  await page.goto(`/orders/${id}`);
+  await expect(page.getByRole('heading', { name: 'Booking history', exact: true })).toBeVisible();
+  await expect(page.getByRole('table', { name: 'Historical capacity bookings' })).toContainText(
+    '$12.00',
+  );
+  await expect(page.getByRole('link', { name: 'Open environment', exact: true })).toHaveAttribute(
+    'href',
+    '/vms/historical-vm',
+  );
+  await expect(
+    page.getByRole('button', { name: /Start|Activate|Cancel unmatched|Draft with Muse/ }),
+  ).toHaveCount(0);
+  await expect(page.locator('form')).toHaveCount(0);
+  expect(writes).toEqual([]);
+});
+
+test('Broker wallet keeps agent funding and historical ledger links without schedule marketing', async ({
+  page,
+}) => {
+  const writes = await fixture(page, 'buyer', (path) =>
+    path === '/api/credits/history'
+      ? {
+          wallet,
+          items: [
+            {
+              id: 'ledger-one',
+              kind: 'reserve',
+              amountCents: 0,
+              reservedDeltaCents: 100,
+              agreementId: id,
+              operationKey: 'historical-reserve',
+              createdAt: iso(-1000),
+              description: 'Original accepted booking reserve',
+            },
+          ],
+        }
+      : undefined,
+  );
+  await page.goto('/credits');
+  await expect(page.getByRole('heading', { name: 'Broker wallet', exact: true })).toBeVisible();
+  await expect(
+    page.getByRole('link', { name: 'Manage agent budgets', exact: true }),
+  ).toHaveAttribute('href', '/agents');
+  await expect(
+    page.getByRole('link', { name: 'View historical booking', exact: true }),
+  ).toHaveAttribute('href', `/orders/${id}`);
+  await expect(page.getByText(/scheduled VM bookings|reserve scheduled VM capacity/)).toHaveCount(
+    0,
+  );
+  expect(writes).toEqual([]);
 });

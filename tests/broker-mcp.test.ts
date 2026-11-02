@@ -63,6 +63,46 @@ class FakeTerminal {
 }
 const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
 describe('Broker MCP role and scope boundaries', () => {
+  it('does not offer retired scheduled VM tools even to previously authorized keys', () => {
+    const client = { baseUrl: 'https://broker.example' } as BrokerClient;
+    for (const role of ['buyer', 'provider']) {
+      const tools = buildTools(
+        client,
+        {
+          ...principal,
+          role,
+          apiKey: {
+            ...principal.apiKey,
+            scopes: [
+              'account:read',
+              'catalog:read',
+              'orders:read',
+              'orders:write',
+              'agreements:read',
+              'agreements:write',
+              'agreements:activate',
+              'muse:propose',
+              'provider:read',
+              'provider:offerings:write',
+              'billing:read',
+              'tokens:buy',
+              'inference:read',
+            ],
+          },
+        },
+        manager(client),
+      );
+      expect(tools.map((tool) => tool.name).join(' ')).not.toMatch(
+        /agreement|schedule|commitment|calendar/,
+      );
+      expect(
+        tools.some(
+          (tool) =>
+            tool.name === (role === 'buyer' ? 'auction_create' : 'provider_offering_publish'),
+        ),
+      ).toBe(true);
+    }
+  });
   it('accepts long signed instant quotes and rejects out-of-contract inference quantities', async () => {
     const request = vi.fn(async () => ({ id: 'order-one' }));
     const client = { baseUrl: 'https://broker.example', request } as unknown as BrokerClient;
@@ -272,7 +312,6 @@ describe('Broker MCP role and scope boundaries', () => {
       manager(client),
     );
     expect(tools.map((t) => t.name).sort()).toEqual([
-      'muse_provider_schedule_draft',
       'provider_bid_propose',
       'provider_offerings_propose',
       'provider_policy_propose',

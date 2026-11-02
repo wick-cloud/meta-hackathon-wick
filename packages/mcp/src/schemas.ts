@@ -19,30 +19,6 @@ const requirements = z
     gpu: z.string().max(120).optional(),
   })
   .strict();
-const agreement = z
-  .object({
-    operationKey: opKey.optional(),
-    description: text,
-    startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-    timeZone: id,
-    windowStart: z.string().regex(/^\d{2}:\d{2}$/),
-    windowEnd: z.string().regex(/^\d{2}:\d{2}$/),
-    minimumQuantity: z.number().int().min(1).max(20),
-    targetQuantity: z.number().int().min(1).max(20),
-    requirements,
-    region: id,
-    maxDiscountRateCentsPerHour: cents,
-    maxReservationCents: cents.optional(),
-    continuation: z
-      .object({
-        enabled: z.boolean(),
-        until: z.string().regex(/^\d{2}:\d{2}$/),
-        maxRateCentsPerHour: cents,
-      })
-      .strict()
-      .optional(),
-  })
-  .strict();
 const desired = z
   .object({
     cpu: z.number().int().min(1).max(1024),
@@ -117,8 +93,6 @@ export const bodySchemas: Record<string, z.ZodType> = {
       requirements,
     })
     .strict(),
-  agreement,
-  activation: z.object({ windowId: id, quantity: z.number().int().min(1).max(20) }).strict(),
   intent: z
     .object({
       description: text,
@@ -167,24 +141,6 @@ export const bodySchemas: Record<string, z.ZodType> = {
     })
     .strict(),
   active: z.object({ active: z.boolean() }).strict(),
-  scheduleActive: z
-    .object({ active: z.boolean(), expectedRevision: z.number().int().min(1) })
-    .strict(),
-  schedule: z
-    .object({
-      catalogId: id,
-      name: z.string().min(1).max(160),
-      kind: z.enum(['discount_schedule', 'capacity_window']),
-      timeZone: id,
-      weekdays: z.array(z.number().int().min(0).max(6)).min(1).max(7),
-      windowStart: z.string().regex(/^\d{2}:\d{2}$/),
-      windowEnd: z.string().regex(/^\d{2}:\d{2}$/),
-      availableUntil: z.string().regex(/^\d{2}:\d{2}$/),
-      capacityQuantity: z.number().int().min(1).max(20),
-      discountRateCentsPerHour: cents,
-      normalRateCentsPerHour: cents,
-    })
-    .strict(),
   translation: z.object({ description: text }).strict(),
   prompt: z.object({ prompt: text }).strict(),
 };
@@ -192,11 +148,9 @@ export const filtersSchema = z
   .object({
     limit: z.number().int().min(1).max(100).optional(),
     cursor: z.string().max(768).optional(),
-    kind: z.enum(['all', 'auction', 'agreement', 'token']).optional(),
+    kind: z.enum(['all', 'auction', 'token']).optional(),
     status: z.enum(['all', 'active', 'history', 'attention']).optional(),
     created: z.enum(['all', '24h', '7d', '30d']).optional(),
-    from: z.string().max(64).optional(),
-    to: z.string().max(64).optional(),
   })
   .strict();
 export function operationSchema(operation: Operation): z.ZodObject {
@@ -204,11 +158,7 @@ export function operationSchema(operation: Operation): z.ZodObject {
   if (operation.path.includes(':id')) shape.id = id;
   if (operation.path.includes(':offerId')) shape.offerId = id;
   if (operation.mutation) shape.operationKey = opKey;
-  if (operation.body)
-    shape.input =
-      operation.command === 'agreements preview'
-        ? agreement.extend({ operationKey: opKey })
-        : bodySchemas[operation.body]!;
+  if (operation.body) shape.input = bodySchemas[operation.body]!;
   if (operation.method === 'GET' && !operation.path.includes(':id'))
     shape.filters = filtersSchema.optional();
   return z.object(shape).strict();

@@ -430,38 +430,6 @@
 .market-back {
   margin: 0 0 16px;
 }
-.market-mode-picker {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-  margin-bottom: 22px;
-}
-.market-mode {
-  display: flex;
-  align-items: center;
-  gap: 13px;
-  border: 1px solid var(--line);
-  background: var(--card);
-  padding: 17px 18px;
-  border-radius: 10px;
-}
-.market-mode.selected {
-  border-color: var(--accent);
-  background: var(--accent-soft);
-}
-.market-mode strong {
-  font-size: 13px;
-  font-weight: 600;
-}
-.market-mode p {
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.5;
-  margin-top: 5px;
-}
-a.market-mode:hover {
-  border-color: var(--accent);
-}
 .market-order-intro {
   display: flex;
   align-items: center;
@@ -848,20 +816,6 @@ a.market-activation:hover strong {
   gap: 14px;
   margin-top: 18px;
 }
-.market-scheduled-card {
-  border: 1px solid var(--line);
-  border-radius: 9px;
-  padding: 18px;
-  background: var(--sidebar);
-}
-.market-scheduled-card > p {
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.5;
-}
-.market-scheduled-card .button {
-  margin-top: 14px;
-}
 .market-weekdays {
   display: flex;
   flex-wrap: wrap;
@@ -1088,9 +1042,6 @@ a.market-activation:hover strong {
   .orders-table th {
     padding-left: 13px;
     padding-right: 13px;
-  }
-  .market-mode-picker {
-    grid-template-columns: 1fr;
   }
   .market-order-intro {
     align-items: flex-start;

@@ -3,7 +3,6 @@ import {
   ArrowRight,
   Bot,
   Check,
-  Layers3,
   Server,
   Sparkles,
   TerminalSquare,
@@ -77,11 +76,6 @@ export function PurchaseCards({ compact = false }: { compact?: boolean }) {
           <Link href="/new/vm" className="button primary">
             Configure VM <ArrowRight size={15} />
           </Link>
-          {!compact && (
-            <Link href="/agreements/new" className="purchase-secondary-link">
-              <Layers3 size={14} /> Schedule bulk capacity
-            </Link>
-          )}
         </div>
       </section>
       <section
@@ -166,8 +160,8 @@ export function PurchaseChooser() {
         <div>
           <h2 id="purchase-wallet-title">Wallet credits and token packs do different jobs.</h2>
           <p>
-            Wallet credits fund agent budgets and scheduled VM bookings. A token pack gives an agent
-            prepaid AI usage. Your orders keep a record of every purchase.
+            Wallet credits fund agent and Studio task budgets. A token pack gives an agent prepaid
+            AI usage. Your orders keep a record of every purchase.
           </p>
         </div>
         <Link href="/credits">

@@ -1,11 +1,11 @@
 import type { FastifyInstance } from 'fastify';
-import { BROKER_PUBLIC_ROUTES } from '../shared/developer.js';
+import { BROKER_ADVERTISED_ROUTES } from '../shared/developer.js';
 import { BROKER_API_SCHEMAS, BROKER_OPERATION_SCHEMAS } from '../../packages/sdk/src/contracts.js';
 
 export function brokerOpenApi() {
   const paths: Record<string, Record<string, unknown>> = {};
   const ref = (name: string) => ({ $ref: `#/components/schemas/${name}` });
-  for (const route of BROKER_PUBLIC_ROUTES) {
+  for (const route of BROKER_ADVERTISED_ROUTES) {
     const contract = BROKER_OPERATION_SCHEMAS[`${route.method} ${route.path}`];
     if (!contract)
       throw new Error(`Missing public Broker operation contract: ${route.method} ${route.path}`);
@@ -29,7 +29,7 @@ export function brokerOpenApi() {
       );
     if (route.path === '/api/orders')
       for (const [name, values] of Object.entries({
-        kind: ['all', 'auction', 'agreement', 'token'],
+        kind: ['all', 'auction', 'token'],
         status: ['all', 'active', 'history', 'attention'],
         created: ['all', '24h', '7d', '30d'],
       }))
@@ -37,14 +37,6 @@ export function brokerOpenApi() {
           name,
           in: 'query',
           schema: { type: 'string', enum: values, default: 'all' },
-        });
-    if (route.path === '/api/provider/commitments')
-      for (const name of ['from', 'to'])
-        parameters.push({
-          name,
-          in: 'query',
-          schema: { type: 'string', format: 'date-time' },
-          description: 'Calendar range must be no longer than 62 days.',
         });
     if (['/api/inference/packs', '/api/provider/inference/packs'].includes(route.path))
       parameters.push({
@@ -122,9 +114,34 @@ export function brokerOpenApi() {
           description: 'A scoped Broker key created in the UI. Wick keys are not accepted.',
         },
       },
-      schemas: BROKER_API_SCHEMAS,
+      schemas: referencedSchemas(paths),
     },
   };
+}
+/** Keep compatibility types in the SDK without advertising retired inputs in OpenAPI. */
+function referencedSchemas(paths: Record<string, unknown>) {
+  const schemas: Record<string, unknown> = {};
+  function visit(value: unknown) {
+    if (!value || typeof value !== 'object') return;
+    if (Array.isArray(value)) {
+      for (const item of value) visit(item);
+      return;
+    }
+    const record = value as Record<string, unknown>;
+    const ref = record.$ref;
+    if (typeof ref === 'string' && ref.startsWith('#/components/schemas/')) {
+      const name = ref.slice('#/components/schemas/'.length);
+      if (!(name in schemas)) {
+        const schema = BROKER_API_SCHEMAS[name];
+        if (!schema) throw new Error(`Missing Broker schema: ${name}`);
+        schemas[name] = schema;
+        visit(schema);
+      }
+    }
+    for (const item of Object.values(record)) visit(item);
+  }
+  visit(paths);
+  return schemas;
 }
 export function registerOpenApi(app: FastifyInstance) {
   const document = brokerOpenApi();

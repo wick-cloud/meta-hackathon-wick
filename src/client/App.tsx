@@ -17,7 +17,6 @@ import {
   TerminalSquare,
   X,
   Wallet,
-  CalendarClock,
   KeyRound,
   Bot,
   Server,
@@ -36,8 +35,8 @@ import { NewEnvironment, RequestReview, AuctionPage, VMDetail, Invoices } from '
 import { MyVMs } from './vm-inventory';
 import { AlternativeComposer, AlternativeDetail, AlternativeList } from './negotiation';
 import { Orders } from './orders';
-import { AgreementComposer, AgreementDetail, Credits } from './agreements';
-import { ProviderScheduled } from './scheduled-provider';
+import { AgreementDetail, RetiredScheduledVMs } from './agreements';
+import { Credits } from './credits';
 import { AdminCreditGrant } from './admin-credits';
 import { DeveloperKeys } from './developer-keys';
 import { Agents, AgentDetail, TokenComposer, TokenOrderPage, ProviderInference } from './inference';
@@ -71,7 +70,6 @@ const providerNavigation: NavigationItem[] = [
   { path: '/provider/policy', label: 'Policy', icon: Settings2 },
   { path: '/provider/requests', label: 'Requests', icon: Box },
   { path: '/provider/offerings', label: 'Offerings', icon: LayoutGrid },
-  { path: '/provider/scheduled', label: 'Scheduled market', icon: CalendarClock },
   { path: '/provider/inference', label: 'AI capacity', icon: Sparkles },
   { path: '/provider/earnings', label: 'Earnings', icon: CircleDollarSign },
   { path: '/provider/activity', label: 'Activity', icon: Activity },
@@ -391,7 +389,7 @@ export default function App() {
       content = <TokenOrderPage key={path} id={path.split('/')[2]!} />;
     else if (path.startsWith('/orders/'))
       content = <AgreementDetail key={path} id={path.split('/')[2]!} />;
-    else if (path === '/agreements/new') content = <AgreementComposer />;
+    else if (path === '/agreements/new') content = <RetiredScheduledVMs />;
     else if (path.startsWith('/agreements/'))
       content = <AgreementDetail key={path} id={path.split('/')[2]!} />;
     else if (path === '/credits') content = <Credits />;
@@ -413,7 +411,7 @@ export default function App() {
     if (path === '/provider/policy') content = <ProviderPolicy />;
     else if (path === '/provider/requests') content = <ProviderRequests />;
     else if (path === '/provider/offerings') content = <ProviderOfferings />;
-    else if (path === '/provider/scheduled') content = <ProviderScheduled />;
+    else if (path === '/provider/scheduled') content = <RetiredScheduledVMs provider />;
     else if (path === '/provider/inference') content = <ProviderInference search={search} />;
     else if (path === '/provider/earnings') content = <ProviderEarnings />;
     else if (path === '/provider/activity') content = <ProviderActivity />;
@@ -429,7 +427,7 @@ export default function App() {
     navigation.find((item) => path === item.path || path.startsWith(item.path + '/'))?.label ||
     (path === '/new' && !new URLSearchParams(search).has('copy')
       ? 'New purchase'
-      : path === '/requests/review' || path === '/agreements/new' || path === '/new'
+      : path === '/requests/review' || path === '/new'
         ? 'Launch a VM'
         : path.startsWith('/requests/') ||
             path.startsWith('/agreements/') ||
@@ -441,7 +439,6 @@ export default function App() {
     path.startsWith(to + '/') ||
     (to === '/new/vm' &&
       (path === '/requests/review' ||
-        path === '/agreements/new' ||
         (path === '/new' && new URLSearchParams(search).has('copy')))) ||
     (to === '/orders' &&
       ((path.startsWith('/requests/') && path !== '/requests/review') ||

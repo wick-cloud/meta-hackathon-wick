@@ -3,7 +3,6 @@ import type { AppContext } from '../context.js';
 import { transaction } from '../marketplace/db.js';
 import { revenueShare } from '../../shared/pricing.js';
 import { applyCreditEntry } from './credits.js';
-import { matchAgreement } from './matching.js';
 
 /** A booked block is payable even when the customer chose zero manual starts. */
 export async function settleWindow(ctx: AppContext, windowId: string) {
@@ -117,6 +116,7 @@ async function expireAgreement(ctx: AppContext, id: string) {
     );
   });
 }
+/** Legacy financial reconciliation only; no scheduled capacity is matched or started. */
 export async function maintainAgreements(ctx: AppContext) {
   const ended = (
     await ctx.pool.query(
@@ -130,13 +130,6 @@ export async function maintainAgreements(ctx: AppContext) {
     )
   ).rows;
   for (const a of expired) await expireAgreement(ctx, a.id);
-  const due = (
-    await ctx.pool.query(
-      "SELECT id FROM broker_agreements WHERE source_mode=$1 AND status IN('open','approved') AND accepting_topups AND next_match_at<=clock_timestamp() AND expires_at>clock_timestamp() ORDER BY next_match_at,id LIMIT 20",
-      [ctx.wick.mode],
-    )
-  ).rows;
-  for (const a of due) await matchAgreement(ctx, a.id);
 }
 export async function startAgreementWorkers(ctx: AppContext) {
   const queue = 'broker-agreement-maintenance';

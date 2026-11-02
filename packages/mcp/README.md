@@ -17,7 +17,7 @@ Configure a local MCP host to launch:
   "mcpServers": {
     "wick-broker": {
       "command": "npx",
-      "args": ["-y", "@wick-cloud/broker-mcp@0.3.0"]
+      "args": ["-y", "@wick-cloud/broker-mcp@0.4.0"]
     }
   }
 }
@@ -25,7 +25,7 @@ Configure a local MCP host to launch:
 
 The server reads that profile. For headless execution, inject `WICK_BROKER_API_KEY` and `WICK_BROKER_API_URL` from your secret manager. No hosted MCP URL or OAuth service is required.
 
-The account’s role and key scopes determine which tools are advertised. Buyer tools cover catalog, Orders, agreements, wallet/invoices, alternatives, environments and Muse drafts. Provider tools cover capacity, policy, offerings, bids, schedules, commitments, earnings and Muse proposals. The Broker server checks permissions again for every API operation.
+The account’s role and key scopes determine which tools are advertised. Buyer tools cover catalog, Orders, AI token purchases, wallet/invoices, alternatives, environments and Muse proposals. Provider tools cover capacity, policy, offerings, bids, inference supply, earnings and Muse proposals. Version `0.4.0` no longer advertises scheduled VM tools, including to keys with historical scheduling scopes. The Broker server checks permissions again for every API operation.
 
 Resource mutations require an explicit stable operation key. Drafting and committing are separate tools. Wait tools run for at most 30 seconds and return a pending resource when unfinished; they do not cancel or resubmit it.
 

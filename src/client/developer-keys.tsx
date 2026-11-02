@@ -30,9 +30,9 @@ const labels: Record<BrokerScope, string> = {
   'muse:propose': 'Request Muse proposals',
   'orders:read': 'Read orders and alternatives',
   'orders:write': 'Create, cancel and retry orders; accept alternatives',
-  'agreements:read': 'Read and preview agreements',
-  'agreements:write': 'Place agreements and cancel unmatched capacity',
-  'agreements:activate': 'Start booked environments',
+  'agreements:read': 'Read historical capacity records',
+  'agreements:write': 'Legacy agreement access',
+  'agreements:activate': 'Legacy activation access',
   'vms:read': 'Read environments',
   'vms:terminal': 'Connect to environment terminals',
   'vms:terminate': 'Terminate environments',
@@ -71,10 +71,10 @@ export function DeveloperKeys() {
   const [creating, setCreating] = useState(false),
     [name, setName] = useState(''),
     [days, setDays] = useState(30),
-    [scopes, setScopes] = useState<BrokerScope[]>(() => defaultScopes(role)),
+    [scopes, setScopes] = useState<BrokerScope[]>(() =>
+      defaultScopes(role).filter((scope) => !scope.startsWith('agreements:')),
+    ),
     [auction, setAuction] = useState(''),
-    [agreement, setAgreement] = useState(''),
-    [quantity, setQuantity] = useState(1),
     [busy, setBusy] = useState(false),
     [error, setError] = useState(''),
     [created, setCreated] = useState<{ key: BrokerKeySummary; token: string } | null>(null),
@@ -83,10 +83,8 @@ export function DeveloperKeys() {
   function openCreate() {
     setName('');
     setDays(30);
-    setScopes(defaultScopes(role));
+    setScopes(defaultScopes(role).filter((scope) => !scope.startsWith('agreements:')));
     setAuction('');
-    setAgreement('');
-    setQuantity(1);
     setError('');
     setCreating(true);
   }
@@ -96,9 +94,6 @@ export function DeveloperKeys() {
     setError('');
     const limits: BrokerKeyLimits = {};
     if (scopes.includes('orders:write')) limits.maxAuctionCents = usdToCents(auction) ?? NaN;
-    if (scopes.includes('agreements:write'))
-      limits.maxAgreementReservationCents = usdToCents(agreement) ?? NaN;
-    if (scopes.includes('agreements:activate')) limits.maxActivationQuantity = quantity;
     try {
       const result = await post<{ key: BrokerKeySummary; token: string }>('/api/keys', {
         name,
@@ -294,9 +289,9 @@ export function DeveloperKeys() {
         <pre>
           {[
             'npm install \\',
-            `  ${window.location.origin}/downloads/0.3.0/wick-cloud-broker-sdk-0.3.0.tgz \\`,
-            `  ${window.location.origin}/downloads/0.3.0/wick-cloud-broker-cli-0.3.0.tgz \\`,
-            `  ${window.location.origin}/downloads/0.3.0/wick-cloud-broker-mcp-0.3.0.tgz`,
+            `  ${window.location.origin}/downloads/0.4.0/wick-cloud-broker-sdk-0.4.0.tgz \\`,
+            `  ${window.location.origin}/downloads/0.4.0/wick-cloud-broker-cli-0.4.0.tgz \\`,
+            `  ${window.location.origin}/downloads/0.4.0/wick-cloud-broker-mcp-0.4.0.tgz`,
           ].join('\n')}
         </pre>
         <div className="key-setup-grid">
@@ -364,81 +359,52 @@ export function DeveloperKeys() {
                 Read access is selected by default. Grant write access only for operations this
                 client should perform.
               </p>
-              {scopesForRole(role).map((scope) => (
-                <label key={scope} className="key-scope">
-                  <input
-                    type="checkbox"
-                    checked={scopes.includes(scope)}
-                    disabled={scope === 'account:read'}
-                    onChange={(e) =>
-                      setScopes((old) =>
-                        e.target.checked ? [...old, scope] : old.filter((s) => s !== scope),
-                      )
-                    }
-                  />
-                  <span>
-                    {labels[scope]}
-                    <code>{scope}</code>
-                  </span>
-                </label>
-              ))}
+              {scopesForRole(role)
+                .filter((scope) => !scope.startsWith('agreements:'))
+                .map((scope) => (
+                  <label key={scope} className="key-scope">
+                    <input
+                      type="checkbox"
+                      checked={scopes.includes(scope)}
+                      disabled={scope === 'account:read'}
+                      onChange={(e) =>
+                        setScopes((old) =>
+                          e.target.checked ? [...old, scope] : old.filter((s) => s !== scope),
+                        )
+                      }
+                    />
+                    <span>
+                      {labels[scope]}
+                      <code>{scope}</code>
+                    </span>
+                  </label>
+                ))}
             </fieldset>
-            {role === 'buyer' &&
-              (scopes.includes('orders:write') ||
-                scopes.includes('agreements:write') ||
-                scopes.includes('agreements:activate')) && (
-                <fieldset className="key-operation-limits">
-                  <legend>Per-operation limits</legend>
-                  <p>
-                    These limits apply to each operation. Multiple operations can exceed these
-                    amounts in total.
-                  </p>
-                  <div className="key-limit-fields">
-                    {scopes.includes('orders:write') && (
-                      <label className="field">
-                        <span>Maximum order budget · USD</span>
-                        <input
-                          type="number"
-                          min="0.0001"
-                          max="1000000"
-                          step="0.0001"
-                          required
-                          value={auction}
-                          onChange={(e) => setAuction(e.target.value)}
-                        />
-                      </label>
-                    )}
-                    {scopes.includes('agreements:write') && (
-                      <label className="field">
-                        <span>Maximum agreement reservation · USD</span>
-                        <input
-                          type="number"
-                          min="0.0001"
-                          max="1000000"
-                          step="0.0001"
-                          required
-                          value={agreement}
-                          onChange={(e) => setAgreement(e.target.value)}
-                        />
-                      </label>
-                    )}
-                    {scopes.includes('agreements:activate') && (
-                      <label className="field">
-                        <span>Maximum VMs per activation</span>
-                        <input
-                          type="number"
-                          min="1"
-                          max="20"
-                          step="1"
-                          required
-                          value={quantity}
-                          onChange={(e) => setQuantity(Number(e.target.value))}
-                        />
-                      </label>
-                    )}
-                  </div>
-                </fieldset>
-              )}
+            {role === 'buyer' && scopes.includes('orders:write') && (
+              <fieldset className="key-operation-limits">
+                <legend>Per-operation limits</legend>
+                <p>
+                  These limits apply to each operation. Multiple operations can exceed these amounts
+                  in total.
+                </p>
+                <div className="key-limit-fields">
+                  {scopes.includes('orders:write') && (
+                    <label className="field">
+                      <span>Maximum order budget · USD</span>
+                      <input
+                        type="number"
+                        min="0.0001"
+                        max="1000000"
+                        step="0.0001"
+                        required
+                        value={auction}
+                        onChange={(e) => setAuction(e.target.value)}
+                      />
+                    </label>
+                  )}
+                </div>
+              </fieldset>
+            )}
             <ErrorBox error={error} />
             <div className="key-dialog-actions">
               <button
