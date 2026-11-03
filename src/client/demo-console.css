@@ -58,47 +58,63 @@
   padding: 6px;
 }
 .demo-console-guide {
-  padding: 6px 30px 18px;
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  padding: 0 30px 18px;
+}
+.demo-guide-card {
+  padding: 16px 20px;
+  border: 1px solid #725037;
+  border-radius: 8px;
+  background: var(--card);
+}
+.demo-guide-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: 12px;
 }
-.demo-console-guide > a {
-  display: flex;
-  gap: 9px;
-  align-items: flex-start;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  background: var(--card);
-  padding: 14px;
-}
-.demo-console-guide > a:hover {
-  border-color: var(--accent);
-}
-.demo-console-guide > a > span {
-  height: 22px;
-  width: 22px;
-  display: grid;
-  place-items: center;
+.demo-guide-heading .icon-button {
   flex-shrink: 0;
-  border: 1px solid #725037;
-  border-radius: 50%;
-  font-size: 10px;
-  color: #e8a46e;
 }
-.demo-console-guide strong {
+.demo-guide-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
   font-size: 11px;
-  font-weight: 550;
+  color: #e4b998;
 }
-.demo-console-guide p {
-  font-size: 10px;
-  margin-top: 5px;
-  color: var(--muted);
-}
-.demo-console-guide > a > svg {
-  margin-left: auto;
+.demo-guide-progress {
+  display: block;
   margin-top: 4px;
+  font-size: 11px;
   color: var(--muted);
+}
+.demo-guide-copy h2 {
+  margin: 6px 0;
+  font-size: 18px;
+  letter-spacing: -0.3px;
+}
+.demo-guide-copy p {
+  max-width: 800px;
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.65;
+  color: var(--soft);
+  overflow-wrap: anywhere;
+}
+.demo-guide-footer,
+.demo-guide-navigation {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.demo-guide-footer {
+  margin-top: 16px;
+  justify-content: space-between;
+}
+.demo-guide-footer .button {
+  min-height: 36px;
+  font-size: 11px;
 }
 .demo-console-notice {
   padding: 0 30px 10px;
@@ -111,11 +127,6 @@
 .demo-console-notice .icon-button {
   height: 23px;
   width: 23px;
-}
-@media (max-width: 1100px) {
-  .demo-console-guide {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
 }
 @media (max-width: 600px) {
   .demo-console .page-heading,
@@ -168,7 +179,24 @@
   }
   .demo-console-guide {
     padding: 0 16px 16px;
-    grid-template-columns: 1fr;
+  }
+  .demo-guide-card {
+    padding: 12px;
+  }
+  .demo-guide-footer {
+    align-items: stretch;
+  }
+  .demo-guide-footer > .button,
+  .demo-guide-navigation {
+    width: 100%;
+  }
+  .demo-guide-navigation > .button {
+    flex: 1;
+  }
+  .demo-guide-footer .button {
+    min-height: 40px;
+    padding-left: 8px;
+    padding-right: 8px;
   }
   .demo-console-actions .button {
     font-size: 10px;
