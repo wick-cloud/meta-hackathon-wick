@@ -23,6 +23,13 @@ export async function guestStep(
   const script = await readFile(resolve('scripts/coding-guest.py'), 'utf8');
   const input = {
     jobId: job.id,
+    ...(job.workspace_id
+      ? {
+          workspaceId: job.workspace_id,
+          continuingWorkspace: !!job.continuing_workspace,
+          taskId: job.studio_task_id,
+        }
+      : {}),
     allowBootstrap: Boolean(job.studio_task_id),
     sequence,
     action,

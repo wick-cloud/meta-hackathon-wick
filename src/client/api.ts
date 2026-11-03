@@ -26,6 +26,7 @@ export interface Session {
 }
 export interface EnvironmentRequest {
   id: string;
+  diskId?: string | null;
   description: string;
   catalogId: string;
   region: string;
@@ -56,6 +57,7 @@ export interface Bid {
 }
 export interface VM {
   id: string;
+  diskId?: string | null;
   requestId: string;
   buyerId: string;
   sourceMode: Mode;
@@ -162,6 +164,7 @@ export interface Proposal {
 }
 export interface Draft {
   description: string;
+  diskId?: string;
   catalogId: string;
   region: string;
   matchAcrossProviders?: boolean;

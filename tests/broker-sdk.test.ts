@@ -252,3 +252,40 @@ describe('Broker TypeScript client request and recovery contract', () => {
     });
   });
 });
+
+describe('persistent disk developer access', () => {
+  it('sends disk CRUD only to Broker with stable mutation keys and carries disk selection into orders', async () => {
+    const fetcher = vi.fn(async () => ok({ id: 'disk-one', items: [] }));
+    const client = create(fetcher);
+    await client.disks.create(
+      { name: 'Project workspace' },
+      { operationKey: 'create-project-disk' },
+    );
+    await client.disks.rename(
+      'disk/one',
+      { name: 'Renamed workspace' },
+      { operationKey: 'rename-project-disk' },
+    );
+    await client.disks.delete('disk/one', { operationKey: 'delete-project-disk' });
+    await client.disks.workspaces('disk/one', { limit: 10 });
+    await client.orders.create(
+      { ...input, diskId: 'disk-one' },
+      { operationKey: 'order-with-project-disk' },
+    );
+    const calls = fetcher.mock.calls as unknown as [URL, RequestInit][];
+    expect(calls[0][1].headers).toMatchObject({ 'Idempotency-Key': 'create-project-disk' });
+    expect(JSON.parse(String(calls[0][1].body))).toEqual({
+      name: 'Project workspace',
+      operationKey: 'create-project-disk',
+    });
+    expect(String(calls[1][0])).toBe('https://broker.example/api/disks/disk%2Fone');
+    expect(calls[2][1].method).toBe('DELETE');
+    expect(String(calls[3][0])).toBe(
+      'https://broker.example/api/disks/disk%2Fone/workspaces?limit=10',
+    );
+    expect(JSON.parse(String(calls[4][1].body)).diskId).toBe('disk-one');
+    await expect(client.disks.delete('disk-one', {} as never)).rejects.toMatchObject({
+      code: 'operation_key_required',
+    });
+  });
+});

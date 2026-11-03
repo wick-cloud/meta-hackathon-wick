@@ -15,6 +15,10 @@ export type StudioStatus =
   | 'stopped';
 export interface StudioTask {
   id: string;
+  diskId?: string;
+  workspaceId?: string;
+  continuingWorkspace?: boolean;
+  patchLabel?: 'Workspace changes';
   goal: string;
   repositoryUrl: string;
   commitSha: string;

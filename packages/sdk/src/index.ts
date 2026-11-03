@@ -8,6 +8,8 @@ export * from './types.js';
 export * from './agreements.js';
 export * from './inference.js';
 export * from './orders.js';
+export * from './disks.js';
+import type * as D from './disks.js';
 export * from './errors.js';
 export * from './terminal.js';
 
@@ -368,6 +370,25 @@ export class BrokerClient {
     /** Buffered text only. A repeated completed key returns a receipt, never a regenerated answer. */
     complete: (input: I.InferenceCompletionInput, options: MutationOptions) =>
       this.#write<I.InferenceCompletion>('POST', '/api/v1/chat/completions', input, options),
+  };
+  disks = {
+    options: (options: ReadOptions = {}) =>
+      this.request<D.DiskOptions>('GET', '/api/disks/options', options),
+    list: (query: T.Pagination = {}, options: ReadOptions = {}) =>
+      this.request<T.Page<D.Disk>>('GET', '/api/disks', { ...options, query: { ...query } }),
+    create: (input: { name: string }, options: MutationOptions) =>
+      this.#write<D.Disk>('POST', '/api/disks', input, options),
+    get: (id: string, options: ReadOptions = {}) =>
+      this.request<D.DiskDetail>('GET', `/api/disks/${segment(id)}`, options),
+    workspaces: (id: string, query: T.Pagination = {}, options: ReadOptions = {}) =>
+      this.request<T.Page<D.DiskWorkspace>>('GET', `/api/disks/${segment(id)}/workspaces`, {
+        ...options,
+        query: { ...query },
+      }),
+    rename: (id: string, input: { name: string }, options: MutationOptions) =>
+      this.#write<D.Disk>('PATCH', `/api/disks/${segment(id)}`, input, options),
+    delete: (id: string, options: MutationOptions) =>
+      this.#write<D.Disk>('DELETE', `/api/disks/${segment(id)}`, {}, options),
   };
   orders = {
     list: (query: OrdersQuery = {}, options: ReadOptions = {}) =>

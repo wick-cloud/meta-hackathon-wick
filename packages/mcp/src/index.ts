@@ -49,6 +49,10 @@ function detailsLink(
           : undefined;
     return { ui: `${baseUrl}/agents${grantId ? `/${encodeURIComponent(grantId)}` : ''}` };
   }
+  if (operation.path.startsWith('/api/disks'))
+    return {
+      ui: `${baseUrl}/disks${resultId && operation.path !== '/api/disks/options' ? `/${encodeURIComponent(resultId)}` : ''}`,
+    };
   if (operation.path.startsWith('/api/requests') && resultId)
     return { ui: `${baseUrl}/requests/${encodeURIComponent(resultId)}` };
   if (operation.path.startsWith('/api/vms') && resultId)
@@ -280,7 +284,7 @@ export async function createBrokerMcp(client: BrokerClient) {
     });
   const terminals = new TerminalSessions(client);
   const tools = buildTools(client, me.user as Principal, terminals);
-  const server = new McpServer({ name: 'wick-broker', version: '0.4.0' });
+  const server = new McpServer({ name: 'wick-broker', version: '0.5.0' });
   const outputSchema = z.object({ data: z.unknown(), links: z.record(z.string(), z.string()) });
   for (const tool of tools)
     server.registerTool(

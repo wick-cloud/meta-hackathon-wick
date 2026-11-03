@@ -17,7 +17,7 @@ Configure a local MCP host to launch:
   "mcpServers": {
     "wick-broker": {
       "command": "npx",
-      "args": ["-y", "@wick-cloud/broker-mcp@0.4.0"]
+      "args": ["-y", "@wick-cloud/broker-mcp@0.5.0"]
     }
   }
 }
@@ -46,3 +46,7 @@ Use a completion error’s `inferenceRequestId` as the receipt tool’s `id`. It
 Provider accounts can expose `provider_inference_offering_get`, `provider_inference_offering_update` and `provider_inference_packs_list` under the existing provider read/offering-write scopes. Offer changes require `expectedRevision` and preserve accepted pack terms.
 
 Monetary `*Cents` inputs accept hundredths of a cent in version `0.3.0`: `123.45` means `$1.2345`, and `0.01` means `$0.0001`. Finer amounts are rejected. Token counts and capacity remain integers.
+
+## Persistent disks (0.5.0)
+
+Buyer keys with `disks:read` expose `disk_options`, `disk_list`, `disk_get`, and `disk_workspaces_list`; `disks:write` exposes `disk_create`, `disk_rename`, and `disk_delete`. Disk mutations require stable operation keys. Deletion permanently removes the detached disk. Pass `diskId` to an order input only with both `orders:write` and `disks:use`. Disk creation/deletion are asynchronous; read the disk status to observe completion. These tools do not grant Studio command execution or extend inference-grant authority.

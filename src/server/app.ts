@@ -1,3 +1,4 @@
+import { registerDisks, startDiskWorkers } from './disks/index.js';
 import Fastify, { LogController } from 'fastify';
 import { registerCoding, startCodingWorkers } from './coding/index.js';
 import { registerStudio, startStudioWorkers } from './coding/studio-api.js';
@@ -185,10 +186,12 @@ export async function buildApp(
   await registerInference(app, ctx);
   registerCoding(app, ctx);
   registerStudio(app, ctx);
+  await registerDisks(app, ctx);
   registerAgreementBilling(app, ctx);
   registerNegotiation(app, ctx);
   await registerMuse(app, ctx);
   await registerTerminal(app, ctx);
+  await startDiskWorkers(ctx);
   await startMarketplaceWorkers(ctx);
   await startAgreementWorkers(ctx);
   await startInferenceWorkers(ctx);

@@ -1,3 +1,5 @@
+import { realDrives, fixtureDrives } from './drives.js';
+import { z } from 'zod';
 import { createHash, randomUUID } from 'node:crypto';
 import { Wick, WickError, WickTimeoutError } from '@wick-cloud/sdk';
 import WebSocket from 'ws';
@@ -93,6 +95,28 @@ export function parseEnvironment(value: unknown): WickEnvironment {
     ...(raw.billingMode === 'wick_managed' || raw.billingMode === 'byok'
       ? { billingMode: raw.billingMode }
       : {}),
+    ...(raw.workspaceDrive == null
+      ? {}
+      : {
+          workspaceDrive: z
+            .object({
+              driveId: z.string().min(1).max(150),
+              generation: z.string().min(1).max(150),
+              status: z.enum([
+                'reserved',
+                'mounting',
+                'mounted',
+                'connecting',
+                'connected',
+                'detaching',
+                'detached',
+              ]),
+              attachmentMode: z.enum(['exclusive', 'shared']).optional(),
+              accessMode: z.enum(['mount', 'files']).optional(),
+              workspacePath: z.string().optional(),
+            })
+            .parse(raw.workspaceDrive),
+        }),
     raw,
   };
 }
@@ -215,6 +239,9 @@ export function parseCatalog(
       memoryGb: finitePositive(resources.memoryMiB, 'resources.memoryMiB') / 1024,
       durationMinutes,
       maxTtlSeconds: maximum,
+      ...(Array.isArray(offer.capabilities)
+        ? { capabilities: z.array(z.string().max(100)).max(100).parse(offer.capabilities) }
+        : {}),
       ...(['native', 'supervised', 'none'].includes(String(offer.deadlineEnforcement))
         ? { deadlineEnforcement: offer.deadlineEnforcement as CatalogItem['deadlineEnforcement'] }
         : {}),
@@ -305,6 +332,14 @@ function createBody(
     ttlSeconds: input.ttlSeconds,
     ...(scheduled ? { hardEndAt: new Date(input.hardEndAt!).toISOString() } : {}),
     visibility: 'private',
+    ...(input.workspaceDrive
+      ? {
+          workspaceDrive: z
+            .object({ driveId: z.string().min(1).max(150), accessMode: z.literal('mount') })
+            .strict()
+            .parse(input.workspaceDrive),
+        }
+      : {}),
     ...(input.region ? { region: input.region } : {}),
     ...(input.providerKeyId ? { providerKeyId: input.providerKeyId } : {}),
     ...(input.maximumPriceMicrosPerSecond === undefined
@@ -448,6 +483,7 @@ function realAdapter(config: WickConfig): WickAdapter {
   }
   return {
     mode: 'real',
+    drives: realDrives(config),
     async runCommand(id, input) {
       if (input.command.length > 16000)
         throw new WickApiError('Coding command exceeds the request limit');
@@ -644,6 +680,7 @@ export function fixtureCatalog(
     durationMinutes: [15, 30, 60],
     maxTtlSeconds: 86400,
     deadlineEnforcement: 'native' as const,
+    capabilities: ['interactive-terminal', 'persistent-drives'],
     approved: true,
     organizationId: config.wickOrganizationId,
     groupId: config.wickGroupId,
@@ -694,6 +731,23 @@ function fixtureEnvironment(row: FixtureRow): WickEnvironment {
     status: row.status,
     expiresAt: row.expires_at.toISOString(),
     createdAt: row.admitted_at.toISOString(),
+    ...(row.input_json?.workspaceDrive
+      ? {
+          workspaceDrive: {
+            driveId: row.input_json.workspaceDrive.driveId,
+            generation: `fixture-${row.id}`,
+            status:
+              row.status === 'terminated'
+                ? 'detached'
+                : row.status === 'running'
+                  ? 'mounted'
+                  : 'mounting',
+            attachmentMode: 'shared' as const,
+            accessMode: 'mount' as const,
+            workspacePath: '/workspace',
+          },
+        }
+      : {}),
     ...(row.input_json
       ? {
           name: row.input_json.name,
@@ -724,6 +778,7 @@ function fixtureAdapter(config: WickConfig, pool: Pool): WickAdapter {
   }
   return {
     mode: 'fixture',
+    drives: fixtureDrives(config, pool),
     async list(input) {
       const rows = (
         await pool.query<FixtureRow>(

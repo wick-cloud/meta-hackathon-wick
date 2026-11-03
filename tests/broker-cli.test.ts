@@ -217,7 +217,7 @@ describe('Broker CLI machine operations', () => {
       '--version',
       '--json',
     ]);
-    expect(JSON.parse(result.stdout)).toEqual({ version: '0.4.0' });
+    expect(JSON.parse(result.stdout)).toEqual({ version: '0.5.0' });
     expect(result.stderr).toBe('');
   });
   it('provides help and version without a credential', async () => {
@@ -226,7 +226,7 @@ describe('Broker CLI machine operations', () => {
     expect(help.stdout()).toContain('WICK_BROKER_API_KEY');
     const version = io();
     expect(await runCli(['--version'], version)).toBe(0);
-    expect(version.stdout().trim()).toBe('0.4.0');
+    expect(version.stdout().trim()).toBe('0.5.0');
   });
   it('removes scheduled VM commands and never dispatches a retired operation', async () => {
     const help = io();

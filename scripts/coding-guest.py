@@ -23,7 +23,24 @@ job = root / data["jobId"]
 job.mkdir(mode=0o700, exist_ok=True)
 if root.is_symlink() or job.is_symlink():
     raise ValueError("Unsafe job directory")
-repo = job / "repository"
+workspace = None
+if data.get("workspaceId"):
+    if not re.fullmatch(r"[a-f0-9-]{36}", data["workspaceId"]):
+        raise ValueError("Invalid workspace identity")
+    mount = Path("/workspace")
+    # Never accept a caller-supplied mount path or a symlink into another guest location.
+    if not mount.is_dir() or mount.is_symlink():
+        raise ValueError("The persistent workspace mount is unavailable")
+    workspace = mount / "workspaces" / data["workspaceId"]
+    for directory in [mount / "workspaces", workspace]:
+        if directory.is_symlink():
+            raise ValueError("Unsafe persistent workspace directory")
+        directory.mkdir(mode=0o700, exist_ok=True)
+    repo = workspace / "repository"
+    if repo.is_symlink():
+        raise ValueError("Unsafe repository directory")
+else:
+    repo = job / "repository"
 env = {"PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": str(job),
        "LANG": "C.UTF-8", "GIT_TERMINAL_PROMPT": "0", "GIT_CONFIG_NOSYSTEM": "1",
        "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_LFS_SKIP_SMUDGE": "1"}
@@ -36,6 +53,25 @@ def save(path, value):
         stream.flush()
         os.fsync(stream.fileno())
     os.replace(temp, path)
+
+
+def persist_artifact(name, content):
+    if workspace is None:
+        return None
+    artifacts = workspace / "artifacts"
+    if artifacts.is_symlink():
+        raise ValueError("Unsafe workspace artifact directory")
+    artifacts.mkdir(mode=0o700, exist_ok=True)
+    target = artifacts / name
+    # A previous VM can leave arbitrary disk content. Do not follow a leaf
+    # symlink while exporting a new task's bounded results from the guest.
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW
+    descriptor = os.open(target, flags, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+        stream.write(content)
+        stream.flush()
+        os.fsync(stream.fileno())
+    return str(target)
 
 
 def sandbox(command):
@@ -227,14 +263,27 @@ def main():
                 raise ValueError("Only anonymous public GitHub clones are supported")
             if not re.fullmatch(r"[a-f0-9]{40}", data["commitSha"]):
                 raise ValueError("A pinned public commit is required")
-            for args in [git("init", "."), git("fetch", "--depth=1", data["repositoryUrl"], data["commitSha"]),
-                         git("checkout", "-b", "muse/" + data["jobId"], "FETCH_HEAD")]:
-                result = execute(args, cwd=repo)
-                if result["exitCode"] != 0 or result["interrupted"]:
-                    raise ValueError("Anonymous bounded clone failed")
-            (repo / ".git" / "info" / "exclude").write_text("__pycache__/\n.pytest_cache/\n*.py[co]\nnode_modules/\n.venv/\n")
-            files = execute(git("ls-files"), cwd=repo)["output"].splitlines()[:150]
-            result = {"files": files, "workspace": str(repo), "commitSha": data["commitSha"], "sandbox": "bubblewrap-no-network"}
+            if data.get("continuingWorkspace"):
+                if workspace is None or not (repo / ".git").is_dir() or (repo / ".git").is_symlink():
+                    raise ValueError("The saved repository is unavailable; no files were reset")
+                # Inspect Git in the sandbox: prior test code may have modified repository config.
+                check = execute(sandbox("git -c core.hooksPath=/dev/null -c core.fsmonitor=false cat-file -e " + data["commitSha"] + "^{commit}"), seconds=10)
+                if check["exitCode"] != 0 or check["interrupted"]:
+                    raise ValueError("The saved workspace no longer contains its pinned base commit")
+            else:
+                if any(repo.iterdir()):
+                    raise ValueError("The new workspace is not empty; existing files were preserved")
+                for args in [git("init", "."), git("fetch", "--depth=1", data["repositoryUrl"], data["commitSha"]),
+                             git("checkout", "-b", "muse/" + data["jobId"], "FETCH_HEAD")]:
+                    result = execute(args, cwd=repo)
+                    if result["exitCode"] != 0 or result["interrupted"]:
+                        raise ValueError("Anonymous bounded clone failed")
+                (repo / ".git" / "info" / "exclude").write_text("__pycache__/\n.pytest_cache/\n*.py[co]\nnode_modules/\n.venv/\n")
+            listed = execute(sandbox("git -c core.hooksPath=/dev/null -c core.fsmonitor=false ls-files --cached --others --exclude-standard"), seconds=10)
+            if listed["exitCode"] != 0 or listed["interrupted"]:
+                raise ValueError("The current repository files could not be inspected")
+            files = listed["output"].splitlines()[:150]
+            result = {"files": files, "workspace": str(repo), "commitSha": data["commitSha"], "continuingWorkspace": bool(data.get("continuingWorkspace")), "sandbox": "bubblewrap-no-network"}
         elif kind in ("read", "write"):
             file = safe_file(action["path"])
             manifest = job / "manifest.json"
@@ -245,7 +294,7 @@ def main():
                 save(manifest, known)
                 result = {"path": action["path"], "content": file.read_text() if current else None}
             else:
-                if current is not None and (action["path"] not in known or known[action["path"]] != current):
+                if (current is not None or action["path"] in known) and (action["path"] not in known or known[action["path"]] != current):
                     raise ValueError("Read the current file before writing; external edits must be reviewed")
                 if len(action["content"].encode()) > 12000 or "\x00" in action["content"]:
                     raise ValueError("Use UTF-8 text under 12 KB")
@@ -260,11 +309,23 @@ def main():
                 result = {"path": action["path"], "written": True}
         elif kind == "test":
             result = execute(sandbox(data["testCommand"]))
+            if workspace is not None:
+                result["savedTestReceipt"] = persist_artifact(
+                    data["jobId"] + ".test." + sequence + ".json",
+                    json.dumps({"jobId": data["jobId"], "testCommand": data["testCommand"], "result": result}),
+                )
         elif kind == "diff":
             # Test code can change repo-local Git config; run post-test Git in the sandbox too.
             if not re.fullmatch(r"[a-f0-9]{40}", data["commitSha"]):
                 raise ValueError("A pinned diff base is required")
             result = execute(sandbox("git -c core.hooksPath=/dev/null -c core.fsmonitor=false add -N . && git -c core.hooksPath=/dev/null -c core.fsmonitor=false diff --binary --no-ext-diff --no-textconv " + data["commitSha"] + " -- ."), seconds=10)
+            if workspace is not None and result["exitCode"] == 0 and not result["truncated"] and not result["interrupted"]:
+                patch_name = data["jobId"] + ".patch"
+                result["savedPatch"] = persist_artifact(patch_name, result["output"])
+                persist_artifact(data["jobId"] + ".json", json.dumps({
+                    "jobId": data["jobId"], "summary": str(action.get("summary", ""))[:3000],
+                    "baseCommit": data["commitSha"], "patch": patch_name,
+                }))
         else:
             raise ValueError("Unsupported coding action")
         receipt = {"state": "completed", "sequence": data["sequence"], "action": kind, "result": result}

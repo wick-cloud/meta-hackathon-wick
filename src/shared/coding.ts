@@ -13,6 +13,9 @@ export type CodingStatus = (typeof CODING_STATUSES)[number];
 export interface CodingJob {
   id: string;
   vmId: string;
+  diskId?: string;
+  workspaceId?: string;
+  continuingWorkspace?: boolean;
   grantId: string;
   repositoryUrl: string;
   commitSha: string;

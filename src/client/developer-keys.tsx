@@ -41,6 +41,9 @@ const labels: Record<BrokerScope, string> = {
   'agreements:write': 'Legacy agreement access',
   'agreements:activate': 'Legacy activation access',
   'vms:read': 'Read environments',
+  'disks:read': 'Read your disks and agent workspaces',
+  'disks:write': 'Create, rename and delete your disks',
+  'disks:use': 'Attach your disks when creating environments',
   'vms:terminal': 'Connect to environment terminals',
   'vms:terminate': 'Terminate environments',
   'billing:read': 'Read wallet and billing history',
@@ -302,9 +305,9 @@ export function DeveloperKeys() {
         <pre>
           {[
             'npm install \\',
-            `  ${window.location.origin}/downloads/0.4.0/wick-cloud-broker-sdk-0.4.0.tgz \\`,
-            `  ${window.location.origin}/downloads/0.4.0/wick-cloud-broker-cli-0.4.0.tgz \\`,
-            `  ${window.location.origin}/downloads/0.4.0/wick-cloud-broker-mcp-0.4.0.tgz`,
+            `  ${window.location.origin}/downloads/0.5.0/wick-cloud-broker-sdk-0.5.0.tgz \\`,
+            `  ${window.location.origin}/downloads/0.5.0/wick-cloud-broker-cli-0.5.0.tgz \\`,
+            `  ${window.location.origin}/downloads/0.5.0/wick-cloud-broker-mcp-0.5.0.tgz`,
           ].join('\n')}
         </pre>
         <div className="key-setup-grid">

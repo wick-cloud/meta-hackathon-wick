@@ -71,6 +71,8 @@ import { availableForBids } from '../marketplace/policy.js';
 import { terminateVm } from '../marketplace/lifecycle.js';
 import { createCodingJob, controlCoding, wakeCoding, seal, open, ownerOnly } from './service.js';
 import { verifyPublicRepository, publicRepository, baseRefSchema } from './contracts.js';
+import { diskCatalogEligible } from '../disks/service.js';
+import { reserveWorkspace, workspaceContext } from './workspaces.js';
 import {
   studioAuthority,
   reserveStudioCompute,
@@ -99,8 +101,14 @@ const taskInput = z
       )
       .optional(),
     testCommand: z.string().trim().min(1).max(500).optional(),
+    diskId: z.uuid().optional(),
+    workspaceId: z.uuid().optional(),
   })
-  .strict();
+  .strict()
+  .refine(
+    (input) => !input.workspaceId || !!input.diskId,
+    'Choose a disk for the saved workspace.',
+  );
 type Candidate = {
   id: string;
   name: string;
@@ -129,11 +137,19 @@ async function nextModelMessages(ctx: AppContext, t: Row) {
 const iso = (v: unknown) => (v ? new Date(v as string).toISOString() : null);
 const LIST_COLUMNS = `t.id,left(t.goal,160) goal,t.repository_url,t.commit_sha,t.status,t.source_mode,t.compute_charged_cents,
  t.blocked_reason,t.plan_cipher,t.artifacts_expire_at,t.deadline_at,t.created_at,t.execution_started_at,t.verified_at,
- t.completed_at,t.vm_request_id,t.coding_job_id,t.result_summary,(t.patch_cipher IS NOT NULL) has_patch`;
+ t.completed_at,t.vm_request_id,t.coding_job_id,t.result_summary,t.disk_id,t.workspace_id,t.continuing_workspace,(t.patch_cipher IS NOT NULL) has_patch`;
 export function studioView(ctx: AppContext, row: Row): StudioTask {
   const expired = new Date(row.artifacts_expire_at) <= new Date();
   return {
     id: row.id,
+    ...(row.disk_id
+      ? {
+          diskId: row.disk_id,
+          workspaceId: row.workspace_id,
+          continuingWorkspace: row.continuing_workspace,
+          patchLabel: 'Workspace changes',
+        }
+      : {}),
     goal: row.goal,
     repositoryUrl: row.repository_url,
     commitSha: row.commit_sha,
@@ -196,7 +212,11 @@ async function modelRoutes(ctx: AppContext, until: Date) {
   }
   return eligible;
 }
-async function computeCandidates(ctx: AppContext, duration: number): Promise<Candidate[]> {
+async function computeCandidates(
+  ctx: AppContext,
+  duration: number,
+  diskBacked = false,
+): Promise<Candidate[]> {
   if (ctx.wick.mode === 'real' && !ctx.config.studioApprovedComputeCatalogIds.length) return [];
   const rows = (
     await ctx.pool.query(
@@ -232,7 +252,8 @@ async function computeCandidates(ctx: AppContext, duration: number): Promise<Can
     : [];
   return rows.flatMap(({ id, item }: { id: string; item: CatalogItem }) => {
     try {
-      if (item.gpu) return [];
+      if (item.gpu || (diskBacked && !diskCatalogEligible(ctx, { ...item, approved: true })))
+        return [];
       if (ctx.wick.mode === 'real') {
         assertManagedCustomerRoute(item);
         requireFreshManagedRate(item);
@@ -323,7 +344,7 @@ export async function createStudioTask(
     routes = (await modelRoutes(ctx, until)).filter(
       (route) => !input.allowedProviders || input.allowedProviders.includes(route.provider),
     ),
-    candidates = await computeCandidates(ctx, input.durationMinutes);
+    candidates = await computeCandidates(ctx, input.durationMinutes, !!input.diskId);
   if (!routes.length)
     throw new HttpError(
       409,
@@ -334,8 +355,22 @@ export async function createStudioTask(
       409,
       'No execution-qualified published compute configuration supports this rental. No credit was reserved.',
     );
-  const verified = await verify(repo.url, input.baseRef),
-    id = randomUUID();
+  const previous = input.workspaceId
+    ? (
+        await ctx.pool.query(
+          `SELECT w.* FROM broker_disk_workspaces w JOIN broker_disks d ON d.id=w.disk_id
+         WHERE w.id=$1 AND w.disk_id=$2 AND w.buyer_id=$3 AND d.buyer_id=$3`,
+          [input.workspaceId, input.diskId, actor.id],
+        )
+      ).rows[0]
+    : null;
+  if (input.workspaceId && !previous) throw new HttpError(404, 'Workspace not found.');
+  if (previous && previous.repository_url !== repo.url)
+    throw new HttpError(400, 'Continuing a workspace keeps its existing repository.');
+  const verified = previous
+    ? { url: previous.repository_url, sha: previous.commit_sha, ref: previous.commit_sha }
+    : await verify(repo.url, input.baseRef);
+  const id = randomUUID();
   const task = await transaction(ctx.pool, async (db) => {
     await authority(db, actor);
     await db.query('SELECT pg_advisory_xact_lock(62401278)');
@@ -361,6 +396,7 @@ export async function createStudioTask(
         429,
         'Studio is currently at capacity, including tasks needing reconciliation.',
       );
+    const workspace = await reserveWorkspace(ctx, db, actor.id, input, verified);
     const grant = await createGrantInTransaction(ctx, db, actor, {
       operationKey: `studio:${id}:fund`,
       name: 'Studio · ' + input.goal.slice(0, 85),
@@ -375,8 +411,8 @@ export async function createStudioTask(
       ...routes.map((r) => ctx.inference!.routes.get(r.provider)!.maximumOutputTokens),
     );
     await db.query(
-      `INSERT INTO broker_studio_tasks(id,buyer_id,grant_id,operation_key,input_fingerprint,repository_url,commit_sha,base_ref,goal,test_command,source_mode,allow_instant,duration_minutes,deadline_at,model_output)
-   VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+      `INSERT INTO broker_studio_tasks(id,buyer_id,grant_id,operation_key,input_fingerprint,repository_url,commit_sha,base_ref,goal,test_command,source_mode,allow_instant,duration_minutes,deadline_at,model_output,disk_id,workspace_id,continuing_workspace)
+   VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
       [
         id,
         actor.id,
@@ -393,8 +429,16 @@ export async function createStudioTask(
         input.durationMinutes,
         until,
         output,
+        input.diskId ?? null,
+        workspace?.id ?? null,
+        !!input.workspaceId,
       ],
     );
+    if (workspace)
+      await db.query(
+        'UPDATE broker_disk_workspaces SET active_task_id=$2,updated_at=clock_timestamp() WHERE id=$1',
+        [workspace.id, id],
+      );
     await db.query(
       `INSERT INTO broker_studio_events(task_id,event_key,kind,title,message) VALUES($1,'funded','budget','Task budget reserved','Compute and model purchases share one owner-funded budget.')`,
       [id],
@@ -964,6 +1008,10 @@ async function cleanup(ctx: AppContext, t: Row, actor: Actor) {
     if (!current) return;
     await recordUsageSample(db, current);
     await db.query(
+      'UPDATE broker_disk_workspaces SET active_task_id=NULL,updated_at=clock_timestamp() WHERE active_task_id=$1',
+      [t.id],
+    );
+    await db.query(
       `UPDATE broker_studio_tasks SET status=outcome,completed_at=clock_timestamp(),lease_token=NULL,lease_until=NULL WHERE id=$1 AND lease_token=$2`,
       [t.id, t.lease_token],
     );
@@ -1033,12 +1081,14 @@ export async function processStudioTask(
       }
       if (['needs_attention', 'needs_budget'].includes(t.status)) return;
       if (t.status === 'queued') {
-        const candidates = await computeCandidates(ctx, t.duration_minutes);
+        const candidates = await computeCandidates(ctx, t.duration_minutes, !!t.disk_id);
         if (!candidates.length) {
           await outcome(ctx, t, 'failed', 'No approved compute is available.');
           continue;
         }
-        const context = await repoContext(t);
+        const context = t.continuing_workspace
+          ? await workspaceContext(ctx, t)
+          : await repoContext(t);
         t.usage_features = usageFeatures(t.goal, context);
         t.plan_input_cipher = seal(ctx, { candidates, context });
         await ctx.pool.query(
@@ -1341,6 +1391,7 @@ export async function processStudioTask(
             {
               operationKey: `studio:${id}:compute`,
               description: t.goal,
+              ...(t.disk_id ? { diskId: t.disk_id } : {}),
               catalogId: c.id,
               region: c.region,
               durationMinutes: t.duration_minutes,
@@ -1458,7 +1509,9 @@ export async function processStudioTask(
           'execution-started',
           'execution',
           'Task execution confirmed',
-          'A guest receipt confirms the pinned repository is cloned inside the verified sandbox.',
+          t.continuing_workspace
+            ? 'A guest receipt confirms the saved workspace is prepared inside the verified sandbox.'
+            : 'A guest receipt confirms the pinned repository is cloned inside the verified sandbox.',
         );
         await stage(ctx, t, 'running');
         continue;
@@ -1488,7 +1541,9 @@ export async function processStudioTask(
             'execution-started',
             'execution',
             'Task execution confirmed',
-            'A guest command receipt confirms the pinned repository is cloned inside the verified sandbox.',
+            t.continuing_workspace
+              ? 'A guest receipt confirms the saved workspace is prepared inside the verified sandbox.'
+              : 'A guest command receipt confirms the pinned repository is cloned inside the verified sandbox.',
           );
         }
         if (job.status === 'ready') {

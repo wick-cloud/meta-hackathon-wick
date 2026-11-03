@@ -20,11 +20,32 @@ On 2026-10-28, an unauthenticated, read-only GET of <https://app.wick-cloud.com/
 
 The published create schema accepts integer `ttlSeconds` from 60 through 86400. Together with each offer's `maxTtlSeconds`, this supports an exact bounded TTL mapping: the broker offers only 900, 1800, and 3600 seconds that are no greater than the published offer maximum. All real catalog entries start unapproved. There is no conversion from a fixed quote into hourly charging.
 
-The only create fields sent are `organizationId`, `groupId`, `name`, `provider`, `profile`, optional `region`, `ttlSeconds`, `maximumPriceMicrosPerSecond`, and `visibility:'private'`. Provider, profile, region, organization, group, and maximum published rate are frozen and pinned in preview/create. A server-side price increase cannot silently increase the maximum accepted rate. The adapter enumerates these fields, so accidental extra `repository`, `agent`, `setup`, task, or secret properties cannot reach Wick. Snapshot fields are excluded from v1.
+For diskless rentals, the only create fields sent are `organizationId`, `groupId`, `name`, `provider`, `profile`, optional `region`, `ttlSeconds`, `maximumPriceMicrosPerSecond`, and `visibility:'private'`. Provider, profile, region, organization, group, and maximum published rate are frozen and pinned in preview/create. A server-side price increase cannot silently increase the maximum accepted rate. The adapter enumerates these fields, so accidental extra `repository`, `agent`, `setup`, task, or secret properties cannot reach Wick. Snapshot fields are excluded from v1.
 
 The authenticated customer catalog can omit version, provider revision, currency, money unit, and mode; none is required or invented. The published rate is interpreted as micro-USD per second under the managed contract. The public resource schema has CPU, memory MiB, and disk MiB; it contains no GPU resource field. The adapter does not claim GPU availability in real catalog entries. The GPU demo offering is explicitly simulated. Real API responses and catalog failures never fall back to fixture values.
 
 Boat customer allocations are excluded by user choice. Current real catalogs expose only verified E2B routes; the reviewed scale default is Micro/us. A permitted read-only SDK execution preview confirmed that route selects managed billing. This evidence does not demonstrate a successful allocation or a 20-VM run. The actual returned environment must independently pass billing and ownership checks before invoicing.
+
+## Persistent drives
+
+The current public OpenAPI adds persistent drives through
+`POST /v1/organizations/{id}/drives` and `GET/PATCH/DELETE /v1/drives/{id}`.
+The adapter creates private shared drives with stable operation keys and empty
+seeds. Disk-backed create/preview also explicitly allow
+`workspaceDrive: { driveId, accessMode: 'mount' }`; workload fields remain excluded.
+The published SDK transport preserves this JSON field, while a narrow typed HTTP
+adapter implements the newer drive endpoints with the same origin/redirect,
+timeout, bounded-response and credential boundaries. File-read responses allow
+up to 1 MiB; the adapter bounds their base64 JSON envelope at 2 MiB.
+
+Drive visibility, organization/group, attachment mode and returned identity are
+validated. Catalog `persistent-drives` support and a configured operator
+qualification are both required for real rentals. Mount identity/generation and
+shared native `/workspace` readiness are checked before invoicing. Cleanup checks
+the upstream attachment list after VM termination, preserving other attachments.
+HTTPS `files` access is never interpreted as a mounted persistent workspace.
+These offline contracts do not certify any provider's actual shared filesystem.
+See [persistent disks](persistent-disks.md) for qualification and retention.
 
 ## Terminal boundary
 

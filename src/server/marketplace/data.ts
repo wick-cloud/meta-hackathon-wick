@@ -9,6 +9,7 @@ export const iso = (value: unknown): string | null =>
 export const requestView = (r: Row) => ({
   id: r.id,
   buyerId: r.buyer_id,
+  ...(r.disk_id ? { diskId: r.disk_id } : {}),
   ...(r.source_api_key_id
     ? { source: { kind: 'api_key' as const, keyId: r.source_api_key_id } }
     : {}),
@@ -63,6 +64,7 @@ export const vmView = (r: Row) => ({
   id: r.id,
   requestId: r.request_id,
   buyerId: r.buyer_id,
+  ...(r.disk_id ? { diskId: r.disk_id } : {}),
   sourceMode: r.catalog_snapshot?.sourceMode === 'real' ? ('real' as const) : ('fixture' as const),
   status: r.status,
   environmentId: r.environment_id,

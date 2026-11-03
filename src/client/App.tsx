@@ -21,6 +21,7 @@ import {
   KeyRound,
   Bot,
   Server,
+  HardDrive,
 } from 'lucide-react';
 import {
   api,
@@ -36,6 +37,7 @@ import { Brand } from './brand';
 import { HomePage } from './homepage';
 import { NewEnvironment, RequestReview, AuctionPage, VMDetail, Invoices } from './buyer';
 import { MyVMs } from './vm-inventory';
+import { Disks, DiskDetail } from './disks';
 import { AlternativeComposer, AlternativeDetail, AlternativeList } from './negotiation';
 import { Orders } from './orders';
 import { AgreementDetail, RetiredScheduledVMs } from './agreements';
@@ -62,6 +64,7 @@ const buyerNavigation: NavigationItem[] = [
   { path: '/orders', label: 'Orders', icon: ListOrdered, group: 'WORKSPACE' },
   { path: '/studio', label: 'Muse Studio', icon: Sparkles, group: 'WORKSPACE' },
   { path: '/vms', label: 'Virtual machines', icon: Server, group: 'WORKSPACE' },
+  { path: '/disks', label: 'Disks', icon: HardDrive, group: 'WORKSPACE' },
   { path: '/tokens', label: 'Purchased tokens', icon: Sparkles, group: 'WORKSPACE' },
   { path: '/agents', label: 'Agents', icon: Bot, group: 'WORKSPACE' },
   { path: '/credits', label: 'Broker wallet', icon: Wallet, group: 'ACCOUNT' },
@@ -411,6 +414,9 @@ export default function App() {
     else if (path.startsWith('/requests/')) content = <AuctionPage id={path.split('/')[2]!} />;
     else if (path.startsWith('/vms/')) content = <VMDetail id={path.split('/')[2]!} />;
     else if (path === '/vms') content = <MyVMs search={search} />;
+    else if (path === '/disks') content = <Disks key={user.id} />;
+    else if (path.startsWith('/disks/'))
+      content = <DiskDetail key={path} id={path.split('/')[2]!} />;
     else if (path === '/invoices') content = <Invoices />;
     else if (path === '/new/vm' || (path === '/new' && new URLSearchParams(search).has('copy')))
       content = <NewEnvironment key={location} />;

@@ -321,6 +321,152 @@ describe.skipIf(!url)('Studio task budget and lifecycle (disposable Postgres)', 
       },
     };
   }
+  async function diskWorkspaceContext() {
+    const diskCtx = { ...ctx, config: { ...ctx.config, disksEnabled: true } };
+    await pool.query(
+      "UPDATE broker_catalog SET item=jsonb_set(item,'{capabilities}','[\"persistent-drives\"]'::jsonb) WHERE id=$1",
+      [catalog.id],
+    );
+    const disk = (
+      await pool.query(
+        `INSERT INTO broker_disks(buyer_id,name,source_mode,status,upstream_id,create_key) VALUES($1,'Saved files','fixture','ready',$2,$3) RETURNING *`,
+        [owner.id, 'fixture-drive-' + randomUUID(), randomUUID()],
+      )
+    ).rows[0];
+    return { diskCtx, disk };
+  }
+  it('reserves a persistent folder before funding, serializes replay, and preserves it after a stopped task', async () => {
+    const { diskCtx, disk } = await diskWorkspaceContext();
+    const body = input({ diskId: disk.id });
+    const [task, replay] = await Promise.all([
+      createStudioTask(diskCtx, owner, body, verify),
+      createStudioTask(diskCtx, owner, body, verify),
+    ]);
+    expect(replay.id).toBe(task.id);
+    expect(task.diskId).toBe(disk.id);
+    expect(task.workspaceId).toBeTruthy();
+    expect(task.patchLabel).toBe('Workspace changes');
+    const workspace = (
+      await pool.query('SELECT * FROM broker_disk_workspaces WHERE id=$1', [task.workspaceId])
+    ).rows[0];
+    expect(workspace.active_task_id).toBe(task.id);
+    expect(workspace.commit_sha).toBe('a'.repeat(40));
+    const wallet = await creditWalletView(pool, owner.id);
+    await expect(
+      createStudioTask(
+        diskCtx,
+        owner,
+        input({ diskId: disk.id, workspaceId: workspace.id }),
+        verify,
+      ),
+    ).rejects.toThrow('already in use');
+    expect(await creditWalletView(pool, owner.id)).toEqual(wallet);
+    await controlStudio(diskCtx, owner, task.id, 'stop', {});
+    await processStudioTask(diskCtx, task.id, repo);
+    expect((await studioDetail(diskCtx, owner, task.id)).task.status).toBe('stopped');
+    expect(
+      (
+        await pool.query('SELECT active_task_id FROM broker_disk_workspaces WHERE id=$1', [
+          workspace.id,
+        ])
+      ).rows[0].active_task_id,
+    ).toBeNull();
+    expect(
+      (await pool.query('SELECT status FROM broker_disks WHERE id=$1', [disk.id])).rows[0].status,
+    ).toBe('ready');
+  });
+  it('continues an idle folder at its original commit using current disk metadata and keeps customer ownership', async () => {
+    const { diskCtx, disk } = await diskWorkspaceContext();
+    const workspace = (
+      await pool.query(
+        `INSERT INTO broker_disk_workspaces(disk_id,buyer_id,name,repository_url,commit_sha,initialized) VALUES($1,$2,'Previous work',$3,$4,true) RETURNING *`,
+        [disk.id, owner.id, 'https://github.com/example/public', 'b'.repeat(40)],
+      )
+    ).rows[0];
+    const verifyAgain = vi.fn(verify);
+    const prefix = `workspaces/${workspace.id}/repository/`;
+    diskCtx.wick = {
+      ...ctx.wick,
+      drives: {
+        ...ctx.wick.drives!,
+        listFiles: vi.fn(async () => ({
+          data: [
+            { key: prefix + 'package.json', size: 17 },
+            { key: prefix + 'untracked.ts', size: 5 },
+          ],
+          commonPrefixes: [],
+          isTruncated: false,
+        })),
+        readFile: vi.fn(async () => ({
+          key: prefix + 'package.json',
+          contentBase64: Buffer.from('{"scripts":{}}').toString('base64'),
+          size: 14,
+        })),
+      },
+    };
+    const task = await createStudioTask(
+      diskCtx,
+      owner,
+      input({ diskId: disk.id, workspaceId: workspace.id }),
+      verifyAgain,
+    );
+    expect(verifyAgain).not.toHaveBeenCalled();
+    expect(task).toMatchObject({
+      workspaceId: workspace.id,
+      continuingWorkspace: true,
+      commitSha: 'b'.repeat(40),
+    });
+    await processStudioTask(diskCtx, task.id, async () => {
+      throw Error('Remote repository must not replace saved context');
+    });
+    const row = (
+      await pool.query('SELECT plan_input_cipher FROM broker_studio_tasks WHERE id=$1', [task.id])
+    ).rows[0];
+    expect(open(diskCtx, row.plan_input_cipher).context).toMatchObject({
+      files: ['package.json', 'untracked.ts'],
+      continuingWorkspace: true,
+      originalCommit: 'b'.repeat(40),
+    });
+    expect(diskCtx.wick.drives!.readFile).toHaveBeenCalledWith(
+      disk.upstream_id,
+      prefix + 'package.json',
+    );
+    await expect(
+      createStudioTask(
+        diskCtx,
+        other,
+        input({ diskId: disk.id, workspaceId: workspace.id }),
+        verifyAgain,
+      ),
+    ).rejects.toThrow('Workspace not found');
+  });
+  it('permits separate tasks on one disk while rejecting unprepared workspace continuation without funding', async () => {
+    const { diskCtx, disk } = await diskWorkspaceContext();
+    const [a, b] = await Promise.all([
+      createStudioTask(diskCtx, owner, input({ diskId: disk.id }), verify),
+      createStudioTask(diskCtx, owner, input({ diskId: disk.id }), verify),
+    ]);
+    expect(a.workspaceId).not.toBe(b.workspaceId);
+    await controlStudio(diskCtx, owner, a.id, 'stop', {});
+    await processStudioTask(diskCtx, a.id, repo);
+    const wallet = await creditWalletView(pool, owner.id);
+    await expect(
+      createStudioTask(
+        diskCtx,
+        owner,
+        input({ diskId: disk.id, workspaceId: a.workspaceId }),
+        verify,
+      ),
+    ).rejects.toThrow('no confirmed preparation receipt');
+    expect(await creditWalletView(pool, owner.id)).toEqual(wallet);
+    expect(
+      (
+        await pool.query('SELECT active_task_id FROM broker_disk_workspaces WHERE id=$1', [
+          b.workspaceId,
+        ])
+      ).rows[0].active_task_id,
+    ).toBe(b.id);
+  });
   it('reserves the published provider quote for a 15-minute real-mode rental, not just the lower cost floor', async () => {
     const real = await realCompute();
     const policies = (await pool.query('SELECT id,policy FROM broker_providers ORDER BY id')).rows;

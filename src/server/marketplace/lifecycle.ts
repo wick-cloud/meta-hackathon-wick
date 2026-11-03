@@ -1,3 +1,4 @@
+import { observeVmDisk, reconcileVmDisk, confirmVmDiskDetached } from '../disks/service.js';
 import type { Actor } from '../../shared/types.js';
 import { withOperation } from '../operations.js';
 import type { AppContext } from '../context.js';
@@ -99,6 +100,24 @@ export async function markReady(
         !environmentOwnershipMatches(observation, vm.create_input, vm.created_at))
     )
       return false;
+    if (vm.disk_id) {
+      if (
+        !observation?.workspaceDrive ||
+        observation.workspaceDrive.driveId !== vm.create_input.workspaceDrive?.driveId ||
+        observation.workspaceDrive.status !== 'mounted' ||
+        observation.workspaceDrive.accessMode !== 'mount' ||
+        observation.workspaceDrive.attachmentMode !== 'shared' ||
+        observation.workspaceDrive.workspacePath !== '/workspace'
+      )
+        return false;
+      const attachment = (
+        await db.query(
+          "SELECT 1 FROM broker_disk_attachments WHERE vm_id=$1 AND disk_id=$2 AND status='mounted' AND generation=$3 AND environment_id=$4",
+          [vm.id, vm.disk_id, observation.workspaceDrive.generation, observation.id],
+        )
+      ).rows[0];
+      if (!attachment) return false;
+    }
     const eligible = (
       await db.query('SELECT $1::timestamptz>clock_timestamp() AS eligible', [vm.expires_at])
     ).rows[0].eligible;
@@ -239,6 +258,8 @@ export async function provisionVm(ctx: AppContext, vmId: string) {
       return;
     }
     if (environment.status === 'terminated') {
+      if (current.disk_id && !(await reconcileVmDisk(ctx, current, environment)))
+        throw new Error('Persistent disk detachment is not confirmed.');
       await confirmCleanup(ctx, vmId, 'Wick terminated the environment before readiness.');
       return;
     }
@@ -247,6 +268,15 @@ export async function provisionVm(ctx: AppContext, vmId: string) {
       return;
     }
     if (environment.status === 'running' && current.expires_at) {
+      if (current.disk_id && !(await observeVmDisk(ctx, current, environment))) {
+        await retryProvision(
+          ctx,
+          vmId,
+          vm.poll_attempts,
+          'Waiting for the requested persistent disk mount.',
+        );
+        return;
+      }
       const connections = await ctx.wick.connections(environment.id);
       if (connections.terminal && (await markReady(ctx, vmId, environment, true))) return;
     }
@@ -326,6 +356,8 @@ export async function confirmCleanup(
       (vm.catalog_snapshot.sourceMode ?? 'fixture') !== ctx.wick.mode
     )
       return;
+    if (vm.disk_id && !(await confirmVmDiskDetached(ctx, db, vm, admissionRejected)))
+      throw new Error('Persistent disk detachment is not confirmed.');
     const expired = vm.expires_at && new Date(vm.expires_at).getTime() <= Date.now();
     const status = expired ? 'expired' : vm.ready_at ? 'terminated' : 'failed';
     await db.query(
@@ -407,6 +439,11 @@ export async function cleanupVm(ctx: AppContext, vmId: string) {
       throw new Error('Wick cleanup ownership is unverified; no termination was attempted.');
     await persistObservation(ctx, vmId, environment);
     if (environment.status === 'terminated') {
+      if (
+        vm.disk_id &&
+        !(await reconcileVmDisk(ctx, { ...vm, environment_id: environment.id }, environment))
+      )
+        throw new Error('Persistent disk detachment is not confirmed.');
       await confirmCleanup(ctx, vmId);
       return;
     }
@@ -420,6 +457,11 @@ export async function cleanupVm(ctx: AppContext, vmId: string) {
       throw new Error('Wick cleanup observation ownership is unverified.');
     await persistObservation(ctx, vmId, observed);
     if (observed.status === 'terminated') {
+      if (
+        vm.disk_id &&
+        !(await reconcileVmDisk(ctx, { ...vm, environment_id: observed.id }, observed))
+      )
+        throw new Error('Persistent disk detachment is not confirmed.');
       await confirmCleanup(ctx, vmId);
       return;
     }

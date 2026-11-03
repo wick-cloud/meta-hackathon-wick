@@ -54,6 +54,13 @@ export function ownerOnly(actor: Actor) {
 export const jobView = (r: Row): CodingJob => ({
   id: r.id,
   vmId: r.vm_id,
+  ...(r.disk_id
+    ? {
+        diskId: r.disk_id,
+        workspaceId: r.workspace_id,
+        continuingWorkspace: r.continuing_workspace,
+      }
+    : {}),
   grantId: r.grant_id,
   repositoryUrl: r.repository_url,
   commitSha: r.commit_sha,
@@ -157,6 +164,24 @@ export async function createCodingJob(
       )
     ).rows[0];
     if (!vm) throw new HttpError(409, 'The VM is no longer running or is near expiry.');
+    let diskGeneration: string | null = null;
+    if (studioTask?.workspace_id) {
+      const workspace = (
+        await db.query(
+          'SELECT id FROM broker_disk_workspaces WHERE id=$1 AND disk_id=$2 AND buyer_id=$3 AND active_task_id=$4 FOR SHARE',
+          [studioTask.workspace_id, studioTask.disk_id, actor.id, studioTask.id],
+        )
+      ).rows[0];
+      const attachment = (
+        await db.query(
+          "SELECT generation FROM broker_disk_attachments WHERE vm_id=$1 AND disk_id=$2 AND status='mounted' FOR SHARE",
+          [vm.id, studioTask.disk_id],
+        )
+      ).rows[0];
+      if (!workspace || vm.disk_id !== studioTask.disk_id || !attachment?.generation)
+        throw new HttpError(409, 'The task workspace reservation or mounted disk changed.');
+      diskGeneration = attachment.generation;
+    }
     if (
       (vm.catalog_snapshot.sourceMode === 'real' ? 'real' : 'fixture') !== grant.source_mode ||
       ctx.wick.mode !== grant.source_mode
@@ -184,8 +209,8 @@ export async function createCodingJob(
       );
     const row = (
       await db.query(
-        `INSERT INTO broker_coding_jobs(buyer_id,vm_id,grant_id,environment_id,operation_key,input_fingerprint,repository_url,commit_sha,base_ref,goal,test_command,source_mode,deadline_at,max_calls,max_output_tokens,studio_task_id)
-      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,LEAST(COALESCE($17::timestamptz,clock_timestamp()+interval '10 minutes'),$13,$14),$15,$16,$18) RETURNING *`,
+        `INSERT INTO broker_coding_jobs(buyer_id,vm_id,grant_id,environment_id,operation_key,input_fingerprint,repository_url,commit_sha,base_ref,goal,test_command,source_mode,deadline_at,max_calls,max_output_tokens,studio_task_id,disk_id,workspace_id,continuing_workspace,disk_generation)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,LEAST(COALESCE($17::timestamptz,clock_timestamp()+interval '10 minutes'),$13,$14),$15,$16,$18,$19,$20,$21,$22) RETURNING *`,
         [
           actor.id,
           vm.id,
@@ -205,6 +230,10 @@ export async function createCodingJob(
           input.maxOutputTokens,
           studioTask?.deadline_at ?? null,
           studio?.id ?? null,
+          studioTask?.disk_id ?? null,
+          studioTask?.workspace_id ?? null,
+          studioTask?.continuing_workspace ?? false,
+          diskGeneration,
         ],
       )
     ).rows[0];
@@ -442,7 +471,7 @@ async function appendResult(
       status = 'paused';
       reason = 'Meta returned an incomplete or invalid action. Review the receipt before resuming.';
     } else if (parsed.data.action === 'finish') {
-      if (tests) next = { action: 'diff' };
+      if (tests) next = { action: 'diff', summary: parsed.data.summary };
       else {
         status = 'paused';
         reason = 'Meta requested completion before a passing test receipt. Resume to continue.';
@@ -491,6 +520,11 @@ async function appendResult(
       "UPDATE broker_coding_steps SET status='completed',result_cipher=$2,inference_request_id=$3,completed_at=clock_timestamp() WHERE id=$1",
       [step.id, seal(ctx, result), requestId],
     );
+    if (payload.action === 'clone' && result.state === 'completed' && current.workspace_id)
+      await db.query(
+        'UPDATE broker_disk_workspaces SET initialized=true,updated_at=clock_timestamp() WHERE id=$1 AND active_task_id=$2',
+        [current.workspace_id, current.studio_task_id],
+      );
     if (current.requested_action === 'pause' && status === 'running') status = 'paused';
     if (current.requested_action === 'stop') status = 'stopping';
     await db.query(
@@ -609,7 +643,16 @@ export async function processCodingJob(ctx: AppContext, id: string) {
             [job.studio_task_id],
           )
         ).rowCount;
-      if (!actor || actor.role !== 'buyer' || !vm || !grant || !studioActive) {
+      const workspaceActive =
+        !job.workspace_id ||
+        (
+          await ctx.pool.query(
+            `SELECT 1 FROM broker_disk_workspaces w JOIN broker_disk_attachments a ON a.vm_id=$4 AND a.disk_id=w.disk_id
+         WHERE w.id=$1 AND w.active_task_id=$2 AND w.buyer_id=$3 AND a.status='mounted' AND a.generation=$5`,
+            [job.workspace_id, job.studio_task_id, job.buyer_id, job.vm_id, job.disk_generation],
+          )
+        ).rowCount;
+      if (!actor || actor.role !== 'buyer' || !vm || !grant || !studioActive || !workspaceActive) {
         await ctx.pool.query(
           "UPDATE broker_coding_jobs SET status='stopping',requested_action='stop' WHERE id=$1 AND lease_token=$2",
           [id, token],
@@ -670,6 +713,14 @@ export async function processCodingJob(ctx: AppContext, id: string) {
           AND v.environment_id=j.environment_id AND v.expires_at>clock_timestamp() FOR SHARE OF j,v`,
           [id, token],
         );
+        if (job.workspace_id) {
+          const held = await db.query(
+            `SELECT w.id FROM broker_disk_workspaces w JOIN broker_disk_attachments a ON a.vm_id=$4 AND a.disk_id=w.disk_id
+             WHERE w.id=$1 AND w.active_task_id=$2 AND w.buyer_id=$3 AND a.status='mounted' AND a.generation=$5 FOR SHARE OF w,a`,
+            [job.workspace_id, job.studio_task_id, job.buyer_id, job.vm_id, job.disk_generation],
+          );
+          if (!held.rowCount) return { rowCount: 0 };
+        }
         return db.query(
           `UPDATE broker_coding_steps s SET status='dispatching',payload_cipher=$3 FROM broker_coding_jobs j
       WHERE s.id=$1 AND s.status='pending' AND j.id=s.job_id AND j.lease_token=$2 AND j.status='running' AND j.requested_action IS NULL

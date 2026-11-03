@@ -56,3 +56,7 @@ Completion JSON errors expose `inferenceRequestId` for `inference receipt`; `req
 Providers use `provider inference get`, `provider inference update --file offering.json --operation-key offering-001`, and `provider inference packs`. Updating supply requires its current `expectedRevision` and never rewrites accepted packs.
 
 Version `0.4.0` omits retired scheduled VM commands from help and command routing. Existing versioned downloads remain unchanged.
+
+## Persistent disks (0.5.0)
+
+Use `disks options`, `disks list`, `disks get <id>` and `disks workspaces <id>` to inspect owned disks. `disks create --file disk.json --operation-key disk-001` and `disks rename <id> --file disk.json --operation-key rename-001` accept `{ "name": "research" }`. `disks delete <id> --operation-key delete-001` deletes only a detached, unreferenced disk. Creation/deletion are asynchronous. Add `diskId` to a reviewed VM order; `orders:write` and `disks:use` are required together. Disk access defaults off server-side until configured.

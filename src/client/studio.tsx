@@ -7,6 +7,7 @@ import {
   FileDiff,
   FlaskConical,
   GitBranch,
+  HardDrive,
   Plus,
   Server,
   ShieldCheck,
@@ -17,6 +18,8 @@ import {
 } from 'lucide-react';
 import type { StudioTask, StudioDetail, StudioStatus } from '../shared/studio';
 import type { StudioUsage } from '../shared/studio-usage';
+import type { DiskWorkspace } from '../shared/disks';
+import { DiskPicker, WorkspacePicker, useDiskOptions } from './disks';
 import { usdToCents } from '../shared/money';
 import { money, post, dateTime, DEFAULT_PRICE_USD } from './api';
 import {
@@ -136,6 +139,7 @@ export function Studio({ search = '' }: { search?: string }) {
     '/api/studio/options',
   );
   const wallet = useResource<{ availableCents: number }>('/api/credits', 5000);
+  const disks = useDiskOptions();
   const [compose, setCompose] = useState(params.get('new') === '1'),
     [goal, setGoal] = useState(''),
     [repo, setRepo] = useState(''),
@@ -147,6 +151,9 @@ export function Studio({ search = '' }: { search?: string }) {
     [review, setReview] = useState(false),
     [busy, setBusy] = useState(false),
     [error, setError] = useState('');
+  const [diskId, setDiskId] = useState(params.get('diskId') ?? ''),
+    [workspaceId, setWorkspaceId] = useState(params.get('workspaceId') ?? ''),
+    [workspace, setWorkspace] = useState<DiskWorkspace | undefined>();
   const operation = useRef(crypto.randomUUID()),
     amount = usdToCents(budget);
   function change() {
@@ -157,6 +164,12 @@ export function Studio({ search = '' }: { search?: string }) {
     e.preventDefault();
     setError('');
     try {
+      if (diskId && !disks.data?.enabled)
+        throw Error(
+          'Disk support is unavailable. Remove the disk or try again after it is enabled.',
+        );
+      if (workspaceId && (!workspace || workspace.status !== 'available' || !workspace.initialized))
+        throw Error('Choose an available, initialized workspace or create a new one.');
       const url = new URL(repo);
       if (
         url.protocol !== 'https:' ||
@@ -184,6 +197,7 @@ export function Studio({ search = '' }: { search?: string }) {
         operationKey: operation.current,
         goal,
         repositoryUrl: repo,
+        ...(diskId ? { diskId, ...(workspaceId ? { workspaceId } : {}) } : {}),
         budgetCents: amount,
         durationMinutes: Number(duration),
         allowInstant: instant,
@@ -237,6 +251,28 @@ export function Studio({ search = '' }: { search?: string }) {
               <h2>What should we accomplish?</h2>
               <span className="studio-tag">Public repositories</span>
             </div>
+            <DiskPicker
+              value={diskId}
+              options={disks.data}
+              onChange={(id) => {
+                setDiskId(id);
+                setWorkspaceId('');
+                setWorkspace(undefined);
+                change();
+              }}
+            />
+            {diskId && disks.data?.enabled && (
+              <WorkspacePicker
+                diskId={diskId}
+                value={workspaceId}
+                onChange={(id, next) => {
+                  setWorkspaceId(id);
+                  setWorkspace(next);
+                  if (next) setRepo(next.repositoryUrl);
+                  change();
+                }}
+              />
+            )}
             <label className="field">
               <span>Task</span>
               <textarea
@@ -259,6 +295,7 @@ export function Studio({ search = '' }: { search?: string }) {
                 type="url"
                 placeholder="https://github.com/company/project"
                 value={repo}
+                readOnly={!!workspaceId}
                 onChange={(e) => {
                   setRepo(e.target.value);
                   change();
@@ -349,7 +386,16 @@ export function Studio({ search = '' }: { search?: string }) {
                 Starting authorizes Studio to buy compute and model allowance within your budget and
                 prepare a disposable VM.
               </p>
-              <button className="button primary" disabled={busy || !options.data?.available}>
+              <button
+                className="button primary"
+                disabled={
+                  busy ||
+                  !options.data?.available ||
+                  (!!workspaceId &&
+                    (!workspace || workspace.status !== 'available' || !workspace.initialized)) ||
+                  (!!diskId && !disks.data?.enabled)
+                }
+              >
                 <Sparkles size={16} />
                 {`Start task · ${money(amount ?? 0)} maximum`}
               </button>
@@ -393,7 +439,8 @@ export function Studio({ search = '' }: { search?: string }) {
                 <div>
                   <strong>Verify and clean up</strong>
                   <p>
-                    Get the patch, test output, and final cost. The disposable VM is terminated.
+                    Get the patch, test output, and final cost. The VM is terminated
+                    {diskId ? ' and your disk workspace is kept for the next task.' : '.'}
                   </p>
                 </div>
               </li>
@@ -505,6 +552,24 @@ export function Studio({ search = '' }: { search?: string }) {
               <dt>Repository</dt>
               <dd>{repo}</dd>
             </div>
+            {diskId && (
+              <>
+                <div>
+                  <dt>Persistent disk</dt>
+                  <dd>
+                    <Link href={'/disks/' + diskId}>View selected disk</Link>
+                  </dd>
+                </div>
+                <div>
+                  <dt>Workspace</dt>
+                  <dd>
+                    {workspaceId
+                      ? `Continue ${workspace?.name ?? 'existing workspace'}`
+                      : 'New separate folder'}
+                  </dd>
+                </div>
+              </>
+            )}
             <div>
               <dt>Model provider</dt>
               <dd>
@@ -743,6 +808,21 @@ export function StudioTaskPage({ id }: { id: string }) {
         )}
       </PageHeader>
       <ErrorBox error={error || detail.error} />
+      {task.diskId && (
+        <div className="disk-workspace-detail">
+          <HardDrive size={19} />
+          <div>
+            <Link href={'/disks/' + task.diskId}>
+              View persistent disk <ArrowRight size={13} />
+            </Link>
+            <small>
+              {task.continuingWorkspace ? 'Continuing saved files' : 'Persistent workspace'}
+              {task.workspaceId ? ' · ' + task.workspaceId.slice(0, 8) : ''}. Files remain after
+              task cleanup.
+            </small>
+          </div>
+        </div>
+      )}
       {task.mode === 'fixture' && (
         <div className="studio-notice">Fixture task · no live purchases or provider VMs.</div>
       )}
@@ -946,13 +1026,13 @@ export function StudioTaskPage({ id }: { id: string }) {
                 (task.hasPatch ? (
                   <>
                     <div className="studio-section-head">
-                      <h3>Verified patch</h3>
+                      <h3>{task.patchLabel || 'Verified patch'}</h3>
                       <a
                         className="button secondary"
                         href={'/api/studio/tasks/' + id + '/patch'}
                         download
                       >
-                        Download patch
+                        {task.diskId ? 'Download workspace changes' : 'Download patch'}
                         <ArrowRight size={14} />
                       </a>
                     </div>

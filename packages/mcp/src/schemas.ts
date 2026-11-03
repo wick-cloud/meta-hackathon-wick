@@ -21,6 +21,7 @@ const requirements = z
   .strict();
 const desired = z
   .object({
+    diskId: z.string().uuid().optional(),
     cpu: z.number().int().min(1).max(1024),
     memoryGb: z.number().positive().max(16384),
     gpu: z.string().max(120).optional(),
@@ -30,6 +31,7 @@ const desired = z
   })
   .strict();
 export const bodySchemas: Record<string, z.ZodType> = {
+  disk: z.object({ name: z.string().trim().min(1).max(100) }).strict(),
   tokenQuote: z
     .object({
       grantId: id.optional(),
@@ -84,6 +86,7 @@ export const bodySchemas: Record<string, z.ZodType> = {
     .strict(),
   order: z
     .object({
+      diskId: z.string().uuid().optional(),
       description: text,
       catalogId: id,
       region: id,
@@ -159,7 +162,10 @@ export function operationSchema(operation: Operation): z.ZodObject {
   if (operation.path.includes(':offerId')) shape.offerId = id;
   if (operation.mutation) shape.operationKey = opKey;
   if (operation.body) shape.input = bodySchemas[operation.body]!;
-  if (operation.method === 'GET' && !operation.path.includes(':id'))
+  if (
+    operation.method === 'GET' &&
+    (!operation.path.includes(':id') || operation.path.endsWith('/workspaces'))
+  )
     shape.filters = filtersSchema.optional();
   return z.object(shape).strict();
 }

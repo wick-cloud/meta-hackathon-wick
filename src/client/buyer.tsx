@@ -25,6 +25,7 @@ import {
   Cpu,
   FileText,
   Globe2,
+  HardDrive,
   Layers3,
   LockKeyhole,
   Plus,
@@ -84,6 +85,7 @@ import {
 const TerminalPanel = lazy(() =>
   import('./terminal').then((module) => ({ default: module.TerminalPanel })),
 );
+import { DiskPicker, useDiskOptions } from './disks';
 
 export function NewEnvironment() {
   const { catalog, modes, user } = useSession(),
@@ -108,6 +110,7 @@ export function NewEnvironment() {
         if (cancelled) return;
         saveDraft({
           description: request.description,
+          ...(request.diskId ? { diskId: request.diskId } : {}),
           catalogId: request.catalogId,
           region: request.region,
           matchAcrossProviders: request.matchAcrossProviders,
@@ -164,6 +167,9 @@ export function NewEnvironment() {
     if (reviewed) {
       saveDraft({
         description: description.trim(),
+        ...(new URLSearchParams(window.location.search).get('diskId') || reviewed.diskId
+          ? { diskId: new URLSearchParams(window.location.search).get('diskId') || reviewed.diskId }
+          : {}),
         catalogId: reviewed.catalogId,
         region: reviewed.region,
         matchAcrossProviders: reviewed.matchAcrossProviders,
@@ -182,6 +188,9 @@ export function NewEnvironment() {
         : undefined) ?? first;
     saveDraft({
       description: description.trim(),
+      ...(new URLSearchParams(window.location.search).get('diskId')
+        ? { diskId: new URLSearchParams(window.location.search).get('diskId')! }
+        : {}),
       catalogId: reference.id,
       region: modes.wick === 'real' ? (explicitRegion ?? 'any') : reference.region,
       matchAcrossProviders: modes.wick === 'real',
@@ -212,6 +221,9 @@ export function NewEnvironment() {
       });
       saveDraft({
         ...result.proposal,
+        ...(new URLSearchParams(window.location.search).get('diskId')
+          ? { diskId: new URLSearchParams(window.location.search).get('diskId')! }
+          : {}),
         region:
           modes.wick === 'real'
             ? (parseExplicitBuyerDescription(description).region ?? 'any')
@@ -382,7 +394,11 @@ export function RequestReview() {
   const [draft, setDraft] = useState<Draft | null>(loadDraft),
     [busy, setBusy] = useState(false),
     [error, setError] = useState('');
-  const approved = catalog.filter((item) => item.approved),
+  const diskOptions = useDiskOptions();
+  const approved = catalog.filter(
+      (item) =>
+        item.approved && (!draft?.diskId || diskOptions.data?.eligibleCatalogIds.includes(item.id)),
+    ),
     selected = approved.find((item) => item.id === draft?.catalogId);
   function update(change: Partial<Draft>) {
     setDraft((old) => (old ? { ...old, ...change } : old));
@@ -414,6 +430,7 @@ export function RequestReview() {
     try {
       const request = await post<EnvironmentRequest>('/api/requests', {
         description: draft.description.trim() || `${selected.name} environment`,
+        ...(draft.diskId ? { diskId: draft.diskId } : {}),
         catalogId: draft.catalogId,
         region: draft.region,
         matchAcrossProviders: draft.matchAcrossProviders === true,
@@ -561,6 +578,17 @@ export function RequestReview() {
                 </select>
               </label>
             </div>
+            <DiskPicker
+              value={draft.diskId ?? ''}
+              options={diskOptions.data}
+              onChange={(diskId) => update({ diskId: diskId || undefined })}
+            />
+            {draft.diskId && (
+              <p className="field-hint">
+                Only providers qualified to mount this disk are eligible. Use a separate folder for
+                each agent.
+              </p>
+            )}
             <div className="field-grid">
               <label className="field" htmlFor="cpus">
                 <span>Minimum vCPUs</span>
@@ -624,6 +652,13 @@ export function RequestReview() {
               </DetailRow>
               <DetailRow label="Region">{regionName(draft.region)}</DetailRow>
               <DetailRow label="Rental">{draft.durationMinutes} minutes</DetailRow>
+              {draft.diskId && (
+                <DetailRow label="Persistent disk">
+                  <Link href={'/disks/' + draft.diskId}>
+                    View selected disk <ArrowRight size={13} />
+                  </Link>
+                </DetailRow>
+              )}
               <DetailRow label="Auction length">30 seconds</DetailRow>
               {selected?.pricingMode === 'managed' &&
                 selected.rateMicrosPerSecond !== undefined && (
@@ -961,6 +996,13 @@ export function AuctionPage({ id }: { id: string }) {
             </DetailRow>
             <DetailRow label="Region">{regionName(request.region)}</DetailRow>
             <DetailRow label="Rental">{request.durationMinutes} minutes</DetailRow>
+            {request.diskId && (
+              <DetailRow label="Persistent disk">
+                <Link href={'/disks/' + request.diskId}>
+                  View disk <ArrowRight size={13} />
+                </Link>
+              </DetailRow>
+            )}
             <DetailRow label="Maximum total">{money(request.maxPriceCents)}</DetailRow>
             <DetailRow label="Auction closes">{dateTime(request.closesAt)}</DetailRow>
             <div className="immutable-note">
@@ -1039,6 +1081,17 @@ export function VMDetail({ id }: { id: string }) {
         )}
       </PageHeader>
       <ErrorBox error={error || actionError} retry={error ? reload : undefined} />
+      {vm.diskId && (
+        <div className="disk-workspace-detail">
+          <HardDrive size={19} />
+          <div>
+            <Link href={'/disks/' + vm.diskId}>
+              View persistent disk <ArrowRight size={13} />
+            </Link>
+            <small>Stopping this VM keeps the disk and other attached VMs available.</small>
+          </div>
+        </div>
+      )}
       {confirm && (
         <div className="terminate-confirm" role="alert">
           <div>
