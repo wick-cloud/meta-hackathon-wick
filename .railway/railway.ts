@@ -25,6 +25,7 @@ export default defineRailway(() => {
       DATABASE_URL: db.env.DATABASE_URL,
       APP_URL: preserve(),
       BETTER_AUTH_SECRET: preserve(),
+      AUTH_TRUST_RAILWAY_PROXY: preserve(),
       WICK_MODE: preserve(),
       MUSE_MODE: preserve(),
       WICK_API_BASE: preserve(),

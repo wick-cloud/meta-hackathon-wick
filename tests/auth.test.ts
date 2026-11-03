@@ -76,6 +76,39 @@ describe.skipIf(!databaseUrl)('Real Better Auth invite and role boundary', () =>
     expect(response.statusCode).toBe(401);
     expect(response.headers['set-cookie']).toBeUndefined();
   });
+  it('isolates opted-in Railway auth limits by edge IP and ignores conflicting forwarded headers', async () => {
+    const railwayApp = Fastify();
+    const config = loadConfig({
+      NODE_ENV: 'test',
+      DATABASE_URL: databaseUrl!,
+      BETTER_AUTH_SECRET: 'auth-test-secret-with-more-than-32-characters',
+      WICK_MODE: 'fixture',
+      MUSE_MODE: 'fixture',
+      APP_URL: 'http://localhost:3000',
+      AUTH_TRUST_RAILWAY_PROXY: 'true',
+    });
+    await registerAuth(railwayApp, createAuth(config, pool), config);
+    await railwayApp.ready();
+    const signIn = (edgeIp: string, forwarded: string) =>
+      railwayApp.inject({
+        method: 'POST',
+        url: '/api/auth/sign-in/email',
+        headers: { 'x-real-ip': edgeIp, 'x-forwarded-for': forwarded },
+        payload: { email: 'invited@test.invalid', password: 'incorrect-password' },
+      });
+    try {
+      for (let attempt = 0; attempt < 10; attempt++)
+        expect((await signIn('192.0.2.10', `203.0.113.${attempt + 1}, 10.0.0.1`)).statusCode).toBe(
+          401,
+        );
+      // Changing a conflicting forwarding chain cannot reset this client's bucket.
+      expect((await signIn('192.0.2.10', '203.0.113.99')).statusCode).toBe(429);
+      // Another edge-observed client gets its own limit despite an identical XFF.
+      expect((await signIn('192.0.2.11', '203.0.113.99')).statusCode).toBe(401);
+    } finally {
+      await railwayApp.close();
+    }
+  });
   it('logs in an explicitly seeded account with an HttpOnly session and database role', async () => {
     const response = await app.inject({
       method: 'POST',
