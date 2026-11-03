@@ -74,10 +74,54 @@ def persist_artifact(name, content):
     return str(target)
 
 
+def bwrap_path():
+    installed = shutil.which("bwrap", path=env["PATH"])
+    if installed:
+        return installed
+    runtime = job / "runtime"
+    binary = runtime / "usr/bin/bwrap"
+    if not runtime.is_symlink() and binary.is_file() and not binary.is_symlink() and os.access(binary, os.X_OK):
+        return str(binary)
+    return None
+
+
+def bootstrap_sandbox():
+    if not data.get("allowBootstrap") or (bwrap_path() and shutil.which("git", path=env["PATH"])):
+        return
+    if not shutil.which("apt-get", path=env["PATH"]):
+        raise ValueError("Automatic task setup needs a Debian/Ubuntu guest with apt-get")
+    no_new_privileges = re.search(r"^NoNewPrivs:\s*1$", Path("/proc/self/status").read_text(), re.M)
+    if os.geteuid() != 0 and no_new_privileges:
+        # Mounted E2B commands cannot elevate. Extract only this fixed package
+        # from the guest's authenticated APT cache; never run package installers.
+        release = dict(line.split("=", 1) for line in Path("/etc/os-release").read_text().splitlines() if "=" in line)
+        if release.get("ID", "").strip('"') != "debian" or release.get("VERSION_ID", "").strip('"') != "12" or not shutil.which("git", path=env["PATH"]) or not shutil.which("dpkg-deb", path=env["PATH"]):
+            raise ValueError("Unprivileged sandbox setup needs Debian 12 with Git, dpkg-deb and authenticated APT metadata")
+        downloads, runtime = job / "package-download", job / "runtime"
+        for directory in [downloads, runtime]:
+            if directory.is_symlink():
+                raise ValueError("Unsafe sandbox runtime directory")
+            directory.mkdir(mode=0o700, exist_ok=True)
+        setup = execute(["apt-get", "-o", "APT::Get::AllowUnauthenticated=false", "-o", "Acquire::AllowInsecureRepositories=false", "-o", "Acquire::AllowDowngradeToInsecureRepositories=false", "download", "bubblewrap"], cwd=downloads, seconds=40)
+        archives = list(downloads.glob("bubblewrap_*.deb"))
+        if setup["exitCode"] != 0 or setup["interrupted"] or len(archives) != 1 or archives[0].is_symlink():
+            raise ValueError("Authenticated sandbox package download failed; no repository code was executed")
+        setup = execute(["dpkg-deb", "-x", str(archives[0]), str(runtime)], seconds=10)
+        if setup["exitCode"] != 0 or setup["interrupted"] or not bwrap_path():
+            raise ValueError("Unprivileged sandbox package extraction failed; no repository code was executed")
+    else:
+        prefix = [] if os.geteuid() == 0 else ["sudo", "-n"]
+        for command in [["apt-get", "update", "-qq"], ["env", "DEBIAN_FRONTEND=noninteractive", "apt-get", "install", "-y", "-qq", "--no-install-recommends", "git", "bubblewrap", "ca-certificates"]]:
+            setup = execute(prefix + command, seconds=40)
+            if setup["exitCode"] != 0 or setup["interrupted"]:
+                raise ValueError("Task sandbox setup failed; no repository code was executed")
+
+
 def sandbox(command):
-    if not shutil.which("bwrap", path=env["PATH"]):
+    binary = bwrap_path()
+    if not binary:
         raise ValueError("This VM needs bubblewrap with user/PID/network namespaces. No unsandboxed fallback is allowed.")
-    args = ["bwrap", "--unshare-all", "--die-with-parent", "--new-session", "--cap-drop", "ALL"]
+    args = [binary, "--unshare-all", "--die-with-parent", "--new-session", "--cap-drop", "ALL"]
     for directory in ["/usr", "/bin", "/sbin", "/lib", "/lib64"]:
         if Path(directory).exists():
             args += ["--ro-bind", directory, directory]
@@ -246,14 +290,7 @@ def main():
             # Task authorization covers preparation of this newly rented, disposable VM.
             # Only fixed packages from the guest's configured OS repositories are installed.
             # No repository script or dependency installer ever runs with privilege.
-            if data.get("allowBootstrap") and (not shutil.which("bwrap", path=env["PATH"]) or not shutil.which("git", path=env["PATH"])):
-                if not shutil.which("apt-get", path=env["PATH"]):
-                    raise ValueError("Automatic task setup needs a Debian/Ubuntu guest with apt-get")
-                prefix = [] if os.geteuid() == 0 else ["sudo", "-n"]
-                for command in [["apt-get", "update", "-qq"], ["env", "DEBIAN_FRONTEND=noninteractive", "apt-get", "install", "-y", "-qq", "--no-install-recommends", "git", "bubblewrap", "ca-certificates"]]:
-                    setup = execute(prefix + command, seconds=40)
-                    if setup["exitCode"] != 0 or setup["interrupted"]:
-                        raise ValueError("Task sandbox setup failed; no repository code was executed")
+            bootstrap_sandbox()
             # Probe the actual isolation mechanism before downloading/executing any repository.
             repo.mkdir(exist_ok=True)
             probe = execute(sandbox("test ! -e /root && test ! -e /workspace && printf isolated"), seconds=10)
