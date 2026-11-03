@@ -11,7 +11,16 @@ import { createDisk, deleteDisk, diskDetail, observeVmDisk } from '../disks/serv
 import { createRequest, cancelRequest } from '../marketplace/auction.js';
 import { terminateVm } from '../marketplace/lifecycle.js';
 import { demoBootstrapCommand } from './script.js';
-import { DEMO_QUEUE, DEMO_CATALOG_ID, demoActor, demoEvent, demoModeAllowed } from './service.js';
+import { demoReceiptFacts } from './receipt.js';
+import { INFERENCE_PROVIDERS } from '../../shared/inference.js';
+import {
+  DEMO_QUEUE,
+  DEMO_CATALOG_ID,
+  DEMO_LIMITS,
+  demoActor,
+  demoEvent,
+  demoModeAllowed,
+} from './service.js';
 
 async function save(ctx: AppContext, run: Row, assignment: string, values: unknown[] = []) {
   return (
@@ -168,7 +177,7 @@ async function advance(ctx: AppContext, run: Row) {
       ctx,
       run,
       'auction',
-      'Running the 30-second Baseten token auction. One eligible provider.',
+      'Running the 30-second Muse token auction. Every qualified seller is invited.',
     );
     return;
   }
@@ -182,10 +191,10 @@ async function advance(ctx: AppContext, run: Row) {
   if (
     !order ||
     order.status !== 'awarded' ||
-    order.provider !== 'baseten' ||
+    !(INFERENCE_PROVIDERS as readonly string[]).includes(order.provider) ||
     Number(order.price_cents) > 5
   ) {
-    await fail(ctx, run, 'No eligible Baseten token offer was awarded. Closing the demo.');
+    await fail(ctx, run, 'No eligible Muse token offer was awarded. Closing the demo.');
     return;
   }
   if (!run.pack_id) return; // Award checkpoint is discovered on the next tick.
@@ -307,7 +316,7 @@ async function advance(ctx: AppContext, run: Row) {
       'ready',
       run.kind === 'studio'
         ? 'Your guided Muse Studio workspace and terminal are ready.'
-        : 'Your Modal terminal and Baseten Muse tokens are ready.',
+        : 'Your Modal terminal and Muse tokens are ready.',
     );
     if (run.kind === 'studio') await reconcileDemoStudio(ctx, run.id, run.lease_token);
     return;
@@ -334,6 +343,24 @@ async function advance(ctx: AppContext, run: Row) {
     await fail(ctx, run, 'The private native disk mount could not be confirmed.');
     return;
   }
+  // Terminal runs give hello_muse.py the same public bid rows the homepage receipt shows.
+  const receipt =
+    run.kind === 'studio'
+      ? null
+      : demoReceiptFacts({
+          vm,
+          bids: (
+            await ctx.pool.query(
+              'SELECT total_price_cents,offering_snapshot,created_at FROM broker_bids WHERE request_id=$1 ORDER BY created_at,id LIMIT 8',
+              [run.request_id],
+            )
+          ).rows,
+          tokenPriceCents: order.price_cents,
+          tokenProvider: order.provider,
+          leaseMinutes: DEMO_LIMITS.durationMinutes,
+          inputTokens: DEMO_LIMITS.inputTokens,
+          outputTokens: DEMO_LIMITS.outputTokens,
+        });
   const authority = (
     await ctx.pool.query(
       `UPDATE broker_demo_runs SET bootstrap_started_at=clock_timestamp()
@@ -344,7 +371,7 @@ async function advance(ctx: AppContext, run: Row) {
   ).rowCount;
   if (!authority) return;
   const initialized = await ctx.wick.runCommand!(vm.environment_id, {
-    command: demoBootstrapCommand(ctx.config.appUrl, run.kind, run.reusable_disk),
+    command: demoBootstrapCommand(ctx.config.appUrl, run.kind, run.reusable_disk, receipt),
     cwd: '/workspace',
   });
   if (
@@ -367,7 +394,7 @@ async function advance(ctx: AppContext, run: Row) {
     'ready',
     run.kind === 'studio'
       ? 'Your guided Muse Studio workspace and terminal are ready.'
-      : 'Your Modal terminal and Baseten Muse tokens are ready.',
+      : 'Your Modal terminal and Muse tokens are ready.',
   );
 }
 

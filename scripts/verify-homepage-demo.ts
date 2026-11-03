@@ -6,6 +6,8 @@ import WebSocket from 'ws';
 import { z } from 'zod';
 import type { DemoState } from '../src/shared/demo.js';
 import { isMoneyCents, moneyUnits } from '../src/shared/money.js';
+import { INFERENCE_PROVIDERS } from '../src/shared/inference.js';
+import { CLOUD_PROVIDERS } from '../src/shared/providers.js';
 
 /**
  * APP_URL=https://your-app.example npx tsx scripts/verify-homepage-demo.ts --live
@@ -91,6 +93,10 @@ function hiddenPromptReady(output: string): boolean {
   );
   return /(?:^|\n)Batch key: $/.test(plainTerminal(output));
 }
+/** The example's optional follow-up question; the verifier skips it to keep its own second call. */
+function questionPromptReady(output: string): boolean {
+  return /(?:^|\n)Ask Muse one question[^\n]*: $/.test(plainTerminal(output));
+}
 function scriptReceipt(output: string, marker: string): { usage: Usage; answerCharacters: number } {
   const text = plainTerminal(output);
   check(new RegExp(`(?:^|\\n)${marker}:0(?:\\n|$)`).test(text), 'python_script_exit');
@@ -124,7 +130,7 @@ function studioReceipt(value: unknown, name = '') {
       canIssueKey: z.literal(false),
       keyIssued: z.literal(false),
       tokens: z.object({
-        provider: z.literal('baseten'),
+        provider: z.enum(INFERENCE_PROVIDERS),
         requestsUsed: z.number().int().min(1).max(2),
         availableInput: z.number().int().min(0).max(4999),
         availableOutput: z.number().int().min(0).max(2047),
@@ -185,8 +191,8 @@ function computeReceipt(value: unknown) {
       bids: z
         .array(
           z.object({
-            provider: z.enum(['modal', 'e2b']),
-            catalogId: z.enum(['modal:micro:auto', 'e2b:micro:us']),
+            provider: z.enum(CLOUD_PROVIDERS),
+            catalogId: z.string().regex(/^[a-z0-9-]+:micro:[a-z0-9-]+$/),
             priceCents: cents.min(1),
             grossPriceCents: cents.min(1),
             sponsorCreditCents: cents,
@@ -194,24 +200,30 @@ function computeReceipt(value: unknown) {
             acceptedAt: z.string().datetime(),
           }),
         )
-        .length(2),
+        .min(2)
+        .max(8),
     }),
     value,
     'compute_competition_receipt_invalid',
   );
+  // Every invited Micro seller may bid; Modal is the sponsored winner and needs a real rival.
   const modal = receipt.bids.find((bid) => bid.provider === 'modal');
-  const e2b = receipt.bids.find((bid) => bid.provider === 'e2b');
-  check(modal && e2b, 'compute_requires_two_actual_providers');
+  const rivals = receipt.bids.filter((bid) => bid.provider !== 'modal');
+  check(modal && rivals.length > 0, 'compute_requires_two_actual_providers');
   check(
-    modal.catalogId === 'modal:micro:auto' && e2b.catalogId === 'e2b:micro:us',
+    modal.catalogId === 'modal:micro:auto' &&
+      receipt.bids.every((bid) => bid.catalogId.startsWith(`${bid.provider}:micro:`)),
     'compute_bid_provider_catalog_mismatch',
   );
   check(
     modal.priceCents === 1 &&
-      modal.priceCents <= e2b.priceCents &&
-      e2b.sponsorCreditCents === 0 &&
-      e2b.operatorSponsored !== true &&
-      e2b.priceCents === e2b.grossPriceCents &&
+      rivals.every(
+        (rival) =>
+          modal.priceCents <= rival.priceCents &&
+          rival.sponsorCreditCents === 0 &&
+          rival.operatorSponsored !== true &&
+          rival.priceCents === rival.grossPriceCents,
+      ) &&
       receipt.grossPriceCents === modal.grossPriceCents &&
       receipt.sponsorCreditCents === modal.sponsorCreditCents &&
       Boolean(receipt.operatorSponsored) === Boolean(modal.operatorSponsored) &&
@@ -225,7 +237,7 @@ function computeReceipt(value: unknown) {
     receipt.bids.every((bid) => Date.parse(bid.acceptedAt) < Date.parse(receipt.auctionEndsAt)),
     'compute_bid_accepted_after_deadline',
   );
-  return { ...receipt, bids: [e2b, modal] };
+  return { ...receipt, bids: [...rivals, modal] };
 }
 
 class LiveTerminal {
@@ -312,11 +324,17 @@ class LiveTerminal {
     );
     await this.wait(() => hiddenPromptReady(this.output), 20000, 'python_hidden_prompt_timeout');
     this.socket.send(JSON.stringify({ type: 'input', data: `${key}\r` }));
+    const finished = () =>
+      new RegExp(`(?:^|\\n)${marker}:\\d+(?:\\n|$)`).test(plainTerminal(this.output));
     await this.wait(
-      () => new RegExp(`(?:^|\\n)${marker}:\\d+(?:\\n|$)`).test(plainTerminal(this.output)),
+      () => finished() || questionPromptReady(this.output),
       125000,
       'python_result_timeout_no_retry',
     );
+    if (!finished()) {
+      this.socket.send(JSON.stringify({ type: 'input', data: '\r' }));
+      await this.wait(finished, 20000, 'python_question_skip_timeout');
+    }
     return scriptReceipt(this.output, marker);
   }
   async runStudioFile(expectedHash: string, name = '') {
@@ -565,8 +583,10 @@ async function verify(origin: string, kind: 'terminal' | 'studio' = 'terminal') 
     const run = ready.run!;
     check(run.id === admittedRun.run.id, 'demo_run_changed');
     check(
-      run.tokens?.provider === 'baseten' && run.tokens.status === 'awarded',
-      'baseten_not_awarded',
+      !!run.tokens?.provider &&
+        (INFERENCE_PROVIDERS as readonly string[]).includes(run.tokens.provider) &&
+        run.tokens.status === 'awarded',
+      'muse_tokens_not_awarded',
     );
     check(
       run.vm?.provider === 'modal' &&
@@ -683,14 +703,18 @@ async function verify(origin: string, kind: 'terminal' | 'studio' = 'terminal') 
           usage: usageSchema,
           broker: z.object({
             mode: z.literal('real'),
-            provider: z.literal('baseten'),
+            provider: z.enum(INFERENCE_PROVIDERS),
             packId: z.string(),
           }),
         }),
         response.value,
         'second_model_real_receipt_invalid',
       );
-      check(answer.broker.packId === run.tokens.packId, 'second_model_wrong_pack');
+      check(
+        answer.broker.packId === run.tokens.packId &&
+          answer.broker.provider === run.tokens.provider,
+        'second_model_wrong_pack',
+      );
       check(
         !answer.choices[0].message.content.includes('Fixture response:'),
         'fixture_answer_rejected',
@@ -851,11 +875,19 @@ function selfTest() {
     () => hiddenPromptReady('Warning: Password input may be echoed.\r\nBatch key: '),
     CheckFailure,
   );
+  const question = 'Ask Muse one question about this VM, the auctions or Wick (Enter to skip): ';
+  assert.equal(questionPromptReady(`Usage: {}\r\n\r\n2/2  Your turn\r\n${question}`), true);
+  assert.equal(questionPromptReady('Ask Muse one question about'), false);
   const marker = 'WICK_DEMO_DONE_test';
   const transcript = `python3 -u /workspace/hello_muse.py; printf '\\n${marker}:%s\\n' "$?"\r\nHello Muse\r\nBatch key: \r\nCalling Meta Muse. Request: ${randomUUID()}\r\nHello from Meta Muse.\r\nUsage: {"prompt_tokens":20,"completion_tokens":10,"total_tokens":30}\r\n${marker}:0\r\n$ `;
   assert.deepEqual(scriptReceipt(transcript, marker), {
     usage: { prompt_tokens: 20, completion_tokens: 10, total_tokens: 30 },
     answerCharacters: 21,
+  });
+  const explained = `Batch key: \r\n\r\n1/2  Muse explains what you just bought\r\nCalling Meta Muse. Request: ${randomUUID()}\r\nYou rented a Modal Micro VM.\r\n$ uname -a\r\nUsage: {"prompt_tokens":340,"completion_tokens":210,"total_tokens":550}\r\nMuse suggested a command. Nothing was run; type it yourself if you want to try it.\r\n\r\n2/2  Your turn\r\n${question}\r\nNo question sent. Run this script again to ask one before the lease ends.\r\n${marker}:0\r\n$ `;
+  assert.deepEqual(scriptReceipt(explained, marker), {
+    usage: { prompt_tokens: 340, completion_tokens: 210, total_tokens: 550 },
+    answerCharacters: 39,
   });
   assert.throws(
     () => scriptReceipt(transcript.replace(`${marker}:0`, `${marker}:1`), marker),
@@ -972,6 +1004,22 @@ function selfTest() {
     ],
   };
   assert.equal(computeReceipt(compute).bids[0].provider, 'e2b');
+  // Every invited Micro seller may bid, not only the first rival.
+  const crowded = {
+    ...compute,
+    bids: [
+      ...compute.bids,
+      {
+        provider: 'sail',
+        catalogId: 'sail:micro:auto',
+        priceCents: 4,
+        grossPriceCents: 4,
+        sponsorCreditCents: 0,
+        acceptedAt: '2026-11-03T06:00:04.000Z',
+      },
+    ],
+  };
+  assert.equal(computeReceipt(crowded).bids.length, 3);
   const promotion = {
     ...compute,
     grossPriceCents: 1,
@@ -986,6 +1034,12 @@ function selfTest() {
   assert.equal(computeReceipt(promotion).operatorSponsored, true);
   for (const invalid of [
     { ...compute, bids: compute.bids.slice(0, 1) },
+    {
+      ...crowded,
+      bids: crowded.bids.map((bid) =>
+        bid.provider === 'sail' ? { ...bid, catalogId: 'e2b:micro:us' } : bid,
+      ),
+    },
     { ...compute, grossPriceCents: 1 },
     { ...compute, sponsorCreditCents: 7 },
     { ...compute, operatorSponsored: true },

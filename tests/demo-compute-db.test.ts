@@ -270,7 +270,7 @@ describe.skipIf(!url)('demo sponsorship with real pricing contracts and no nativ
   }
 
   it.each([false, true])(
-    'atomically binds two suppliers and preserves gross invoices with global promotion=%s',
+    'invites and binds every qualified Micro supplier and preserves gross invoices with global promotion=%s',
     async (promotion) => {
       ctx.config.modalComputePromotionEnabled = promotion;
       if (promotion) {
@@ -295,13 +295,17 @@ describe.skipIf(!url)('demo sponsorship with real pricing contracts and no nativ
         (await row(request.id)).catalog_snapshot.eligibleCatalogs
           .map((c: CatalogItem) => c.id)
           .sort(),
-      ).toEqual(['e2b:micro:us', 'modal:micro:auto']);
+      ).toEqual(['e2b:micro:us', 'modal:micro:auto', 'sail:micro:auto']);
+      expect((await row(request.id)).catalog_snapshot.demoCompute.providerIds).toEqual(
+        suppliers.map((s) => s.actor.providerId),
+      );
       expect(
         vi.mocked(ctx.boss.send).mock.calls.filter(([queue]) => queue === QUEUES.auto),
-      ).toHaveLength(2);
+      ).toHaveLength(3);
       for (const [index, expected] of [
         [0, modalGross],
         [1, 5],
+        [2, 4],
       ] as const) {
         const proposal = await proposeBid(ctx, suppliers[index]!.actor, request.id);
         expect(proposal).toMatchObject({
@@ -321,7 +325,7 @@ describe.skipIf(!url)('demo sponsorship with real pricing contracts and no nativ
       expect(
         (await pool.query('SELECT count(*)::int n FROM broker_holds WHERE released_at IS NULL'))
           .rows[0].n,
-      ).toBe(2);
+      ).toBe(3);
       // Already accepted global promotion quotes retain their terms after the flag turns off.
       ctx.config.modalComputePromotionEnabled = false;
       await close(request.id);
@@ -354,6 +358,7 @@ describe.skipIf(!url)('demo sponsorship with real pricing contracts and no nativ
       expect((await bids(request.id)).map((b) => [b.total_price_cents, b.status])).toEqual([
         [modalGross, 'won'],
         [5, 'lost'],
+        [4, 'lost'],
       ]);
       const disk = (await pool.query('SELECT upstream_id FROM broker_disks WHERE id=$1', [diskId]))
         .rows[0];
@@ -444,10 +449,10 @@ describe.skipIf(!url)('demo sponsorship with real pricing contracts and no nativ
       createRequest(ctx, buyer, body(), undefined, undefined, { runId, leaseToken: randomUUID() }),
     ).rejects.toMatchObject({ statusCode: 403 });
     await pool.query(
-      "UPDATE broker_providers SET policy=jsonb_set(policy,'{autoBid}','false') WHERE id=$1",
-      [suppliers[1]!.actor.providerId],
+      "UPDATE broker_providers SET policy=jsonb_set(policy,'{autoBid}','false') WHERE id=ANY($1::uuid[])",
+      [[suppliers[1]!.actor.providerId, suppliers[2]!.actor.providerId]],
     );
-    await expect(create()).rejects.toThrow(/Modal and E2B/);
+    await expect(create()).rejects.toThrow(/competing Micro offer/);
     expect((await pool.query('SELECT count(*)::int n FROM broker_requests')).rows[0].n).toBe(0);
     expect(
       (await pool.query('SELECT request_id FROM broker_demo_runs WHERE id=$1', [runId])).rows[0]
@@ -455,11 +460,22 @@ describe.skipIf(!url)('demo sponsorship with real pricing contracts and no nativ
     ).toBeNull();
   });
 
-  it('enforces real gross floors, the 25-cent ceiling and the frozen two-account boundary', async () => {
+  it('enforces real gross floors, the 25-cent ceiling and the frozen invited-seller boundary', async () => {
+    // Sail is not invited while its automatic bidding is off at admission.
+    const sail = suppliers[2]!.actor.providerId;
+    await pool.query(
+      "UPDATE broker_providers SET policy=jsonb_set(policy,'{autoBid}','false') WHERE id=$1",
+      [sail],
+    );
     const request = await create();
+    expect((await row(request.id)).catalog_snapshot.demoCompute.providerIds).not.toContain(sail);
+    await pool.query(
+      "UPDATE broker_providers SET policy=jsonb_set(policy,'{autoBid}','true') WHERE id=$1",
+      [sail],
+    );
     await expect(bid(request.id, 0, 1)).rejects.toThrow(/cost floor/);
     await expect(bid(request.id, 0, 26)).rejects.toThrow(/budget/);
-    await expect(bid(request.id, 2, 4)).rejects.toThrow();
+    await expect(bid(request.id, 2, 4)).rejects.toThrow(/outside/);
     expect(await bids(request.id)).toHaveLength(0);
     expect((await pool.query('SELECT count(*)::int n FROM broker_holds')).rows[0].n).toBe(0);
   });

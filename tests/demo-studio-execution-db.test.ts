@@ -118,9 +118,14 @@ describe.skipIf(!databaseUrl)(
         )
       ).rows;
       expect(allocations).toHaveLength(1);
+      // Whichever qualified Muse seller won the token auction serves the owned pack.
+      const packProvider = (
+        await f.pool.query('SELECT provider FROM broker_token_packs WHERE id=$1', [run.pack_id])
+      ).rows[0].provider;
+      expect(['modal', 'baseten']).toContain(packProvider);
       expect(allocations[0]).toMatchObject({
         pack_id: run.pack_id,
-        provider: 'baseten',
+        provider: packProvider,
         status: 'settled',
         reserved_output: 1024,
       });

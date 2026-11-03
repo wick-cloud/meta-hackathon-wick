@@ -1,14 +1,19 @@
 # Public hackathon demos
 
 The dedicated `/demos` page provides two sponsored, anonymous journeys: a terminal
-demo and a guided Muse Studio Hello World demo. Both use a real Baseten token
-auction, a real compute auction with Modal and E2B Micro eligibility, and a live
+demo and a guided Muse Studio Hello World demo. Both use a real Muse token
+auction, a real compute auction open to every qualified Micro seller, and a live
 terminal on a private disk. Judges do not need an account, payment details, Wick
 credentials, or a Baseten service key. The homepage describes the customer
 product and links to the demos and buyer beta. Both auctions retain their normal 30-second deadlines.
-The token auction has one eligible provider: Baseten. The compute auction invites
-qualified Modal and E2B Micro supply and displays only bids actually accepted by
-the server. Modal's effective bid is **$0.01**, through its operator-funded
+Both auctions invite every qualified seller, so judges see real competition. The
+token auction invites each Muse Spark Open seller (Baseten, Modal) whose route
+is qualified for this small pack: request-sized input accounting, a 1,024-token
+output cap, and validity through the session. The lowest bid wins and supplies the
+pack. The compute auction invites up to eight sellers with an active, automatic
+Micro offer on a disk-capable route within the $0.25 gross limit (for example E2B,
+Sail or Tenki, alongside Modal). It needs Modal and at least one rival, and
+displays only bids actually accepted by the server. Modal's effective bid is **$0.01**, through its operator-funded
 provider promotion or a disclosed homepage credit. The receipt shows the original
 gross bid and any additional demo credit.
 Modal has priority on a one-cent tie. A missing valid Modal bid ends that attempt;
@@ -23,7 +28,20 @@ discount proposals; the terminal example demonstrates the real Muse integration.
 2. Watch the token and compute bids, countdowns, and award receipts on the page.
 3. **Terminal demo:** once ready, get the demo token key, connect the terminal,
    and run `python3 /workspace/hello_muse.py`. Paste the key at the hidden prompt.
-   The script redeems the Baseten pack through the Broker gateway for Muse Spark Open.
+   The script redeems the winning seller's pack through the Broker gateway for Muse Spark Open.
+   - **Call 1:** Muse explains what the judge just bought. It sees the VM's own
+     CPU, memory, OS and free disk, plus `/workspace/receipt.json`: the winning
+     provider, accepted bids, gross bid, sponsor credit and token price. These
+     are the same public values the demo receipt shows. Muse ends with one
+     shell command to try.
+   - **Call 2:** the judge asks one question (Enter skips it and keeps the call
+     for a later run). A rerun after the explanation goes straight to the question.
+   - Both prompts use Meta's low reasoning setting (`Reasoning strength: 8.`), so
+     the 1,024-token output cap goes to the answer. Each prompt is sized to the
+     batch's live balance (read with the same key). The gateway reserves 4,096
+     framing tokens plus each message's bytes per call, which leaves the question
+     room for about 45 words. A longer question is shortened, with a notice.
+   - Muse may suggest a command, but the script never runs model output.
 4. **Guided Muse Studio:** choose Hello World, optionally enter your name, and review the non-editable task box. Start the demo and watch the real model generate `hello_world.py` and the
    VM run and verify it. Inspect the generated code and execution output, then
    rerun `python3 /workspace/hello_world.py` in the terminal. Rerunning this Hello
@@ -55,16 +73,16 @@ cooldown. The selected variant and optional name (up to 40 letters, numbers, spa
 
 ## Fixed demo policy
 
-| Resource           | Limit                                                                                                                        |
-| ------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
-| Compute            | Qualified Modal and E2B Micro bids; exact `modal:micro:auto` award, 15-minute lease including setup, maximum $0.25 gross bid |
-| Demo compute price | Modal $0.01 after sponsorship; original gross bid and sponsor contribution disclosed                                         |
-| Tokens             | Baseten only, 5,000 input / 2,048 output, maximum $0.05 purchase                                                             |
-| Model requests     | At most two accepted attempts per run; at most 1,024 output tokens per request                                               |
-| Disk               | One private disk per run; `hello_muse.py` for terminal, generated `hello_world.py` for guided Studio                         |
-| Next run           | Both resources unlock 20 minutes after confirmed VM cleanup; pending cleanup remains blocked                                 |
-| Concurrent runs    | At most two globally, and one per anonymous identity or observed client IP                                                   |
-| Daily sponsorship  | $5 per America/New_York calendar day; reserve $0.50 per admitted run                                                         |
+| Resource           | Limit                                                                                                                                                       |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Compute            | Every qualified Micro seller bids (Modal plus at least one rival); exact `modal:micro:auto` award, 15-minute lease including setup, maximum $0.25 gross bid |
+| Demo compute price | Modal $0.01 after sponsorship; original gross bid and sponsor contribution disclosed                                                                        |
+| Tokens             | Every qualified Muse seller bids; lowest wins. 5,000 input / 2,048 output, maximum $0.05 purchase                                                           |
+| Model requests     | At most two accepted attempts per run; at most 1,024 output tokens per request                                                                              |
+| Disk               | One private disk per run; `hello_muse.py` for terminal, generated `hello_world.py` for guided Studio                                                        |
+| Next run           | Both resources unlock 20 minutes after confirmed VM cleanup; pending cleanup remains blocked                                                                |
+| Concurrent runs    | At most two globally, and one per anonymous identity or observed client IP                                                                                  |
+| Daily sponsorship  | $5 per America/New_York calendar day; reserve $0.50 per admitted run                                                                                        |
 
 The one-cent display price does not reduce the provider's accepted gross price,
 invoice, or commission calculation. If the separate operator-funded Modal provider
@@ -101,11 +119,12 @@ Enable `LIVE_DEMO_ENABLED=true` only after deployment and qualification. Keep
 `DISKS_ENABLED=true`. Configure the existing server-only Wick/Baseten credentials,
 an unexpired Baseten request-sized inference accounting certificate, published
 automatic-bid token supply, and approved Modal Micro compute supply with a valid
-current rate. Also publish qualified E2B Micro supply
-with automatic bidding, available capacity, and a gross bid within the $0.25
-ceiling. Both routes must satisfy the existing native-disk qualification and
-provider-account checks; the demo admits no larger profiles. Additional configured
-providers are outside this bounded demo auction. The fixed demo ceilings must
+current rate. Also publish at least one rival Micro offer (E2B, Sail, Tenki or any
+other qualified seller) with automatic bidding, available capacity, and a gross
+bid within the $0.25 ceiling. Every such seller is invited, up to eight. All
+routes must satisfy the existing native-disk qualification and provider-account
+checks; the demo admits no larger profiles. A Modal token seller joins the token
+auction only when its route has its own request-sized accounting certificate. The fixed demo ceilings must
 cover the genuine gross offers before sponsorship.
 
 For Railway's public HTTP edge, use the already-supported
@@ -136,13 +155,14 @@ cover the homepage and both demos at desktop and narrow mobile widths.
 
 Before public enablement, complete one bounded live journey on the deployed
 release: both actual auctions select the intended providers; Modal Micro mounts
-the private disk; the preloaded Python script produces a real Baseten/Muse
+the private disk; the preloaded Python script produces a real Muse
 response; quota and receipts update; and ending the demo confirms VM termination,
 key rejection, disk deletion, and the paired cooldown. Include the homepage URL
 and these judge instructions alongside the public GitHub repo and demo video.
 
 The opt-in verifier runs that journey through public HTTP and terminal WebSocket
-APIs. It allocates one real demo VM/disk, makes two bounded Baseten requests,
+APIs. It allocates one real demo VM/disk, makes two bounded Muse requests
+(it skips the script's optional question so its own direct request is the second),
 checks that a third request is rejected and the terminal still accepts commands
 and reconnects without changing the lease, then explicitly ends its own test run
 to verify cleanup and cooldown. Ordinary judge sessions stay open after token

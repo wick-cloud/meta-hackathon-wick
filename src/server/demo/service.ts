@@ -8,18 +8,15 @@ import { transaction, enqueue } from '../marketplace/db.js';
 import { iso, type Row } from '../marketplace/data.js';
 import { clientOperationKey } from '../operations.js';
 import { diskCatalogEligible, diskOptions } from '../disks/service.js';
-import {
-  requireFreshManagedRate,
-  fixedQuote,
-  managedPricing,
-  isSponsoredComputeQuote,
-} from '../../shared/pricing.js';
+import { requireFreshManagedRate, fixedQuote, managedPricing } from '../../shared/pricing.js';
 import { applyCreditEntry } from '../agreements/credits.js';
 import { createGrantInTransaction } from '../inference/grants.js';
 import { OFFER_SELECT, offeringOpen, packPrice } from '../inference/market.js';
 import { issuePackKey } from '../inference/pack-access.js';
 import type { DemoIdentity } from './access.js';
-import { DEMO_COMPUTE_CATALOG_IDS, demoComputeProviders } from './compute.js';
+import { demoComputeCatalogs, demoComputeProviders } from './compute.js';
+import { demoBidView, demoVmPrice } from './receipt.js';
+import { INFERENCE_PROVIDERS, type InferenceProvider } from '../../shared/inference.js';
 
 export const DEMO_QUEUE = 'broker-homepage-demo';
 export const DEMO_CATALOG_ID = 'modal:micro:auto';
@@ -35,6 +32,24 @@ export const DEMO_RESERVATION_CENTS = 50;
 export const DEMO_DAILY_CENTS = 500;
 export const DEMO_TOKEN_CENTS = 5;
 export const DEMO_VM_CENTS = 25;
+/**
+ * Muse token sellers whose qualified routes can serve this demo's small pack: the 1,024
+ * output cap, the session window and (live) request-sized input accounting. Every one
+ * of them is invited to the token auction; the lowest qualified bid wins.
+ */
+export function demoTokenProviders(ctx: AppContext): InferenceProvider[] {
+  const until = Date.now() + 18 * 60_000;
+  return INFERENCE_PROVIDERS.filter((provider) => {
+    const route = ctx.inference?.routes.get(provider);
+    return Boolean(
+      route?.qualified &&
+      route.validUntil >= until &&
+      route.maximumOutputTokens >= DEMO_LIMITS.maxOutputTokens &&
+      (route.minimumOutputTokens ?? 1) <= DEMO_LIMITS.maxOutputTokens &&
+      (ctx.wick.mode !== 'real' || route.inputAccounting === 'utf8-bytes-v1'),
+    );
+  });
+}
 export function demoActor(row: Row): Actor {
   return { id: row.buyer_id, email: '', name: 'Demo visitor', role: 'buyer' };
 }
@@ -63,13 +78,7 @@ export async function demoPrerequisites(
     return { reason: 'The live demo requires real qualified compute and inference.' };
   if (!ctx.wick.runCommand || !ctx.wick.drives || !ctx.config.disksEnabled)
     return { reason: 'The demo terminal and private disk are not ready.' };
-  const rows = (
-    await ctx.pool.query(
-      'SELECT item,approved FROM broker_catalog WHERE id=ANY($1::text[]) AND source_mode=$2',
-      [[...DEMO_COMPUTE_CATALOG_IDS], ctx.wick.mode],
-    )
-  ).rows;
-  const catalogs = rows.map((row) => ({ ...row.item, approved: row.approved }) as CatalogItem);
+  const catalogs = await demoComputeCatalogs(ctx, ctx.pool);
   const catalog = catalogs.find((item) => item.id === DEMO_CATALOG_ID);
   if (
     !catalog ||
@@ -99,31 +108,33 @@ export async function demoPrerequisites(
       catalogs.filter((item) => item.cpu >= catalog.cpu && item.memoryGb >= catalog.memoryGb),
     );
   } catch {
-    return { reason: 'Qualified Modal and E2B Micro offers are required within the demo limit.' };
+    return {
+      reason: 'Modal and at least one rival Micro offer are required within the demo limit.',
+    };
   }
-  const route = ctx.inference?.routes.get('baseten');
-  const until = Date.now() + 18 * 60_000;
+  const sellers = ctx.inference?.enabled ? demoTokenProviders(ctx) : [];
+  if (!sellers.length) return { reason: 'Muse token qualification is unavailable.' };
+  const offers = (
+    await ctx.pool.query(`${OFFER_SELECT} WHERE r.provider=ANY($1::text[])`, [sellers])
+  ).rows;
+  const now = new Date();
   if (
-    !ctx.inference?.enabled ||
-    !route?.qualified ||
-    route.validUntil < until ||
-    route.maximumOutputTokens < 1024 ||
-    (route.minimumOutputTokens ?? 1) > 1024 ||
-    (ctx.wick.mode === 'real' && route.inputAccounting !== 'utf8-bytes-v1')
+    !offers.some(
+      (offer) =>
+        offer.qualified &&
+        !offer.quarantined_at &&
+        offer.fingerprint === ctx.inference!.routes.get(offer.provider)?.fingerprint &&
+        offer.auto_bid &&
+        offeringOpen(offer, now) &&
+        Number(offer.outstanding_input) + DEMO_LIMITS.inputTokens <=
+          Number(offer.max_outstanding_input) &&
+        Number(offer.outstanding_output) + DEMO_LIMITS.outputTokens <=
+          Number(offer.max_outstanding_output) &&
+        packPrice(offer, DEMO_LIMITS.inputTokens, DEMO_LIMITS.outputTokens).priceCents <=
+          DEMO_TOKEN_CENTS,
+    )
   )
-    return { reason: 'Baseten Muse token qualification is unavailable.' };
-  const offer = (await ctx.pool.query(`${OFFER_SELECT} WHERE r.provider='baseten'`)).rows[0];
-  if (
-    !offer?.qualified ||
-    offer.quarantined_at ||
-    offer.fingerprint !== route.fingerprint ||
-    !offer.auto_bid ||
-    !offeringOpen(offer, new Date()) ||
-    Number(offer.outstanding_input) + 5000 > Number(offer.max_outstanding_input) ||
-    Number(offer.outstanding_output) + 2048 > Number(offer.max_outstanding_output) ||
-    packPrice(offer, 5000, 2048).priceCents > DEMO_TOKEN_CENTS
-  )
-    return { reason: 'Baseten has no qualified token offer within the demo limit.' };
+    return { reason: 'No Muse token seller has a qualified offer within the demo limit.' };
   return { reason: null, catalog };
 }
 
@@ -261,7 +272,7 @@ export async function startDemo(
       name: 'Homepage demo',
       budgetCents: 5,
       maxPurchaseCents: 5,
-      allowedProviders: ['baseten'],
+      allowedProviders: demoTokenProviders(ctx),
       allowInstant: false,
       expiresAt: expiresAt.toISOString(),
     });
@@ -512,40 +523,9 @@ export async function demoState(
             provider: 'modal',
             catalogId: DEMO_CATALOG_ID,
             terminalPath: live ? `/api/vms/${vm.id}/terminal` : null,
-            priceCents:
-              vm?.quote_snapshot?.demoSponsorship?.effectivePriceCents ??
-              vm?.quote_snapshot?.totalPriceCents ??
-              null,
-            ...(isSponsoredComputeQuote(vm?.quote_snapshot?.pricing)
-              ? { operatorSponsored: true }
-              : {}),
-            ...(vm?.quote_snapshot?.demoSponsorship
-              ? {
-                  grossPriceCents: Number(vm.quote_snapshot.totalPriceCents),
-                  sponsorCreditCents: vm.quote_snapshot.demoSponsorship.sponsorCreditCents,
-                }
-              : {}),
+            ...demoVmPrice(vm),
             auctionEndsAt: iso(request.closes_at),
-            bids: vmBids.rows.map((b) => ({
-              provider:
-                b.offering_snapshot?.catalog?.provider ??
-                b.offering_snapshot?.cloudProvider ??
-                'modal',
-              priceCents:
-                b.offering_snapshot?.demoSponsorship?.effectivePriceCents ??
-                Number(b.total_price_cents),
-              ...(isSponsoredComputeQuote(b.offering_snapshot?.pricing)
-                ? { operatorSponsored: true }
-                : {}),
-              ...(b.offering_snapshot?.demoSponsorship
-                ? {
-                    grossPriceCents: Number(b.total_price_cents),
-                    sponsorCreditCents: b.offering_snapshot.demoSponsorship.sponsorCreditCents,
-                    catalogId: b.offering_snapshot.catalog.id,
-                  }
-                : {}),
-              acceptedAt: iso(b.created_at)!,
-            })),
+            bids: vmBids.rows.map(demoBidView),
             cleanupConfirmed: Boolean(vm?.cleanup_confirmed_at),
           }
         : null,
@@ -553,7 +533,7 @@ export async function demoState(
         ? {
             orderId: order.id,
             status: order.status,
-            provider: 'baseten',
+            provider: order.provider,
             packId: pack?.id ?? null,
             inputTokens: 5000,
             outputTokens: 2048,
