@@ -38,4 +38,4 @@ New account defaults use a base 20% above the 30-minute cost-covered quote; exis
 
 The temporary setup bundle was removed from the app container, the temporary Railway SSH registration was revoked, and its local key files were deleted after account verification.
 
-No paid native VM, live PTY, native cleanup, or real Muse inference test was run for this change. New offerings remain paused pending deployment and route-by-route live qualification. Historical four-provider scale results retain their original scope. Existing rentals and their cleanup were not changed.
+No paid native VM, live PTY, native cleanup, or real Muse inference test was run during this staging operation. The offerings were paused at its completion. PR #42 subsequently deployed, and all four initial configurations passed live qualification and were activated at 10:48:44 p.m. Eastern; see the separate [live qualification and activation receipt](provider-live-qualification-2026-11-02.md). Historical four-provider scale results retain their original scope. Existing rentals and their cleanup were not changed by staging.

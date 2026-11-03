@@ -21,6 +21,12 @@ import { TerminalMarkerProof } from './live-scale/terminal-proof.js';
 import { createWickAdapter } from '../src/server/integrations/wick.js';
 import type { WickEnvironment } from '../src/server/integrations/types.js';
 import { fixedQuote, managedPricing, revenueShare } from '../src/shared/pricing.js';
+import {
+  CANARY_HOLD_MS,
+  CANARY_QUOTE_CEILING_CENTS,
+  validateCanaryBase,
+  validateCanaryRoutes,
+} from './live-scale/provider-canary.js';
 
 type Json = Record<string, any>;
 interface Provider {
@@ -36,12 +42,17 @@ interface Provider {
   baselineAvailable?: number;
   basePriceCents?: number;
   minimumPriceCents?: number;
+  offeringId?: string;
+  cpu?: number;
+  memoryGb?: number;
+  diskGb?: number;
 }
 interface Settings {
   baseUrl: string;
   buyerCookie: string;
   adminCookie: string;
   target: number;
+  mode?: 'provider-canary';
   providers: Provider[];
   wick: { baseUrl: string; token: string; organizationId: string; groupId: string };
 }
@@ -54,6 +65,7 @@ interface Header {
   fingerprint: string;
   at: string;
   terminalPolicy?: 'strict' | 'collect-blaxel-timeouts' | 'compute-with-blaxel-diagnostics';
+  mode?: 'provider-canary';
 }
 const IDS = ['e2b', 'daytona', 'modal', 'provider-blaxel'];
 const command = process.argv[2];
@@ -80,6 +92,8 @@ const settingsPath = flag('settings'),
   journalPath = flag('journal');
 assert((statSync(settingsPath).mode & 0o077) === 0, 'Settings must have private permissions.');
 const settings: Settings = JSON.parse(readFileSync(settingsPath, 'utf8'));
+const canaryMode = settings.mode === 'provider-canary';
+assert(settings.mode === undefined || canaryMode, 'Unknown run mode.');
 const origin = new URL(settings.baseUrl);
 assert(
   origin.protocol === 'https:' &&
@@ -90,17 +104,29 @@ assert(
     !origin.hash,
   'Use an approved credential-free HTTPS origin.',
 );
-assert.equal(settings.target, 20, 'This reviewed run permits twenty request attempts.');
-assert.deepEqual(
-  settings.providers.map((p) => p.provider).sort(),
-  IDS.slice().sort(),
-  'Exactly the four reviewed providers are required.',
-);
+if (canaryMode) {
+  validateCanaryRoutes(settings.target, settings.providers);
+  assert(
+    requestedPolicy === undefined || requestedPolicy === 'strict',
+    'Canaries require strict terminals.',
+  );
+} else {
+  assert.equal(settings.target, 20, 'This reviewed run permits twenty request attempts.');
+  assert.deepEqual(
+    settings.providers.map((p) => p.provider).sort(),
+    IDS.slice().sort(),
+    'Exactly the four reviewed providers are required.',
+  );
+  assert(
+    settings.providers.every(
+      (p) => p.capacity === 5 && p.profile === 'micro' && p.cookie && p.catalogId && p.region,
+    ),
+    'Use five Micro slots per provider.',
+  );
+}
 assert(
-  settings.providers.every(
-    (p) => p.capacity === 5 && p.profile === 'micro' && p.cookie && p.catalogId && p.region,
-  ),
-  'Use five Micro slots per provider.',
+  settings.providers.every((p) => p.cookie),
+  'Provider credentials are required.',
 );
 assert(
   settings.buyerCookie && settings.adminCookie && settings.wick.token,
@@ -118,6 +144,23 @@ const fingerprint = createHash('sha256')
         p.region,
         p.rateMicrosPerSecond,
       ]),
+      ...(canaryMode
+        ? {
+            mode: settings.mode,
+            target: settings.target,
+            quoteCeilingCents: CANARY_QUOTE_CEILING_CENTS,
+            terminalHoldMs: CANARY_HOLD_MS,
+            canaries: settings.providers.map((p) => [
+              p.provider,
+              p.offeringId,
+              p.cpu,
+              p.memoryGb,
+              p.diskGb,
+              p.capacity,
+              p.basePriceCents,
+            ]),
+          }
+        : {}),
     }),
   )
   .digest('hex');
@@ -155,11 +198,16 @@ function header(): Header {
   const h = journal.read()[0] as unknown as Header;
   assert(h.kind === 'prepared' && /^[0-9a-f-]{36}$/.test(h.runId), 'Invalid run journal.');
   assert(
-    h.target === 20 &&
+    h.target === settings.target &&
+      h.mode === settings.mode &&
       h.maximumRunMs === 12 * 60_000 &&
       h.fingerprint === fingerprint &&
       h.baseUrl === origin.origin,
     'Settings do not match the prepared run.',
+  );
+  assert(
+    !canaryMode || (h.terminalPolicy ?? 'strict') === 'strict',
+    'Canaries require strict terminals.',
   );
   assert(
     h.terminalPolicy === undefined ||
@@ -271,10 +319,28 @@ function ownership(environment: WickEnvironment, vm: Json, provider: Provider, h
     created <= Number(start?.deadline ?? Date.parse(h.at) + h.maximumRunMs) + 120_000
   );
 }
+function canaryNativeTiming(environment: WickEnvironment, vm: Json, provider: Provider) {
+  const raw = environment.raw as Json | undefined;
+  assert(Date.parse(environment.expiresAt ?? '') > Date.now(), 'CANARY_NATIVE_EXPIRY');
+  assert.equal(vm.durationMinutes, 15, 'CANARY_FROZEN_DURATION');
+  assert(
+    raw?.region === undefined || provider.region === 'auto' || raw.region === provider.region,
+    'CANARY_NATIVE_REGION',
+  );
+  return {
+    durationMinutes: vm.durationMinutes,
+    brokerCreatedAt: vm.createdAt,
+    brokerReadyAt: vm.readyAt,
+    nativeCreatedAt: environment.createdAt,
+    nativeExpiresAt: environment.expiresAt,
+    ...(raw?.region === undefined ? {} : { nativeRegion: raw.region }),
+  };
+}
 async function ownedRequests(h: Header): Promise<{ requests: Json[]; unknown: number }> {
   const attempts = intents();
   assert(
-    attempts.length <= 20 && new Set(attempts.map((r) => r.item)).size === attempts.length,
+    attempts.length <= settings.target &&
+      new Set(attempts.map((r) => r.item)).size === attempts.length,
     'Request attempt cap exceeded.',
   );
   const allowed = new Set(attempts.map((r) => description(h, Number(r.item))));
@@ -329,7 +395,7 @@ function rememberVm(d: Json) {
     attempt &&
       Number.isInteger(attempt.item) &&
       Number(attempt.item) >= 1 &&
-      Number(attempt.item) <= 20,
+      Number(attempt.item) <= settings.target,
     'RECEIPT_REQUEST_INTENT',
   );
   if (!journal.read().some((r) => r.kind === 'request-result' && r.requestId === d.request.id))
@@ -342,7 +408,7 @@ function rememberVm(d: Json) {
     });
   const existing = journal.read().filter((r) => r.kind === 'vm-receipt');
   if (existing.some((r) => r.vmId === d.vm.id && r.environmentId === d.vm.environmentId)) return;
-  assert(new Set(existing.map((r) => r.environmentId)).size < 20, 'RECEIPT_BOUND');
+  assert(new Set(existing.map((r) => r.environmentId)).size < settings.target, 'RECEIPT_BOUND');
   journal.append('vm-receipt', {
     vmId: d.vm.id,
     requestId: d.request.id,
@@ -356,7 +422,7 @@ function rememberVm(d: Json) {
 async function cleanupNativeReceipts(h: Header, confirmed: Set<string>) {
   const records = journal.read().filter((r) => r.kind === 'vm-receipt');
   const unique = [...new Map(records.map((r) => [String(r.environmentId), r])).values()];
-  assert(unique.length <= 20, 'RECEIPT_BOUND');
+  assert(unique.length <= settings.target, 'RECEIPT_BOUND');
   const outcomes = await cleanupBatch(
     unique.filter((r) => !confirmed.has(String(r.environmentId))),
     async (record) => {
@@ -393,6 +459,72 @@ async function cleanupNativeReceipts(h: Header, confirmed: Set<string>) {
   );
   return { total: unique.length, failed: outcomes.filter((r) => r.status === 'rejected').length };
 }
+async function providerOfferings(p: Provider) {
+  const response = await api(p.cookie, '/api/provider/offerings?limit=100');
+  assert(Array.isArray(response.items) && !response.nextCursor, 'CANARY_OFFERINGS_BOUND');
+  return response.items as Json[];
+}
+async function restoreCanaryAvailability(only?: Provider): Promise<boolean> {
+  if (!canaryMode) return true;
+  const baselines = journal.read().filter((r) => r.kind === 'canary-listing-baseline');
+  const selected = settings.providers.filter((p) => !only || p.provider === only.provider);
+  const outcomes = await cleanupBatch(selected, async (p) => {
+    const baseline = baselines.find((r) => r.provider === p.provider);
+    if (!baseline) return;
+    assert(
+      baseline.catalogId === p.catalogId &&
+        baseline.offeringId === p.offeringId &&
+        baseline.catalogApproved === false &&
+        baseline.offeringActive === false &&
+        baseline.autoBid === false,
+      'CANARY_RESTORE_BASELINE',
+    );
+    // Independent credentials/routes: failure restoring one flag must not skip the other.
+    const restored = await Promise.allSettled([
+      (async () => {
+        const offering = (await providerOfferings(p)).find((o) => o.id === p.offeringId);
+        assert(offering?.catalogId === p.catalogId, 'CANARY_RESTORE_OFFERING');
+        if (offering.active)
+          await api(p.cookie, '/api/provider/offerings/' + p.offeringId, 'PATCH', {
+            active: false,
+          });
+      })(),
+      (async () => {
+        const catalog = (await api(settings.adminCookie, '/api/admin/config')).catalog;
+        const item = catalog.find((c: Json) => c.id === p.catalogId);
+        assert(item?.provider === p.provider, 'CANARY_RESTORE_CATALOG');
+        if (item.approved)
+          await api(
+            settings.adminCookie,
+            '/api/admin/catalog/' + encodeURIComponent(p.catalogId),
+            'PUT',
+            { approved: false },
+          );
+      })(),
+    ]);
+    assert(
+      restored.every((r) => r.status === 'fulfilled'),
+      'CANARY_FLAG_RESTORE',
+    );
+    const [after, config, dashboard] = await Promise.all([
+      providerOfferings(p),
+      api(settings.adminCookie, '/api/admin/config'),
+      api(p.cookie, '/api/provider/dashboard'),
+    ]);
+    assert(after.find((o) => o.id === p.offeringId)?.active === false, 'CANARY_OFFERING_RESTORE');
+    assert(
+      config.catalog.find((c: Json) => c.id === p.catalogId)?.approved === false,
+      'CANARY_CATALOG_RESTORE',
+    );
+    assert(dashboard.policy.autoBid === false, 'CANARY_AUTOBID_CHANGED');
+    journal.append('canary-listing-restored', {
+      provider: p.provider,
+      offeringId: p.offeringId,
+      catalogId: p.catalogId,
+    });
+  });
+  return outcomes.every((outcome) => outcome.status === 'fulfilled');
+}
 async function cleanup(h: Header, duration = 180_000) {
   if (!journal.read().some((r) => r.kind === 'stop-requested'))
     journal.append('stop-requested', { reason: 'cleanup' });
@@ -402,6 +534,8 @@ async function cleanup(h: Header, duration = 180_000) {
   const nativeConfirmed = new Set<string>();
   let lastCount = -1;
   while (Date.now() < end) {
+    // Restore temporary exposure independently of uncertain request/VM discovery.
+    const listingsRestored = await restoreCanaryAvailability().catch(() => false);
     let brokerVerified = false,
       holdsReleased = false;
     try {
@@ -472,13 +606,20 @@ async function cleanup(h: Header, duration = 180_000) {
         });
         lastCount = pending;
       }
-      if (!pending && !nativePending && holdsReleased) {
+      const exposuresSettled =
+        !canaryMode ||
+        journal
+          .read()
+          .filter((r) => r.kind === 'canary-exposure-mutation')
+          .every((r) => Date.now() - Date.parse(r.at) >= 60_000);
+      if (!pending && !nativePending && holdsReleased && listingsRestored && exposuresSettled) {
         const result = {
           confirmed: true,
           unknown: 0,
           pending: 0,
           holdsReleased: true,
           nativeConfirmed: nativeConfirmed.size,
+          ...(canaryMode ? { listingsRestored: true } : {}),
         };
         journal.append('cleanup-confirmed', result);
         return result;
@@ -492,6 +633,7 @@ async function cleanup(h: Header, duration = 180_000) {
     pending,
     holdsReleased: false,
     nativeConfirmed: nativeConfirmed.size,
+    ...(canaryMode ? { listingsRestored: false } : {}),
   };
 }
 interface Shell {
@@ -511,6 +653,7 @@ interface Shell {
   initialProofPassed: boolean;
   diagnosticClosed: boolean;
   proofFailure?: { phase: string; classification: 'known-blaxel-proof-timeout' };
+  canaryFailure?: string;
 }
 async function run(h: Header) {
   exclusive(journalPath + '.run-owner');
@@ -617,6 +760,10 @@ async function run(h: Header) {
     journal.append('terminal-open-intent', { vmId: vm.id });
     const terminalFailure = (classification: string) => {
       journal.append('terminal-failure', { vmId: vm.id, classification });
+      if (canaryMode) {
+        s.canaryFailure ||= classification;
+        return;
+      }
       stop(classification === 'protocol-or-proof' ? 'TERMINAL_PROOF' : 'TERMINAL_ENDED');
     };
     ws.on('message', (raw) => {
@@ -708,7 +855,8 @@ async function run(h: Header) {
           selected.every(
             (shell) =>
               shell.t1.matched &&
-              (shell.resize.matched || shell.noStty.matched) &&
+              (shell.resize.matched || (!canaryMode && shell.noStty.matched)) &&
+              !shell.canaryFailure &&
               shell.lastPong >= pingAt &&
               shell.ws.readyState === WebSocket.OPEN,
           )
@@ -725,7 +873,8 @@ async function run(h: Header) {
       for (const shell of selected) shell.proofInFlight = false;
     }
   }
-  const healthyShells = () => shells.filter((s) => !s.proofFailure && !s.diagnosticClosed);
+  const healthyShells = () =>
+    shells.filter((s) => !s.proofFailure && !s.diagnosticClosed && !s.canaryFailure);
   function confirmed(shell: Shell) {
     const d = observations.get(shell.vmId)!;
     journal.append('terminal-proof-confirmed', {
@@ -868,7 +1017,15 @@ async function run(h: Header) {
     if (!due.length) return;
     refreshing = true;
     try {
-      if (collectBlaxel) await collectionProof(due, 'refresh');
+      if (canaryMode)
+        await cleanupBatch(due, async (s) => {
+          try {
+            await fullProof([s], 'refresh');
+          } catch {
+            s.canaryFailure ||= 'REFRESH_PROOF_FAILED';
+          }
+        });
+      else if (collectBlaxel) await collectionProof(due, 'refresh');
       else await fullProof(due, 'refresh');
     } finally {
       refreshing = false;
@@ -885,27 +1042,33 @@ async function run(h: Header) {
     const own = all.filter((v) => requestIds.has(v.requestId));
     peakRunning = Math.max(peakRunning, own.filter((v) => v.status === 'running').length);
     assert(
-      own.every((v) => !['failed', 'terminated', 'terminating', 'expired'].includes(v.status)),
+      canaryMode ||
+        own.every((v) => !['failed', 'terminated', 'terminating', 'expired'].includes(v.status)),
       'RENTAL_ENDED',
     );
     return own;
   }
   async function request(item: number, provider?: Provider) {
     check();
-    assert(intents().length < 20, 'CUMULATIVE_REQUEST_CAP');
+    assert(intents().length < settings.target, 'CUMULATIVE_REQUEST_CAP');
     assert(
-      Number.isInteger(item) && item >= 1 && item <= 20 && !intents().some((r) => r.item === item),
+      Number.isInteger(item) &&
+        item >= 1 &&
+        item <= settings.target &&
+        !intents().some((r) => r.item === item),
       'REQUEST_ITEM_IDENTITY',
     );
     const ref = provider ?? settings.providers[0];
+    if (canaryMode)
+      assert(provider && settings.providers[item - 1] === provider, 'CANARY_ITEM_ROUTE');
     const body = {
       description: description(h, item),
       catalogId: ref.catalogId,
       region: provider ? ref.region : 'any',
       matchAcrossProviders: !provider,
       durationMinutes: 15,
-      maxPriceCents: budget,
-      requirements: { cpu: 1, memoryGb: 2 },
+      maxPriceCents: canaryMode ? ref.basePriceCents : budget,
+      requirements: canaryMode ? { cpu: ref.cpu, memoryGb: ref.memoryGb } : { cpu: 1, memoryGb: 2 },
     };
     journal.append('request-intent', { item, body });
     check(); // Recheck the admission fence after the durable intent, immediately before dispatch.
@@ -932,6 +1095,89 @@ async function run(h: Header) {
       closesAt: result.closesAt,
     });
     return result;
+  }
+  async function canaryRequest(item: number, p: Provider) {
+    check();
+    const baseline = journal
+      .read()
+      .find((r) => r.kind === 'canary-listing-baseline' && r.provider === p.provider);
+    assert(
+      baseline?.catalogId === p.catalogId && baseline.offeringId === p.offeringId,
+      'CANARY_BASELINE_MISSING',
+    );
+    journal.append('canary-exposure-intent', {
+      provider: p.provider,
+      catalogId: p.catalogId,
+      offeringId: p.offeringId,
+    });
+    try {
+      check();
+      journal.append('canary-exposure-mutation', { provider: p.provider, flag: 'catalogApproved' });
+      check();
+      await api(
+        settings.adminCookie,
+        '/api/admin/catalog/' + encodeURIComponent(p.catalogId),
+        'PUT',
+        { approved: true },
+      );
+      check();
+      journal.append('canary-exposure-mutation', { provider: p.provider, flag: 'offeringActive' });
+      check();
+      await api(p.cookie, '/api/provider/offerings/' + p.offeringId, 'PATCH', { active: true });
+      check();
+      const dashboard = await api(p.cookie, '/api/provider/dashboard');
+      assert(
+        dashboard.policy.autoBid === false && dashboard.policy.basePriceCents === p.basePriceCents,
+        'CANARY_POLICY_CHANGED',
+      );
+      const created = await request(item, p);
+      journal.append('canary-manual-bid-intent', {
+        item,
+        requestId: created.id,
+        provider: p.provider,
+        offeringId: p.offeringId,
+        basePriceCents: p.basePriceCents,
+      });
+      check();
+      let bid: Json;
+      try {
+        bid = await api(p.cookie, '/api/provider/requests/' + created.id + '/bids', 'POST', {
+          totalPriceCents: p.basePriceCents,
+          offeringId: p.offeringId,
+        });
+      } catch {
+        const observed = await detail(created);
+        const matches = observed.bids.filter(
+          (b: Json) =>
+            b.providerId === baseline.providerId &&
+            b.cloudProvider === p.provider &&
+            b.catalogId === p.catalogId &&
+            b.totalPriceCents === p.basePriceCents,
+        );
+        assert.equal(matches.length, 1, 'UNKNOWN_BID_NO_REPLAY');
+        bid = matches[0];
+      }
+      assert(
+        bid.cloudProvider === p.provider &&
+          bid.catalogId === p.catalogId &&
+          bid.totalPriceCents === p.basePriceCents,
+        'CANARY_BINDING_BID',
+      );
+      journal.append('canary-manual-bid-confirmed', {
+        item,
+        requestId: created.id,
+        bidId: bid.id,
+        provider: p.provider,
+        basePriceCents: p.basePriceCents,
+      });
+      return created;
+    } finally {
+      if (!(await restoreCanaryAvailability(p))) {
+        stop('CANARY_IMMEDIATE_RESTORE_FAILED');
+        journal.append('stop-requested', { reason: 'CANARY_IMMEDIATE_RESTORE_FAILED' });
+        throw new Error('CANARY_IMMEDIATE_RESTORE_FAILED');
+      }
+    }
   }
   async function ready(requests: Json[], expected?: Provider[]) {
     return until(async () => {
@@ -972,6 +1218,7 @@ async function run(h: Header) {
           profile: p.profile,
           region: p.region,
           createdAt: vm.createdAt,
+          ...(canaryMode ? canaryNativeTiming(observed, vm, p) : {}),
         });
         if (!shells.some((s) => s.vmId === vm.id)) shell(vm);
       });
@@ -1032,6 +1279,7 @@ async function run(h: Header) {
               (s) =>
                 !s.proofFailure &&
                 !s.diagnosticClosed &&
+                !s.canaryFailure &&
                 s.lastProofAt > 0 &&
                 s.t0.matched &&
                 s.t1.matched &&
@@ -1047,11 +1295,29 @@ async function run(h: Header) {
     );
   }
   let result: Json = {};
+  let observedModes = { wick: 'real', muse: 'fixture' };
   try {
     const health = await api(settings.buyerCookie, '/health');
-    assert.deepEqual(health.modes, { wick: 'real', muse: 'fixture' });
+    if (canaryMode)
+      assert(
+        health.modes.wick === 'real' && ['real', 'fixture'].includes(health.modes.muse),
+        'CANARY_MODES',
+      );
+    else assert.deepEqual(health.modes, { wick: 'real', muse: 'fixture' });
+    observedModes = health.modes;
     const config = await api(settings.adminCookie, '/api/admin/config');
     assert.equal(config.maxConcurrentVms, 20);
+    if (canaryMode) {
+      assert(
+        Array.isArray(config.unresolved) && config.unresolved.length === 0,
+        'CANARY_UNRESOLVED_CLEANUP',
+      );
+      assert(
+        config.providers.reduce((n: number, p: Json) => n + p.held, 0) <=
+          config.maxConcurrentVms - 4,
+        'CANARY_GLOBAL_CAPACITY',
+      );
+    }
     const catalog = (await api(settings.buyerCookie, '/api/catalog')).items;
     const dashboards = await bounded(settings.providers, (p) =>
       api(p.cookie, '/api/provider/dashboard'),
@@ -1062,20 +1328,60 @@ async function run(h: Header) {
         c = catalog.find((c: Json) => c.id === p.catalogId);
       assert(
         d.provider.cloudProvider === p.provider &&
-          d.capacity.total === 5 &&
+          d.capacity.total === p.capacity &&
           d.capacity.held === 0 &&
-          d.capacity.available === 5 &&
-          d.policy.autoBid === true,
+          d.capacity.available === p.capacity &&
+          d.policy.autoBid === !canaryMode,
         'PROVIDER_PREFLIGHT',
       );
       assert(
-        c?.approved &&
+        c &&
+          c.approved === !canaryMode &&
           c.provider === p.provider &&
-          c.profile === 'micro' &&
+          c.profile === p.profile &&
           c.region === p.region &&
           c.rateMicrosPerSecond === p.rateMicrosPerSecond,
         'CATALOG_PREFLIGHT',
       );
+      if (canaryMode) {
+        assert(
+          c.cpu === p.cpu && c.memoryGb === p.memoryGb && c.resources?.diskGb === p.diskGb,
+          'CANARY_EXACT_RESOURCES',
+        );
+        assert(
+          c.capabilities?.includes('interactive-terminal') && c.durationMinutes.includes(15),
+          'CANARY_CAPABILITIES',
+        );
+        const offerings = await providerOfferings(p);
+        const offering = offerings.find((o) => o.id === p.offeringId);
+        assert(
+          offering?.catalogId === p.catalogId && offering.active === false,
+          'CANARY_INACTIVE_OFFERING',
+        );
+        const quote = validateCanaryBase(
+          d.policy.basePriceCents,
+          d.policy.minimumPriceCents,
+          fixedQuote(managedPricing(c), 15).upstreamCostFloorCents ?? 0,
+          d.policy.maxPriceCents,
+        );
+        if (p.basePriceCents !== undefined)
+          assert.equal(p.basePriceCents, quote, 'CANARY_REVIEWED_BASE');
+        p.basePriceCents = quote;
+        journal.append('canary-listing-baseline', {
+          provider: p.provider,
+          providerId: d.provider.id,
+          catalogId: p.catalogId,
+          offeringId: p.offeringId,
+          catalogApproved: false,
+          offeringActive: false,
+          autoBid: false,
+          policyRevision: d.policyRevision,
+          basePriceCents: quote,
+          capacity: d.capacity,
+          catalog: c,
+          offering,
+        });
+      }
       budget = Math.max(
         budget,
         d.policy.basePriceCents,
@@ -1083,154 +1389,289 @@ async function run(h: Header) {
         fixedQuote(managedPricing(c), 15).upstreamCostFloorCents ?? 0,
       );
     }
-    assert(budget > 0 && budget <= 10, 'REVIEWED_QUOTE_CEILING');
+    assert(
+      budget > 0 && budget <= (canaryMode ? CANARY_QUOTE_CEILING_CENTS : 10),
+      'REVIEWED_QUOTE_CEILING',
+    );
     const before = await list('/api/vms');
     assert(
-      before.every(
-        (v) => ['failed', 'expired', 'terminated'].includes(v.status) && !v.cleanupPending,
-      ),
+      canaryMode ||
+        before.every(
+          (v) => ['failed', 'expired', 'terminated'].includes(v.status) && !v.cleanupPending,
+        ),
       'EXISTING_ACTIVE_BUYER_RENTAL',
     );
+    if (canaryMode)
+      journal.append('canary-buyer-baseline', {
+        activeVmIds: before
+          .filter(
+            (v) => !['failed', 'expired', 'terminated'].includes(v.status) || v.cleanupPending,
+          )
+          .map((v) => v.id),
+      });
     journal.append('preflight-passed', {
       providers: 4,
-      target: 20,
+      target: settings.target,
       maximumBuyerQuoteCents: budget,
     });
-    const canaries = await bounded(settings.providers, (p, index) => request(index + 1, p));
-    await ready(canaries, settings.providers);
-    if (collectBlaxel) {
-      assert(
-        ['e2b', 'daytona', 'modal'].every((provider) => terminalResults()[provider].proven === 1),
-        'HEALTHY_CANARY_TERMINAL_REQUIRED',
+    if (canaryMode) {
+      const outcomes: Record<string, Json> = Object.fromEntries(
+        settings.providers.map((p) => [
+          p.provider,
+          { nativeRunning: false, terminalPassed: false, invoicePassed: false },
+        ]),
       );
-      journal.append('four-native-canaries-confirmed', {
-        realVms: 4,
-        terminalProofs: healthyShells().length,
-        knownBlaxelTerminalFailures: shells.filter((s) => s.proofFailure).length,
+      await cleanupBatch(settings.providers, async (p) => {
+        try {
+          const created = await canaryRequest(settings.providers.indexOf(p) + 1, p);
+          await ready([created], [p]);
+          outcomes[p.provider].initialTerminalPassed = true;
+        } catch (error) {
+          outcomes[p.provider].failure =
+            error instanceof Error && /^[A-Z0-9_]+$/.test(error.message)
+              ? error.message
+              : 'CANARY_INITIAL_FAILED';
+          for (const s of shells.filter(
+            (s) => providerFor(observations.get(s.vmId)!).provider === p.provider,
+          ))
+            s.canaryFailure ||= outcomes[p.provider].failure;
+        }
       });
-    } else journal.append('four-canaries-confirmed', { realVms: 4, terminalProofs: 4 });
-    let next = 5;
-    while (next <= 20) {
-      check();
-      await refreshDue();
-      const state = await bounded(settings.providers, (p) =>
-        api(p.cookie, '/api/provider/dashboard'),
+      const holdStart = Date.now();
+      while (
+        healthyShells().some((s) => s.initialProofPassed) &&
+        Date.now() - holdStart < CANARY_HOLD_MS
+      ) {
+        check();
+        await refreshDue();
+        for (const s of healthyShells().filter((s) => s.initialProofPassed))
+          s.ws.send(JSON.stringify({ type: 'ping' }));
+        await sample();
+        await delay(1000);
+      }
+      terminalHoldMs = Date.now() - holdStart;
+      // Final proofs own every shell; do not schedule overlapping maintenance proofs.
+      refreshing = true;
+      try {
+        await cleanupBatch(settings.providers, async (p) => {
+          const own = [...observations.values()].find(
+            (d) => providerFor(d).provider === p.provider,
+          );
+          if (!own) return;
+          try {
+            const observed = await native.get(own.vm.environmentId);
+            assert(
+              ownership(observed, own.vm, p, h) &&
+                observed.status === 'running' &&
+                observed.billingMode === 'wick_managed' &&
+                !observed.providerKeyId,
+              'CANARY_FINAL_NATIVE',
+            );
+            outcomes[p.provider].timing = canaryNativeTiming(observed, own.vm, p);
+            outcomes[p.provider].nativeRunning = true;
+            journal.append('canary-native-final', {
+              provider: p.provider,
+              vmId: own.vm.id,
+              environmentId: own.vm.environmentId,
+              ...outcomes[p.provider].timing,
+            });
+            const s = shells.find((s) => s.vmId === own.vm.id);
+            assert(
+              s && !s.canaryFailure && s.initialProofPassed && terminalHoldMs >= CANARY_HOLD_MS,
+              'CANARY_TERMINAL_HOLD',
+            );
+            await fullProof([s], 'final');
+            assert(s.resize.matched, 'CANARY_RESIZE');
+            outcomes[p.provider].terminalPassed = true;
+          } catch (error) {
+            outcomes[p.provider].failure ||=
+              error instanceof Error && /^[A-Z0-9_]+$/.test(error.message)
+                ? error.message
+                : 'CANARY_FINAL_FAILED';
+          }
+        });
+      } finally {
+        refreshing = false;
+      }
+      const invoices = (await list('/api/invoices')).filter((i) => observations.has(i.vmId));
+      for (const p of settings.providers) {
+        const own = [...observations.values()].find((d) => providerFor(d).provider === p.provider);
+        if (!own) continue;
+        try {
+          const matched = invoices.filter((i) => i.vmId === own.vm.id);
+          assert.equal(matched.length, 1, 'CANARY_INVOICE_COUNT');
+          assert.equal(matched[0].totalCents, p.basePriceCents, 'CANARY_INVOICE_PRICE');
+          assert.equal(matched[0].feeCents, 0, 'CANARY_BUYER_FEE');
+          assert.deepEqual(
+            matched[0].revenueShare,
+            revenueShare(p.basePriceCents!),
+            'CANARY_COMMISSION',
+          );
+          outcomes[p.provider].invoicePassed = true;
+        } catch {
+          outcomes[p.provider].failure ||= 'CANARY_INVOICE_FAILED';
+        }
+      }
+      const valid = Object.values(outcomes).every(
+        (o) => o.nativeRunning && o.terminalPassed && o.invoicePassed,
       );
-      const free = state.map((d) => d.capacity.available).filter((n) => n > 0);
-      assert(free.length > 0, 'NO_CAPACITY_BEFORE_TARGET');
-      const count = Math.min(4, 21 - next, ...free);
-      const start = next;
-      next += count;
-      const wave = await bounded(
-        Array.from({ length: count }, (_, i) => start + i),
-        (item) => request(item),
-      );
-      await ready(wave);
-      await refreshDue();
-      journal.append('wave-confirmed', { requests: count, cumulativeRequests: intents().length });
-    }
-    const vms = await sample();
-    assert.equal(vms.length, 20);
-    assert(vms.every((v) => v.status === 'running'));
-    assert.equal(observations.size, 20);
-    assert.equal(new Set(vms.map((v) => v.environmentId)).size, 20);
-    const requiredHealthy = diagnosticBlaxel
-      ? shells.filter((s) => providerFor(observations.get(s.vmId)!).provider !== 'provider-blaxel')
-      : undefined;
-    if (requiredHealthy)
-      assert(
-        requiredHealthy.length === 15 &&
-          ['e2b', 'daytona', 'modal'].every((provider) => terminalResults()[provider].proven === 5),
-        'REQUIRED_HEALTHY_TERMINALS',
-      );
-    const holdStart = Date.now();
-    while (Date.now() - holdStart < 30_000) {
-      check();
-      await refreshDue();
-      const healthy = requiredHealthy ?? healthyShells();
-      assert(
-        shells.length === 20 &&
-          healthy.length >= (collectBlaxel ? 15 : 20) &&
-          healthy.every((s) => s.ws.readyState === WebSocket.OPEN && s.t0.matched && s.t1.matched),
-        'SIMULTANEOUS_TERMINAL_COUNT',
-      );
+      result = {
+        computeValidationPassed: Object.values(outcomes).every((o) => o.nativeRunning),
+        validationPassed: valid,
+        providerResults: outcomes,
+        peakRunning,
+        terminalHoldMs,
+        simultaneousTerminals: healthyShells().filter((s) => s.initialProofPassed).length,
+        invoiceCount: invoices.length,
+        invoiceQuoteAndCommissionMatches: Object.values(outcomes).every((o) => o.invoicePassed),
+        renewalEvidence:
+          'Broker sockets maintained for at least 130 seconds when terminalPassed; no explicit SDK renewal acknowledgment captured by this runner.',
+      };
+    } else {
+      const canaries = await bounded(settings.providers, (p, index) => request(index + 1, p));
+      await ready(canaries, settings.providers);
+      if (collectBlaxel) {
+        assert(
+          ['e2b', 'daytona', 'modal'].every((provider) => terminalResults()[provider].proven === 1),
+          'HEALTHY_CANARY_TERMINAL_REQUIRED',
+        );
+        journal.append('four-native-canaries-confirmed', {
+          realVms: 4,
+          terminalProofs: healthyShells().length,
+          knownBlaxelTerminalFailures: shells.filter((s) => s.proofFailure).length,
+        });
+      } else journal.append('four-canaries-confirmed', { realVms: 4, terminalProofs: 4 });
+      let next = 5;
+      while (next <= 20) {
+        check();
+        await refreshDue();
+        const state = await bounded(settings.providers, (p) =>
+          api(p.cookie, '/api/provider/dashboard'),
+        );
+        const free = state.map((d) => d.capacity.available).filter((n) => n > 0);
+        assert(free.length > 0, 'NO_CAPACITY_BEFORE_TARGET');
+        const count = Math.min(4, 21 - next, ...free);
+        const start = next;
+        next += count;
+        const wave = await bounded(
+          Array.from({ length: count }, (_, i) => start + i),
+          (item) => request(item),
+        );
+        await ready(wave);
+        await refreshDue();
+        journal.append('wave-confirmed', { requests: count, cumulativeRequests: intents().length });
+      }
+      const vms = await sample();
+      assert.equal(vms.length, 20);
+      assert(vms.every((v) => v.status === 'running'));
+      assert.equal(observations.size, 20);
+      assert.equal(new Set(vms.map((v) => v.environmentId)).size, 20);
+      const requiredHealthy = diagnosticBlaxel
+        ? shells.filter(
+            (s) => providerFor(observations.get(s.vmId)!).provider !== 'provider-blaxel',
+          )
+        : undefined;
       if (requiredHealthy)
         assert(
-          ['e2b', 'daytona', 'modal'].every((provider) => terminalResults()[provider].proven === 5),
+          requiredHealthy.length === 15 &&
+            ['e2b', 'daytona', 'modal'].every(
+              (provider) => terminalResults()[provider].proven === 5,
+            ),
           'REQUIRED_HEALTHY_TERMINALS',
         );
-      for (const s of healthy) s.ws.send(JSON.stringify({ type: 'ping' }));
-      await sample();
-      await delay(1000);
-    }
-    if (collectBlaxel) await collectionProof(requiredHealthy ?? healthyShells(), 'final');
-    else await fullProof(shells, 'final');
-    terminalHoldMs = Date.now() - holdStart;
-    await bounded([...observations.values()], async (d) => {
-      const p = providerFor(d),
-        observed = await native.get(d.vm.environmentId);
-      assert(
-        ownership(observed, d.vm, p, h) &&
-          observed.status === 'running' &&
-          observed.billingMode === 'wick_managed' &&
-          !observed.providerKeyId,
-        'FINAL_NATIVE_CHECKPOINT',
+      const holdStart = Date.now();
+      while (Date.now() - holdStart < 30_000) {
+        check();
+        await refreshDue();
+        const healthy = requiredHealthy ?? healthyShells();
+        assert(
+          shells.length === 20 &&
+            healthy.length >= (collectBlaxel ? 15 : 20) &&
+            healthy.every(
+              (s) => s.ws.readyState === WebSocket.OPEN && s.t0.matched && s.t1.matched,
+            ),
+          'SIMULTANEOUS_TERMINAL_COUNT',
+        );
+        if (requiredHealthy)
+          assert(
+            ['e2b', 'daytona', 'modal'].every(
+              (provider) => terminalResults()[provider].proven === 5,
+            ),
+            'REQUIRED_HEALTHY_TERMINALS',
+          );
+        for (const s of healthy) s.ws.send(JSON.stringify({ type: 'ping' }));
+        await sample();
+        await delay(1000);
+      }
+      if (collectBlaxel) await collectionProof(requiredHealthy ?? healthyShells(), 'final');
+      else await fullProof(shells, 'final');
+      terminalHoldMs = Date.now() - holdStart;
+      await bounded([...observations.values()], async (d) => {
+        const p = providerFor(d),
+          observed = await native.get(d.vm.environmentId);
+        assert(
+          ownership(observed, d.vm, p, h) &&
+            observed.status === 'running' &&
+            observed.billingMode === 'wick_managed' &&
+            !observed.providerKeyId,
+          'FINAL_NATIVE_CHECKPOINT',
+        );
+      });
+      const invoices = (await list('/api/invoices')).filter((i) => observations.has(i.vmId));
+      assert.equal(invoices.length, 20);
+      assert.equal(new Set(invoices.map((i) => i.vmId)).size, 20);
+      for (const invoice of invoices) {
+        const d = observations.get(invoice.vmId)!;
+        const bid = d.bids.find((b: Json) => b.id === d.request.winningBidId);
+        assert.equal(invoice.totalCents, bid.totalPriceCents);
+        assert.equal(invoice.feeCents, 0);
+        assert.deepEqual(invoice.revenueShare, revenueShare(bid.totalPriceCents));
+      }
+      const distribution = Object.fromEntries(
+        settings.providers.map((p) => [
+          p.provider,
+          [...observations.values()].filter((d) => providerFor(d).provider === p.provider).length,
+        ]),
       );
-    });
-    const invoices = (await list('/api/invoices')).filter((i) => observations.has(i.vmId));
-    assert.equal(invoices.length, 20);
-    assert.equal(new Set(invoices.map((i) => i.vmId)).size, 20);
-    for (const invoice of invoices) {
-      const d = observations.get(invoice.vmId)!;
-      const bid = d.bids.find((b: Json) => b.id === d.request.winningBidId);
-      assert.equal(invoice.totalCents, bid.totalPriceCents);
-      assert.equal(invoice.feeCents, 0);
-      assert.deepEqual(invoice.revenueShare, revenueShare(bid.totalPriceCents));
-    }
-    const distribution = Object.fromEntries(
-      settings.providers.map((p) => [
-        p.provider,
-        [...observations.values()].filter((d) => providerFor(d).provider === p.provider).length,
-      ]),
-    );
-    assert(
-      Object.values(distribution).every((n) => n === 5),
-      'PER_PROVIDER_SIMULTANEOUS_COUNT',
-    );
-    const proven = healthyShells();
-    const terminalValidationPassed = !diagnosticBlaxel && proven.length === 20;
-    if (diagnosticBlaxel) check();
-    assert(
-      ['e2b', 'daytona', 'modal'].every((provider) => terminalResults()[provider].proven === 5),
-      'HEALTHY_PROVIDER_TERMINAL_COUNT',
-    );
-    result = {
-      computeValidationPassed: true,
-      validationPassed: terminalValidationPassed,
-      ...(!terminalValidationPassed
-        ? {
-            validationFailure: diagnosticBlaxel
-              ? 'ALL_PROVIDER_TERMINAL_OVERLAP_NOT_VALIDATED'
-              : 'TERMINAL_PROOFS_INCOMPLETE',
-          }
-        : {}),
-      peakRunning,
-      simultaneousTerminals: proven.length,
-      terminalHoldMs,
-      shellStateAndCwdProofs: proven.length,
-      resizeProofs: proven.filter((s) => s.resize.matched).length,
-      resizeUnavailable: proven.filter((s) => s.noStty.matched).length,
-      distribution,
-      invoiceCount: 20,
-      invoiceQuoteAndCommissionMatches: true,
-      timings: {
-        requestToReadyMs: percentiles(
-          [...observations.values()].map(
-            (d) => Date.parse(d.vm.readyAt) - Date.parse(d.request.createdAt),
+      assert(
+        Object.values(distribution).every((n) => n === 5),
+        'PER_PROVIDER_SIMULTANEOUS_COUNT',
+      );
+      const proven = healthyShells();
+      const terminalValidationPassed = !diagnosticBlaxel && proven.length === 20;
+      if (diagnosticBlaxel) check();
+      assert(
+        ['e2b', 'daytona', 'modal'].every((provider) => terminalResults()[provider].proven === 5),
+        'HEALTHY_PROVIDER_TERMINAL_COUNT',
+      );
+      result = {
+        computeValidationPassed: true,
+        validationPassed: terminalValidationPassed,
+        ...(!terminalValidationPassed
+          ? {
+              validationFailure: diagnosticBlaxel
+                ? 'ALL_PROVIDER_TERMINAL_OVERLAP_NOT_VALIDATED'
+                : 'TERMINAL_PROOFS_INCOMPLETE',
+            }
+          : {}),
+        peakRunning,
+        simultaneousTerminals: proven.length,
+        terminalHoldMs,
+        shellStateAndCwdProofs: proven.length,
+        resizeProofs: proven.filter((s) => s.resize.matched).length,
+        resizeUnavailable: proven.filter((s) => s.noStty.matched).length,
+        distribution,
+        invoiceCount: 20,
+        invoiceQuoteAndCommissionMatches: true,
+        timings: {
+          requestToReadyMs: percentiles(
+            [...observations.values()].map(
+              (d) => Date.parse(d.vm.readyAt) - Date.parse(d.request.createdAt),
+            ),
           ),
-        ),
-      },
-    };
+        },
+      };
+    }
   } catch (error) {
     stop(
       error instanceof Error && /^[A-Z0-9_]+$/.test(error.message)
@@ -1266,7 +1707,8 @@ async function run(h: Header) {
       knownBlaxelTerminalFailures: shells.filter((s) => s.proofFailure).length,
       successfulBlaxelDiagnostics: shells.filter((s) => s.diagnosticClosed).length,
       runId: h.runId,
-      modes: { wick: 'real', muse: 'fixture' },
+      modes: observedModes,
+      ...(canaryMode ? { mode: settings.mode } : {}),
       attemptedRequests: intents().length,
       cleanup: cleanupResult,
       finishedAt: new Date().toISOString(),
@@ -1320,7 +1762,8 @@ async function main() {
     exclusive(journalPath + '.prepare-owner');
     journal.append('prepared', {
       runId: randomUUID(),
-      target: 20,
+      target: settings.target,
+      ...(canaryMode ? { mode: settings.mode } : {}),
       maximumRunMs: 12 * 60_000,
       baseUrl: origin.origin,
       fingerprint,
@@ -1329,7 +1772,8 @@ async function main() {
     console.log(
       JSON.stringify({
         prepared: true,
-        target: 20,
+        target: settings.target,
+        ...(canaryMode ? { mode: settings.mode } : {}),
         allocated: 0,
         controlDirectory: CONTROL_DIRECTORY,
         terminalPolicy: requestedPolicy ?? 'strict',
