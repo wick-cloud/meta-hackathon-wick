@@ -546,8 +546,9 @@ describe('bounded deterministic offering and bid contracts', () => {
     const result = await adapter.proposeBid({
       policy,
       catalog: [item],
-      availableCapacity: 1,
-      suggestedTotalPriceCents: 7,
+      availableCapacity: 3,
+      suggestedTotalPriceCents: 8,
+      discountTotalPriceCents: 7.2,
       request: {
         description: 'Linux',
         catalogId: 'small',
@@ -557,7 +558,7 @@ describe('bounded deterministic offering and bid contracts', () => {
         requirements: { cpu: 1, memoryGb: 1 },
       },
     });
-    expect(result.totalPriceCents).toBe(7);
+    expect(result.totalPriceCents).toBe(7.2);
     const request = JSON.parse(fetcher.mock.calls[0]![1]!.body as string);
     assertStrict(request.response_format.json_schema.schema);
     expect(request.response_format.json_schema.schema.properties).not.toHaveProperty(

@@ -1,3 +1,4 @@
+import { CLOUD_PROVIDERS } from '../src/shared/providers.js';
 import 'dotenv/config';
 import { randomUUID } from 'node:crypto';
 import Fastify, { type FastifyInstance } from 'fastify';
@@ -21,7 +22,7 @@ const actor: Actor = {
   name: 'E2B account',
   role: 'provider',
 };
-const items: CatalogItem[] = ['e2b', 'daytona'].map((provider) => ({
+const items: CatalogItem[] = CLOUD_PROVIDERS.map((provider) => ({
   id: `${provider}:small:us`,
   name: `Small ${provider}`,
   description: 'Synthetic approved route for offline boundary tests',
@@ -201,6 +202,49 @@ describe.skipIf(!databaseUrl)('provider identity HTTP boundaries (isolated Postg
         })
       ).statusCode,
     ).toBe(200);
+    expect((await providerRow()).cloud_provider).toBe('e2b');
+  });
+
+  it.each(['sail', 'provider-tenki', 'provider-freestyle', 'boat'])(
+    'publishes only the bound %s route and preserves that identity',
+    async (cloudProvider) => {
+      const own = items.find((item) => item.provider === cloudProvider)!;
+      await pool.query('UPDATE broker_providers SET cloud_provider=$2 WHERE id=$1', [
+        providerId,
+        cloudProvider,
+      ]);
+      const published = await app.inject({
+        method: 'POST',
+        url: '/api/provider/offerings',
+        payload: {
+          name: 'New provider route',
+          description: 'Offline qualified configuration',
+          catalogId: own.id,
+        },
+      });
+      expect(published.statusCode, published.body).toBe(200);
+      expect(published.json()).toMatchObject({ cloudProvider, catalogId: own.id, active: true });
+      const rejected = await app.inject({
+        method: 'POST',
+        url: '/api/provider/offerings',
+        payload: {
+          name: 'Foreign provider route',
+          description: 'Must remain forbidden',
+          catalogId: items[0]!.id,
+        },
+      });
+      expect(rejected.statusCode, rejected.body).toBe(403);
+      expect((await providerRow()).cloud_provider).toBe(cloudProvider);
+    },
+  );
+
+  it('rejects unknown native identities in the expanded database constraint', async () => {
+    await expect(
+      pool.query('UPDATE broker_providers SET cloud_provider=$2 WHERE id=$1', [
+        providerId,
+        'provider-unknown',
+      ]),
+    ).rejects.toMatchObject({ code: '23514' });
     expect((await providerRow()).cloud_provider).toBe('e2b');
   });
 

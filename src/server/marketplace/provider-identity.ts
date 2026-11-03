@@ -1,8 +1,7 @@
 import type { Pool, PoolClient } from 'pg';
 import { HttpError } from '../context.js';
 
-export const CLOUD_PROVIDERS = ['e2b', 'daytona', 'provider-blaxel', 'modal'] as const;
-export type CloudProvider = (typeof CLOUD_PROVIDERS)[number];
+export { CLOUD_PROVIDERS, type CloudProvider } from '../../shared/providers.js';
 export interface ProviderIdentity {
   cloud_provider?: string | null;
 }

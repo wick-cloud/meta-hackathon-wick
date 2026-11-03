@@ -58,7 +58,9 @@ export function parseExplicitBuyerDescription(description: string): {
   const hours = description.match(/\b(\d+)\s*(?:hours?|hrs?)\b/i);
   // Multiple stated limits never silently broaden a smaller explicit budget.
   const money = [
-    ...description.matchAll(/\$\s*(\d{1,6})(?:\.(\d{1,4})(?!\d))?(?![\d.])\b/g),
+    // A sentence-ending period is punctuation, but a dot followed by digits
+    // continues the amount. Never fall back to a shorter numeric prefix.
+    ...description.matchAll(/\$\s*(\d{1,6})(?:\.(\d{1,4})(?!\d))?(?!\d|\.\d)\b/g),
     ...description.matchAll(
       /\b(?:budget|max(?:imum)?(?:\s+total)?|under|up to)\s*(?:of|is|:|=)?\s*(\d{1,6})(?:\.(\d{1,4})(?!\d))?\s*(?:usd|dollars?)\b/gi,
     ),

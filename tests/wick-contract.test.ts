@@ -1,3 +1,4 @@
+import { CLOUD_PROVIDERS, PROVIDER_REGISTRY } from '../src/shared/providers.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   createWickAdapter,
@@ -43,7 +44,7 @@ const mutation = {
   operation: { id: 'op_test', status: 'running', type: 'create' },
   replayed: false,
 };
-const managedProviders = ['e2b', 'daytona', 'modal', 'provider-blaxel'] as const;
+const managedProviders = CLOUD_PROVIDERS;
 const catalogOffer = (provider: string, region = 'auto') => ({
   provider,
   byok: { enabled: true },
@@ -170,7 +171,7 @@ describe('public Wick REST contract', () => {
     ]);
     expect(() => parseCatalog({ items: [] }, config)).toThrow('profiles and offers');
   });
-  it('excludes an available route with explicit terminal omission while retaining the other three providers', async () => {
+  it('excludes an available route with explicit terminal omission while retaining the other registered providers', async () => {
     const offers = managedProviders.map((provider) => ({
       ...catalogOffer(provider),
       capabilities:
@@ -190,8 +191,10 @@ describe('public Wick REST contract', () => {
     });
     vi.stubGlobal('fetch', fetcher);
     const items = await createWickAdapter(config).catalog();
-    expect(items.map((item) => item.provider)).toEqual(['e2b', 'daytona', 'modal']);
-    expect(previewed).toEqual(['e2b', 'daytona', 'modal']);
+    expect(items.map((item) => item.provider)).toEqual(
+      managedProviders.filter((id) => id !== 'provider-blaxel'),
+    );
+    expect(previewed).toEqual(managedProviders.filter((id) => id !== 'provider-blaxel'));
     expect(fetcher.mock.calls.every(([url]) => !String(url).endsWith('/environments'))).toBe(true);
   });
   it.each([
@@ -311,13 +314,62 @@ describe('public Wick REST contract', () => {
       expect(items[0]).not.toHaveProperty('gpu');
       expect(items[0]).not.toHaveProperty('providerKeyId');
       expect(items[0]!.name).toBe(
-        `Small · ${{ e2b: 'E2B', daytona: 'Daytona', modal: 'Modal', 'provider-blaxel': 'Baseten (Blaxel)' }[provider]}`,
+        `Small · ${provider === 'provider-blaxel' ? 'Baseten (Blaxel)' : PROVIDER_REGISTRY.find(({ id }) => id === provider)!.name}`,
       );
       if (provider === 'provider-blaxel')
         expect(items[0]!.description).toContain('CPU and disk figures are estimates');
       expect(Number.isFinite(Date.parse(items[0]!.rateRetrievedAt!))).toBe(true);
     },
   );
+  it('retains the new providers’ exact resources and offered durations without synthesizing sizes', () => {
+    const raw = {
+      profiles: [
+        { id: 'micro', name: 'Micro', cpu: 1, memoryMiB: 2048 },
+        { id: 'small', name: 'Small', cpu: 2, memoryMiB: 4096 },
+      ],
+      offers: [
+        {
+          ...catalogOffer('sail'),
+          profile: 'micro',
+          resources: { cpu: 1, memoryMiB: 2048, diskMiB: 8192 },
+        },
+        {
+          ...catalogOffer('provider-tenki'),
+          profile: 'micro',
+          maxTtlSeconds: 1800,
+          resources: { cpu: 1, memoryMiB: 1024, diskMiB: 5120 },
+        },
+        {
+          ...catalogOffer('provider-freestyle'),
+          resources: { cpu: 2, memoryMiB: 4096, diskMiB: 16384 },
+        },
+        { ...catalogOffer('boat'), resources: { cpu: 2, memoryMiB: 3814, diskMiB: 8192 } },
+        { ...catalogOffer('boat', 'too-short'), maxTtlSeconds: 120 },
+      ].map((offer) => ({
+        ...offer,
+        byok: { enabled: false },
+        capabilities: ['interactive-terminal'],
+      })),
+    };
+    const items = parseCatalog(raw, config);
+    expect(
+      items.map(({ id, cpu, memoryGb, durationMinutes }) => ({
+        id,
+        cpu,
+        memoryGb,
+        durationMinutes,
+      })),
+    ).toEqual([
+      { id: 'sail:micro:auto', cpu: 1, memoryGb: 2, durationMinutes: [15, 30, 60] },
+      { id: 'provider-tenki:micro:auto', cpu: 1, memoryGb: 1, durationMinutes: [15, 30] },
+      { id: 'provider-freestyle:small:auto', cpu: 2, memoryGb: 4, durationMinutes: [15, 30, 60] },
+      { id: 'boat:small:auto', cpu: 2, memoryGb: 3814 / 1024, durationMinutes: [15, 30, 60] },
+    ]);
+    expect(items.some(({ id }) => id === 'sail:small:auto' || id === 'boat:micro:auto')).toBe(
+      false,
+    );
+  });
+
   it('deduplicates identical routes and rejects conflicting published rate or resource offers', () => {
     const offer = { ...catalogOffer('e2b'), byok: { enabled: false } };
     expect(parseCatalog(catalogResponse([offer, offer]), config)).toHaveLength(1);
@@ -381,15 +433,15 @@ describe('public Wick REST contract', () => {
     expect(fetcher).toHaveBeenCalledTimes(5);
     expect(fetcher.mock.calls.some(([url]) => url.pathname.endsWith('/environments'))).toBe(false);
   });
-  it('rejects more than sixteen distinct routes before issuing preview requests', async () => {
-    const offers = Array.from({ length: 17 }, (_, i) => catalogOffer('e2b', `region-${i}`));
+  it('rejects more than thirty-two distinct routes before issuing preview requests', async () => {
+    const offers = Array.from({ length: 33 }, (_, i) => catalogOffer('e2b', `region-${i}`));
     const fetcher = vi.fn(async () => new Response(JSON.stringify(catalogResponse(offers))));
     vi.stubGlobal('fetch', fetcher);
     await expect(createWickAdapter(config).catalog()).rejects.toThrow('Too many managed routes');
     expect(fetcher).toHaveBeenCalledOnce();
   });
-  it('verifies sixteen distinct routes in bounded batches of four and preserves catalog order', async () => {
-    const offers = Array.from({ length: 16 }, (_, i) => catalogOffer('e2b', `region-${i}`));
+  it('verifies thirty-two distinct routes in bounded batches of four and preserves catalog order', async () => {
+    const offers = Array.from({ length: 32 }, (_, i) => catalogOffer('e2b', `region-${i}`));
     const releases: (() => void)[] = [];
     let inFlight = 0,
       maximumInFlight = 0,
@@ -407,7 +459,7 @@ describe('public Wick REST contract', () => {
     vi.stubGlobal('fetch', fetcher);
     const pending = createWickAdapter(config).catalog();
     try {
-      for (let batch = 0; batch < 4; batch++) {
+      for (let batch = 0; batch < 8; batch++) {
         await vi.waitFor(() => expect(releases).toHaveLength(4));
         expect(inFlight).toBe(4);
         expect(fetcher).toHaveBeenCalledTimes(1 + (batch + 1) * 4);
@@ -418,14 +470,14 @@ describe('public Wick REST contract', () => {
         offers.map((offer) => `e2b:small:${offer.region}`),
       );
       expect(maximumInFlight).toBe(4);
-      expect(fetcher).toHaveBeenCalledTimes(17);
+      expect(fetcher).toHaveBeenCalledTimes(33);
     } finally {
       drain = true;
       for (const release of releases.splice(0)) release();
       await pending.catch(() => undefined);
     }
   });
-  it.each(['boat', 'baseten', 'unknown'])(
+  it.each(['provider-unknown', 'baseten', 'unknown'])(
     'rejects the unconfigured native provider %s before any call',
     async (provider) => {
       const fetcher = vi.fn();
@@ -438,17 +490,20 @@ describe('public Wick REST contract', () => {
       expect(fetcher).not.toHaveBeenCalled();
     },
   );
-  it('rejects unsupported BYOK before making a request', async () => {
-    const fetcher = vi.fn();
-    vi.stubGlobal('fetch', fetcher);
-    await expect(
-      createWickAdapter(config).create(
-        { ...create, providerKeyId: 'unapproved-target' },
-        'stable-key-123',
-      ),
-    ).rejects.toThrow('BYOK');
-    expect(fetcher).not.toHaveBeenCalled();
-  });
+  it.each(managedProviders)(
+    'rejects unsupported %s BYOK before making a request',
+    async (provider) => {
+      const fetcher = vi.fn();
+      vi.stubGlobal('fetch', fetcher);
+      await expect(
+        createWickAdapter(config).create(
+          { ...create, provider, providerKeyId: 'unapproved-target' },
+          'stable-key-123',
+        ),
+      ).rejects.toThrow('BYOK');
+      expect(fetcher).not.toHaveBeenCalled();
+    },
+  );
   it.each(managedProviders)(
     'sends the exact %s route and frozen price through SDK preview and create',
     async (provider) => {

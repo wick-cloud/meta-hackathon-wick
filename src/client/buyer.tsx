@@ -564,9 +564,9 @@ export function RequestReview() {
                   <div>
                     <strong>Let compatible providers compete</strong>
                     <span>
-                      Match your minimum resources and exact rental length across E2B, Daytona,
-                      Baseten (Blaxel) and Modal. Region limits below remain binding. Blaxel CPU and
-                      disk figures are provider-managed estimates.
+                      Match your minimum resources and exact rental length across available
+                      providers. Region limits below remain binding. Blaxel CPU and disk figures are
+                      provider-managed estimates.
                     </span>
                   </div>
                 </label>

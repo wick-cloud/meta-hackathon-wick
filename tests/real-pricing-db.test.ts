@@ -236,7 +236,7 @@ describe.skipIf(!databaseUrl)('real pricing database contracts with zero network
     const request = await makeRequest();
     expect(await proposeBid(ctx, supplier, request.id)).toMatchObject({
       decision: 'bid',
-      totalPriceCents: 7,
+      totalPriceCents: 6.3,
       mode: 'fixture',
       modelCalled: false,
     });
@@ -275,6 +275,118 @@ describe.skipIf(!databaseUrl)('real pricing database contracts with zero network
     expect(
       (await submitBid(ctx, supplier, request.id, { totalPriceCents: 5 })).totalPriceCents,
     ).toBe(5);
+  });
+
+  it('submits base after a declined discount and rechecks automatic-bidding permission atomically', async () => {
+    await configureRealMarketplace(pool, [item], { ...options, autoBid: true });
+    await pool.query(
+      `UPDATE broker_providers SET policy=policy || '{"minimumPriceCents":3,"basePriceCents":7,"maxPriceCents":9}'::jsonb`,
+    );
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(
+      async () =>
+        new Response(
+          JSON.stringify({
+            choices: [
+              {
+                finish_reason: 'stop',
+                message: { content: JSON.stringify({ decision: 'decline', catalogId: null }) },
+              },
+            ],
+          }),
+          { status: 200 },
+        ),
+    );
+    const withModel = {
+      ...ctx,
+      muse: createMuseAdapter(
+        { museMode: 'real', metaApiKey: 'offline-discount-decision-test' },
+        { fetch: fetcher },
+      ),
+    };
+    const request = await makeRequest();
+    const proposal = await proposeBid(withModel, supplier, request.id);
+    expect(proposal).toMatchObject({ decision: 'bid', totalPriceCents: 7, modelCalled: true });
+    if (proposal.decision !== 'bid') throw new Error('Expected the eligible base-price bid');
+    expect(proposal.receipt.decision).toContain('Muse declined the optional discount');
+    expect(fetcher).toHaveBeenCalledOnce();
+    await pool.query(`UPDATE broker_providers SET policy=jsonb_set(policy,'{autoBid}','false')`);
+    await expect(
+      submitBid(ctx, supplier, request.id, { totalPriceCents: proposal.totalPriceCents! }, 'auto'),
+    ).rejects.toThrow(/automatic bidding/i);
+    expect((await pool.query('SELECT count(*)::int AS n FROM broker_holds')).rows[0].n).toBe(0);
+    await pool.query(`UPDATE broker_providers SET policy=jsonb_set(policy,'{autoBid}','true')`);
+    const bid = await submitBid(
+      ctx,
+      supplier,
+      request.id,
+      { totalPriceCents: proposal.totalPriceCents!, offeringId: proposal.offeringId },
+      'auto',
+    );
+    expect(bid.totalPriceCents).toBe(7);
+    expect(bid.revenueShare).toEqual(revenueShare(7));
+    expect((await pool.query('SELECT count(*)::int AS n FROM broker_holds')).rows[0].n).toBe(1);
+    expect(ctx.wick.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects a stale automatic discount after the provider raises its base while preserving manual pricing', async () => {
+    await configureRealMarketplace(pool, [item], { ...options, autoBid: true });
+    await pool.query(
+      `UPDATE broker_providers SET policy=policy || '{"minimumPriceCents":3,"basePriceCents":7,"maxPriceCents":9}'::jsonb`,
+    );
+    const request = await makeRequest();
+    const proposal = await proposeBid(ctx, supplier, request.id);
+    expect(proposal).toMatchObject({ decision: 'bid', totalPriceCents: 6.3 });
+    if (proposal.decision !== 'bid') throw new Error('Expected an initial discounted proposal');
+    await pool.query(`UPDATE broker_providers SET policy=jsonb_set(policy,'{basePriceCents}','8')`);
+    await expect(
+      submitBid(ctx, supplier, request.id, { totalPriceCents: proposal.totalPriceCents! }, 'auto'),
+    ).rejects.toThrow('automatic bid strategy changed');
+    expect((await pool.query('SELECT count(*)::int AS n FROM broker_holds')).rows[0].n).toBe(0);
+    expect(
+      await submitBid(ctx, supplier, request.id, { totalPriceCents: proposal.totalPriceCents! }),
+    ).toMatchObject({ totalPriceCents: 6.3 });
+  });
+
+  it('rechecks discount capacity under the provider lock and bids base for the last slot', async () => {
+    await configureRealMarketplace(pool, [item], { ...options, autoBid: true, capacity: 2 });
+    await pool.query(
+      `UPDATE broker_providers SET policy=policy || '{"minimumPriceCents":3,"basePriceCents":7,"maxPriceCents":9}'::jsonb`,
+    );
+    const first = await makeRequest();
+    const second = await makeRequest();
+    const proposals = await Promise.all([
+      proposeBid(ctx, supplier, first.id),
+      proposeBid(ctx, supplier, second.id),
+    ]);
+    for (const proposal of proposals)
+      expect(proposal).toMatchObject({ decision: 'bid', totalPriceCents: 6.3 });
+    const results = await Promise.allSettled(
+      [first, second].map((request) =>
+        submitBid(ctx, supplier, request.id, { totalPriceCents: 6.3 }, 'auto'),
+      ),
+    );
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    const rejectedIndex = results.findIndex((result) => result.status === 'rejected');
+    expect(results[rejectedIndex]).toMatchObject({
+      status: 'rejected',
+      reason: { message: expect.stringContaining('automatic bid strategy changed') },
+    });
+    expect((await pool.query('SELECT count(*)::int AS n FROM broker_holds')).rows[0].n).toBe(1);
+    const request = [first, second][rejectedIndex]!;
+    const fresh = await proposeBid(ctx, supplier, request.id);
+    expect(fresh).toMatchObject({ decision: 'bid', totalPriceCents: 7, modelCalled: false });
+    if (fresh.decision !== 'bid') throw new Error('Expected a fresh last-slot base quote');
+    expect(
+      await submitBid(
+        ctx,
+        supplier,
+        request.id,
+        { totalPriceCents: fresh.totalPriceCents! },
+        'auto',
+      ),
+    ).toMatchObject({ totalPriceCents: 7 });
+    expect((await pool.query('SELECT count(*)::int AS n FROM broker_holds')).rows[0].n).toBe(2);
+    expect(ctx.wick.create).not.toHaveBeenCalled();
   });
 
   it('rejects unsafe model prices independently of the model adapter', async () => {

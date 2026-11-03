@@ -4,10 +4,11 @@ import { verifyPassword } from 'better-auth/crypto';
 import { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { migrate } from '../src/server/db.js';
-import { managedPricing } from '../src/shared/pricing.js';
+import { fixedQuote, managedPricing } from '../src/shared/pricing.js';
 import type { CatalogItem } from '../src/shared/types.js';
 import {
   configureProviderMarketplace,
+  providerSetupBasePrice,
   configureRealMarketplace,
   type ProviderMarketplaceSetup,
 } from '../src/server/marketplace/configure-real.js';
@@ -20,7 +21,7 @@ import {
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const schema = `broker_provider_setup_${randomUUID().replaceAll('-', '')}`;
 const password = 'provider-test-only-password';
-const names = ['E2B', 'Daytona', 'Baseten', 'Modal'];
+const names = ['E2B', 'Daytona', 'Baseten', 'Modal', 'Sail', 'Tenki', 'Freestyle', 'Boat.dev'];
 const catalog: CatalogItem[] = CLOUD_PROVIDERS.map((provider, index) => ({
   id: `${provider}:small:us`,
   name: `${names[index]} small`,
@@ -39,6 +40,7 @@ const catalog: CatalogItem[] = CLOUD_PROVIDERS.map((provider, index) => ({
   rateRetrievedAt: new Date().toISOString(),
 }));
 const setup = (): ProviderMarketplaceSetup => ({
+  mode: 'activate',
   providers: CLOUD_PROVIDERS.map((cloudProvider, index) => ({
     cloudProvider,
     name: names[index],
@@ -163,11 +165,11 @@ describe.skipIf(!databaseUrl)('operator provider setup with no external calls', 
     }
   });
 
-  it('creates four correctly priced cloud accounts while preserving auth, leases and frozen history', async () => {
+  it('creates eight correctly priced cloud accounts while preserving auth, leases and frozen history', async () => {
     const authBefore = await snapshot(['"user"', 'account', '"session"']);
     const historyBefore = await snapshot(historyTables);
     const report = await configureProviderMarketplace(pool, catalog, setup());
-    expect(report.createdAccounts).toBe(4);
+    expect(report.createdAccounts).toBe(8);
     expect(report.retiredSuppliers).toBe(1);
     expect(report.commissionBps).toBe(1500);
     expect(JSON.stringify(report)).not.toContain(password);
@@ -183,6 +185,11 @@ describe.skipIf(!databaseUrl)('operator provider setup with no external calls', 
       expect(provider.providerId).toBe(provider.id);
       expect(provider.total_capacity).toBe(5);
       expect(provider.policy.allowedCatalogIds).toEqual(input.catalogIds);
+      expect(provider.policy.minimumPriceCents).toBe(1);
+      expect(provider.policy.basePriceCents).toBe(
+        providerSetupBasePrice(fixedQuote(managedPricing(catalog[i]), 30).totalPriceCents),
+      );
+      expect(provider.policy.autoBid).toBe(true);
       expect(provider.simulated).toBe(false);
       const credential = (
         await pool.query('SELECT password FROM account WHERE "userId"=$1', [provider.user_id])
@@ -192,6 +199,8 @@ describe.skipIf(!databaseUrl)('operator provider setup with no external calls', 
         await pool.query('SELECT * FROM broker_offerings WHERE provider_id=$1', [provider.id])
       ).rows[0];
       expect(offering.catalog_id).toBe(catalog[i].id);
+      expect(Number(offering.price_cents)).toBe(provider.policy.basePriceCents);
+      expect(offering.active).toBe(true);
       expect(offering.pricing.rateMicrosPerSecond).toBe(catalog[i].rateMicrosPerSecond);
       expect(offering.description).toContain(input.cloudProvider);
     }
@@ -235,6 +244,223 @@ describe.skipIf(!databaseUrl)('operator provider setup with no external calls', 
     expect(reports.map((report) => report.createdAccounts)).toEqual([0, 0]);
     expect(await snapshot(['"user"', 'account', '"session"'])).toEqual(authBefore);
     expect(await snapshot(['broker_providers', 'broker_offerings'])).toEqual(providersBefore);
+  });
+
+  it('stages only the four additions without resupplying existing credentials or changing existing accounts', async () => {
+    const original = setup();
+    original.providers = original.providers.slice(0, 4);
+    original.retireSupplierEmails = [];
+    await configureProviderMarketplace(pool, catalog, original);
+    const before = await snapshot([
+      '"user"',
+      'account',
+      '"session"',
+      'broker_providers',
+      'broker_offerings',
+      'broker_catalog',
+    ]);
+    const additions = setup();
+    delete additions.mode;
+    additions.retireSupplierEmails = [];
+    additions.providers = additions.providers.slice(4).map((p) => ({ ...p, capacity: 1 }));
+    const report = await configureProviderMarketplace(pool, catalog, additions);
+    expect(report.createdAccounts).toBe(4);
+    expect(report.setupMode).toBe('stage');
+    expect(report.approvedConfigurations).toBe(0);
+    const after = await snapshot([
+      '"user"',
+      'account',
+      '"session"',
+      'broker_providers',
+      'broker_offerings',
+      'broker_catalog',
+    ]);
+    expect(
+      after.map((rows, index) => rows.filter((r) => before[index].some((old) => old.id === r.id))),
+    ).toEqual(before);
+    for (const p of report.providers) {
+      expect(p.capacity).toBe(1);
+      expect(p.autoBid).toBe(false);
+    }
+    const newCatalog = await pool.query(
+      'SELECT approved FROM broker_catalog WHERE id=ANY($1::text[])',
+      [additions.providers.flatMap((p) => p.catalogIds)],
+    );
+    expect(newCatalog.rows).toEqual(Array.from({ length: 4 }, () => ({ approved: false })));
+    const newOfferings = await pool.query(
+      'SELECT active FROM broker_offerings WHERE catalog_id=ANY($1::text[])',
+      [additions.providers.flatMap((p) => p.catalogIds)],
+    );
+    expect(newOfferings.rows).toEqual(Array.from({ length: 4 }, () => ({ active: false })));
+    const retry = {
+      ...additions,
+      providers: additions.providers.map((p) => ({ ...p, password: undefined })),
+    };
+    expect((await configureProviderMarketplace(pool, catalog, retry)).createdAccounts).toBe(0);
+    expect(
+      await snapshot([
+        '"user"',
+        'account',
+        '"session"',
+        'broker_providers',
+        'broker_offerings',
+        'broker_catalog',
+      ]),
+    ).toEqual(after);
+  });
+
+  it('preserves customized capacity, policies, renamed offerings and approval on default retries; activation and update are explicit', async () => {
+    const selected = {
+      ...setup(),
+      providers: [setup().providers[4]],
+      retireSupplierEmails: [],
+      mode: 'stage' as const,
+    };
+    await configureProviderMarketplace(pool, catalog, selected);
+    const provider = (
+      await pool.query("SELECT * FROM broker_providers WHERE cloud_provider='sail'")
+    ).rows[0];
+    const customPolicy = {
+      ...provider.policy,
+      basePriceCents: 123.45,
+      maxPriceCents: 200,
+      reserveSlots: 2,
+      operatorNote: 'keep this',
+    };
+    await pool.query('UPDATE broker_providers SET total_capacity=7,policy=$2 WHERE id=$1', [
+      provider.id,
+      customPolicy,
+    ]);
+    await pool.query(
+      "UPDATE broker_offerings SET name='Custom renamed allocation',price_cents=123.45,active=false,revision=9 WHERE provider_id=$1",
+      [provider.id],
+    );
+    const before = await snapshot([
+      '"user"',
+      'account',
+      '"session"',
+      'broker_providers',
+      'broker_offerings',
+      'broker_catalog',
+      ...historyTables,
+    ]);
+    const retry = {
+      ...selected,
+      providers: selected.providers.map((p) => ({ ...p, password: undefined, capacity: 1 })),
+    };
+    delete (retry as ProviderMarketplaceSetup).mode;
+    await configureProviderMarketplace(pool, catalog, retry);
+    expect(
+      await snapshot([
+        '"user"',
+        'account',
+        '"session"',
+        'broker_providers',
+        'broker_offerings',
+        'broker_catalog',
+        ...historyTables,
+      ]),
+    ).toEqual(before);
+    await configureProviderMarketplace(pool, catalog, { ...retry, mode: 'activate' });
+    const activated = (
+      await pool.query('SELECT * FROM broker_providers WHERE id=$1', [provider.id])
+    ).rows[0];
+    expect(activated.total_capacity).toBe(7);
+    expect(activated.policy).toEqual({ ...customPolicy, autoBid: true });
+    const offering = (
+      await pool.query('SELECT * FROM broker_offerings WHERE provider_id=$1', [provider.id])
+    ).rows;
+    expect(offering).toHaveLength(1);
+    expect(offering[0]).toMatchObject({
+      name: 'Custom renamed allocation',
+      active: true,
+      revision: 10,
+    });
+    expect(Number(offering[0].price_cents)).toBe(123.45);
+    expect(
+      (
+        await pool.query('SELECT approved FROM broker_catalog WHERE id=$1', [
+          selected.providers[0].catalogIds[0],
+        ])
+      ).rows[0].approved,
+    ).toBe(true);
+    await configureProviderMarketplace(pool, catalog, {
+      ...retry,
+      mode: 'activate',
+      updateExisting: true,
+    });
+    const updated = (await pool.query('SELECT * FROM broker_providers WHERE id=$1', [provider.id]))
+      .rows[0];
+    expect(updated.total_capacity).toBe(1);
+    expect(updated.policy.basePriceCents).toBe(
+      providerSetupBasePrice(fixedQuote(managedPricing(catalog[4]), 30).totalPriceCents),
+    );
+    expect(updated.policy).not.toHaveProperty('operatorNote');
+    expect(await snapshot(historyTables)).toEqual(before.slice(6));
+  });
+
+  it('requires a password only for new users and does not activate an underpriced existing offering without an explicit update', async () => {
+    const selected = {
+      ...setup(),
+      providers: [{ ...setup().providers[4], password: undefined }],
+      retireSupplierEmails: [],
+      mode: 'stage' as const,
+    };
+    const before = await snapshot([
+      '"user"',
+      'account',
+      'broker_providers',
+      'broker_offerings',
+      'broker_catalog',
+    ]);
+    await expect(configureProviderMarketplace(pool, catalog, selected)).rejects.toThrow(
+      'private password',
+    );
+    expect(
+      await snapshot([
+        '"user"',
+        'account',
+        'broker_providers',
+        'broker_offerings',
+        'broker_catalog',
+      ]),
+    ).toEqual(before);
+    await configureProviderMarketplace(pool, catalog, {
+      ...selected,
+      providers: [{ ...selected.providers[0], password }],
+    });
+    const provider = (
+      await pool.query("SELECT id FROM broker_providers WHERE cloud_provider='sail'")
+    ).rows[0];
+    await pool.query('UPDATE broker_offerings SET price_cents=1 WHERE provider_id=$1', [
+      provider.id,
+    ]);
+    const staged = await snapshot([
+      '"user"',
+      'account',
+      'broker_providers',
+      'broker_offerings',
+      'broker_catalog',
+    ]);
+    await expect(
+      configureProviderMarketplace(pool, catalog, { ...selected, mode: 'activate' }),
+    ).rejects.toThrow('cost floor');
+    expect(
+      await snapshot([
+        '"user"',
+        'account',
+        'broker_providers',
+        'broker_offerings',
+        'broker_catalog',
+      ]),
+    ).toEqual(staged);
+    const report = await configureProviderMarketplace(pool, catalog, {
+      ...selected,
+      mode: 'activate',
+      updateExisting: true,
+    });
+    expect(report.approvedConfigurations).toBe(1);
+    expect(report.providers[0].autoBid).toBe(true);
   });
 
   it('rejects role, binding and cross-cloud configuration collisions atomically', async () => {

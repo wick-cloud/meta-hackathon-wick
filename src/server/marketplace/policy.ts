@@ -2,6 +2,7 @@ import { moneyCents } from './data.js';
 import type { SupplierPolicy } from '../../shared/types.js';
 import { HttpError } from '../context.js';
 import { integer } from './data.js';
+import { centsFromUnits, moneyUnits } from '../../shared/money.js';
 
 /** Legacy policies retain all capabilities and keep zero additional slots spare. */
 export function normalizedPolicy(policy: SupplierPolicy): SupplierPolicy {
@@ -11,6 +12,29 @@ export function normalizedPolicy(policy: SupplierPolicy): SupplierPolicy {
 /** Call while holding the provider row lock before creating any new reservation. */
 export function availableForBids(total: number, held: number, policy: SupplierPolicy): number {
   return Math.max(0, total - held - (policy.reserveSlots ?? 0));
+}
+
+/** Prices are computed by the server; the model may only select the discount. */
+export function automaticBidPrices(
+  policy: SupplierPolicy,
+  minimumPriceCents: number,
+  totalCapacity: number,
+  availableCapacity: number,
+): { basePriceCents: number; discountPriceCents?: number } {
+  const basePriceCents = Math.max(policy.basePriceCents, minimumPriceCents);
+  const unreservedCapacity = Math.max(0, totalCapacity - (policy.reserveSlots ?? 0));
+  if (availableCapacity <= 1 || availableCapacity * 2 < unreservedCapacity)
+    return { basePriceCents };
+  // Round the discounted quote upward to the supported $0.0001 unit so the
+  // reduction never exceeds ten percent, including fractional-cent policies.
+  const discountPriceCents = Math.max(
+    minimumPriceCents,
+    centsFromUnits((moneyUnits(basePriceCents) * 9n + 9n) / 10n),
+  );
+  return {
+    basePriceCents,
+    ...(discountPriceCents < basePriceCents ? { discountPriceCents } : {}),
+  };
 }
 
 /** Optional capabilities are preserved when older clients omit them, never silently removed. */
