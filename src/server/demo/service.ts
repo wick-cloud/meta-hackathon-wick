@@ -1,3 +1,4 @@
+import { open } from '../coding/artifacts.js';
 import { randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import type { Actor, CatalogItem } from '../../shared/types.js';
@@ -173,6 +174,7 @@ export async function startDemo(
   ctx: AppContext,
   identity: DemoIdentity,
   operationKey: string,
+  kind: 'terminal' | 'studio' = 'terminal',
 ): Promise<Row> {
   clientOperationKey(operationKey, true);
   if (!demoModeAllowed(ctx)) throw new HttpError(409, 'The live demo is unavailable.');
@@ -184,7 +186,11 @@ export async function startDemo(
       [identity.visitorDigest, operationKey],
     )
   ).rows[0];
-  if (prior) return prior;
+  if (prior) {
+    if (prior.kind !== kind)
+      throw new HttpError(409, 'This operation key belongs to a different demo kind.');
+    return prior;
+  }
   const prerequisites = await demoPrerequisites(ctx);
   if (prerequisites.reason) throw new HttpError(409, prerequisites.reason);
   return transaction(ctx.pool, async (db) => {
@@ -196,7 +202,11 @@ export async function startDemo(
         [identity.visitorDigest, operationKey],
       )
     ).rows[0];
-    if (existing) return existing;
+    if (existing) {
+      if (existing.kind !== kind)
+        throw new HttpError(409, 'This operation key belongs to a different demo kind.');
+      return existing;
+    }
     const eligibility = await gate(db, identity);
     if (eligibility.reason)
       throw Object.assign(new HttpError(429, eligibility.reason), { retryAfter: 60 });
@@ -246,8 +256,8 @@ export async function startDemo(
     });
     const run = (
       await db.query(
-        `INSERT INTO broker_demo_runs(id,visitor_id,buyer_id,ip_digest,operation_key,source_mode,budget_day,grant_id,expires_at)
-      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+        `INSERT INTO broker_demo_runs(id,visitor_id,buyer_id,ip_digest,operation_key,source_mode,budget_day,grant_id,expires_at,kind)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
         [
           id,
           visitor.id,
@@ -258,9 +268,12 @@ export async function startDemo(
           day.day,
           grant.id,
           expiresAt,
+          kind,
         ],
       )
     ).rows[0];
+    if (kind === 'studio')
+      await db.query('INSERT INTO broker_demo_studio(run_id) VALUES($1)', [id]);
     await demoEvent(db, id, 'admitted');
     await enqueue(ctx, db, DEMO_QUEUE, { id });
     return run;
@@ -324,6 +337,8 @@ export async function demoKey(ctx: AppContext, identity: DemoIdentity, operation
           )
         ).rows[0];
     if (!candidate) throw new HttpError(409, 'No ready demo was found.');
+    if (candidate.kind === 'studio')
+      throw new HttpError(403, 'The guided Studio run owns this demo’s token allowance.');
     // Same grant → demo order as the inference gateway. Reserve a key attempt before
     // issuance so concurrent rotations cannot exceed the five-key lifetime limit.
     await db.query('SELECT id FROM broker_inference_grants WHERE id=$1 FOR UPDATE', [
@@ -402,8 +417,8 @@ export async function demoState(
   ]);
   let run: DemoRun | null = null;
   if (row) {
-    const [requests, vms, orders, packs, disks, vmBids, tokenBids, calls, keys] = await Promise.all(
-      [
+    const [requests, vms, orders, packs, disks, vmBids, tokenBids, calls, keys, studioRows] =
+      await Promise.all([
         ctx.pool.query('SELECT * FROM broker_requests WHERE id=$1 AND buyer_id=$2', [
           row.request_id,
           row.buyer_id,
@@ -439,8 +454,8 @@ export async function demoState(
           "SELECT count(*)::int n FROM broker_demo_mutations WHERE run_id=$1 AND operation='key'",
           [row.id],
         ),
-      ],
-    );
+        ctx.pool.query('SELECT * FROM broker_demo_studio WHERE run_id=$1', [row.id]),
+      ]);
     const request = requests.rows[0],
       vm = vms.rows[0],
       order = orders.rows[0],
@@ -455,8 +470,23 @@ export async function demoState(
       vm?.status === 'running' &&
       !vm.cleanup_confirmed_at &&
       new Date(vm.expires_at) > state.at;
+    const studio = studioRows.rows[0];
+    const studioSource = studio?.source_cipher ? open(ctx, studio.source_cipher) : null;
+    const studioResult = studio?.result_cipher ? open(ctx, studio.result_cipher) : null;
     run = {
       id: row.id,
+      kind: row.kind,
+      studio: studio
+        ? {
+            status: studio.status,
+            filename: 'hello_world.py',
+            source: studioSource?.source ?? null,
+            stdout: studioResult?.stdout ?? null,
+            exitCode: studioResult?.exitCode ?? null,
+            requestsUsed: calls.rows[0].n,
+            verifiedAt: iso(studio.verified_at),
+          }
+        : null,
       status: row.status,
       message: row.message,
       createdAt: iso(row.created_at)!,
@@ -528,7 +558,11 @@ export async function demoState(
         : null,
       disk: disks.rows[0] ?? null,
       canIssueKey: Boolean(
-        live && pack?.status === 'active' && calls.rows[0].n < 2 && keys.rows[0].n < 5,
+        row.kind !== 'studio' &&
+        live &&
+        pack?.status === 'active' &&
+        calls.rows[0].n < 2 &&
+        keys.rows[0].n < 5,
       ),
       keyIssued: Boolean(row.key_issued_at),
     };

@@ -1,4 +1,5 @@
 /** Public, guest-scoped demo receipts. Never contains upstream identifiers or secrets. */
+export type DemoKind = 'terminal' | 'studio';
 export interface DemoBid {
   provider: string;
   /** Price after any explicit demo sponsorship. */
@@ -11,6 +12,8 @@ export interface DemoBid {
 }
 export interface DemoRun {
   id: string;
+  /** Older saved receipts without a kind are terminal demos. */
+  kind?: DemoKind;
   status: 'starting' | 'auction' | 'provisioning' | 'ready' | 'ending' | 'ended' | 'failed';
   message: string;
   createdAt: string;
@@ -47,6 +50,15 @@ export interface DemoRun {
   disk: { id: string; name: string; status: string } | null;
   canIssueKey: boolean;
   keyIssued: boolean;
+  studio?: {
+    status: 'waiting' | 'generating' | 'running' | 'passed' | 'needs_attention';
+    filename: 'hello_world.py';
+    source: string | null;
+    stdout: string | null;
+    exitCode: number | null;
+    requestsUsed: number;
+    verifiedAt: string | null;
+  } | null;
 }
 export interface DemoState {
   enabled: boolean;

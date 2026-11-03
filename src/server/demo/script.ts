@@ -41,10 +41,19 @@ finally:
     key = ""
 `;
 }
-export function demoBootstrapCommand(appUrl: string): string {
+export function demoBootstrapCommand(
+  appUrl: string,
+  kind: 'terminal' | 'studio' = 'terminal',
+): string {
+  if (kind === 'studio') {
+    const readme = Buffer.from(
+      'Wick guided Muse Studio demo\n\nMuse generates a fixed Hello World Python program. The guided runner validates its allowed syntax, executes it, and checks the exact output.\nAfter the verified result appears on /demos, rerun it here: python3 /workspace/hello_world.py\nThe generated source and execution receipt are on this private disk. No key is needed: the guided worker owns this demo token pack.\nThe terminal remains available until the original 15-minute VM lease expires, even after both model calls are used. End demo deletes this workspace.\n',
+    ).toString('base64');
+    return `python3 -c 'import base64,pathlib; p=pathlib.Path("/workspace/README.txt"); source=base64.b64decode("${readme}"); p.write_bytes(source); assert p.read_bytes()==source; print("WICK_DEMO_SCRIPT_READY")'`;
+  }
   const script = Buffer.from(demoPythonScript(appUrl)).toString('base64');
   const readme = Buffer.from(
-    'Wick live demo\n\nThis is your private Modal Micro workspace.\nRun: python3 /workspace/hello_muse.py\nSelect Get demo key on the homepage, then Copy key, to use the purchased Baseten batch.\nPaste it at the hidden prompt. No provider credentials are needed.\nThe batch allows at most two requests and 1,024 output tokens per request.\nThe demo VM expires after its fixed lease; End demo deletes this workspace.\n',
+    'Wick live demo\n\nThis is your private Modal Micro workspace.\nRun: python3 /workspace/hello_muse.py\nSelect Get demo key on /demos, then Copy key, to use the purchased Baseten batch.\nPaste it at the hidden prompt. No provider credentials are needed.\nThe batch allows at most two requests and 1,024 output tokens per request.\nThe demo VM expires after its fixed lease; End demo deletes this workspace.\n',
   ).toString('base64');
   return `python3 -c 'import base64,os,pathlib; p=pathlib.Path("/workspace/hello_muse.py"); source=base64.b64decode("${script}"); compile(source,"hello_muse.py","exec"); t=p.with_suffix(".tmp"); t.write_bytes(source); os.chmod(t,0o600); os.replace(t,p); r=pathlib.Path("/workspace/README.txt"); r.write_bytes(base64.b64decode("${readme}")); assert p.read_bytes()==source; assert r.read_bytes()==base64.b64decode("${readme}"); print("WICK_DEMO_SCRIPT_READY")'`;
 }

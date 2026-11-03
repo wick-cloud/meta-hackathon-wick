@@ -14,16 +14,8 @@ import {
 import { Brand } from './brand';
 import { Link } from './components';
 import './homepage.css';
-import {
-  DemoAction,
-  DemoError,
-  DemoOverview,
-  HomepageDemoSession,
-  useHomepageDemo,
-} from './homepage-demo';
 
 export function HomePage() {
-  const demo = useHomepageDemo();
   return (
     <div className="broker-home">
       <a className="skip-link" href="#marketplace-home">
@@ -34,7 +26,7 @@ export function HomePage() {
           <Brand />
         </Link>
         <nav aria-label="Marketplace navigation">
-          <a href={demo.data?.run ? '#live-demo' : '#demo-overview'}>Live demo</a>
+          <Link href="/demos">Live demos</Link>
           <a href="#marketplace">Marketplace</a>
           <a href="#how-it-works">How it works</a>
           <Link href="/login" className="button secondary">
@@ -43,24 +35,23 @@ export function HomePage() {
         </nav>
       </header>
       <main id="marketplace-home">
-        <section
-          className={`home-hero ${demo.data?.run ? 'has-demo-session' : ''}`}
-          aria-labelledby="home-headline"
-        >
+        <section className="home-hero" aria-labelledby="home-headline">
           <div className="home-hero-copy">
             <div className="home-eyebrow">
               <span /> THE CAPACITY MARKETPLACE
             </div>
             <h1 id="home-headline">
-              Compute and AI tokens. <br />
-              <span>Providers compete for your workload.</span>
+              Compute and AI. <br />
+              <span>On your terms.</span>
             </h1>
             <p className="home-hero-description">
-              Set the requirements. Name your budget. Let eligible providers compete in a 30-second
-              auction.
+              Compare provider bids for Wick compute and Meta Muse tokens. Set your budget, launch a
+              private workspace, or bring your next task to Muse Studio.
             </p>
             <div className="home-hero-actions">
-              <DemoAction demo={demo} />
+              <Link href="/demos" className="button primary">
+                Explore live demos <ArrowRight size={16} />
+              </Link>
               <a
                 href="https://app.wick-cloud.com/waitlist"
                 className="button secondary"
@@ -70,12 +61,10 @@ export function HomePage() {
               >
                 Join buyer beta <ArrowUpRight size={16} />
               </a>
-              <Link href="/login?intent=sell" className="home-demo-market-link">
-                Sell capacity <ArrowRight size={16} />
-              </Link>
             </div>
-            <p className="home-access-note">Live demo: free during the hackathon. No signup.</p>
-            {!demo.data?.run && <DemoError demo={demo} />}
+            <p className="home-access-note">
+              Try the platform without an account. Build with us in the buyer beta.
+            </p>
             <div className="home-hero-facts">
               <span>
                 <Clock3 size={15} /> 30-second auctions
@@ -86,11 +75,67 @@ export function HomePage() {
             </div>
           </div>
           <div className="home-hero-console">
-            <DemoOverview demo={demo} />
+            <section className="home-workload-card" aria-labelledby="home-workload-title">
+              <div className="home-workload-topline">
+                <span>
+                  <span className="home-workload-dot" /> ONE MARKETPLACE
+                </span>
+                <span>BUILT FOR BUILDERS</span>
+              </div>
+              <div className="home-workload-intro">
+                <span className="home-eyebrow">FROM IDEA TO EXECUTION</span>
+                <h2 id="home-workload-title">
+                  Everything your next
+                  <br />
+                  build runs on.
+                </h2>
+                <p>Bring the workload. Choose the capacity.</p>
+              </div>
+              <div className="home-workload-resources">
+                <div>
+                  <span className="home-resource-icon">
+                    <Server size={23} />
+                  </span>
+                  <div>
+                    <strong>Wick compute</strong>
+                    <span>A private workspace for your code.</span>
+                  </div>
+                  <span className="home-workload-number">01</span>
+                </div>
+                <div>
+                  <span className="home-resource-icon">
+                    <Sparkles size={23} />
+                  </span>
+                  <div>
+                    <strong>Meta Muse tokens</strong>
+                    <span>Model access for your apps and agents.</span>
+                  </div>
+                  <span className="home-workload-number">02</span>
+                </div>
+                <div>
+                  <span className="home-resource-icon">
+                    <Bot size={23} />
+                  </span>
+                  <div>
+                    <strong>Muse Studio</strong>
+                    <span>Plan agent work with budgets in view.</span>
+                  </div>
+                  <span className="home-workload-number">03</span>
+                </div>
+              </div>
+              <div className="home-workload-flow" aria-label="Marketplace workflow">
+                <span>Your requirements</span>
+                <ArrowRight size={13} />
+                <span>Provider bids</span>
+                <ArrowRight size={13} />
+                <span>Your next build</span>
+              </div>
+              <Link href="/demos" className="home-workload-link">
+                See it in action <ArrowUpRight size={16} />
+              </Link>
+            </section>
           </div>
         </section>
-
-        <HomepageDemoSession demo={demo} />
 
         <section
           className="home-market-section"

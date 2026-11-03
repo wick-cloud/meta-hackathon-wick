@@ -541,6 +541,173 @@
   color: var(--muted);
   font-size: 11px;
 }
+.demo-studio {
+  border: 1px solid var(--line);
+  background: var(--card);
+  border-radius: 8px;
+  padding: 22px;
+  margin-bottom: 20px;
+  min-width: 0;
+}
+.demo-studio-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+.demo-studio-heading h3 {
+  font-size: 20px;
+  font-weight: 550;
+  letter-spacing: -0.5px;
+}
+.demo-studio-heading .demo-state-tag {
+  margin-left: 0;
+}
+.demo-studio-task {
+  margin-top: 17px;
+  font-size: 12px;
+  color: var(--soft);
+  line-height: 1.8;
+}
+.demo-studio-task code {
+  color: var(--ink);
+  font-size: 11px;
+}
+.demo-studio-explanation {
+  margin-top: 7px;
+  font-size: 11px;
+  line-height: 1.7;
+  color: var(--muted);
+  max-width: 760px;
+}
+.demo-studio-evidence {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+  gap: 16px;
+  margin-top: 22px;
+}
+.demo-studio-evidence > section {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--bg);
+}
+.demo-studio-file-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border-bottom: 1px solid var(--line);
+  padding: 12px 15px;
+  font-size: 10px;
+}
+.demo-studio-file-heading strong {
+  font-weight: 500;
+}
+.demo-studio-file-heading > span {
+  font-size: 9px;
+  color: var(--muted);
+}
+.demo-studio-evidence pre {
+  margin: 0;
+  padding: 17px 15px;
+  min-height: 90px;
+  max-height: 330px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: 11px/1.8 var(--font-mono);
+  color: var(--soft);
+}
+.demo-studio-evidence pre code {
+  font: inherit;
+}
+.demo-studio-pending {
+  padding: 18px 15px;
+  min-height: 90px;
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.7;
+}
+.demo-studio-result {
+  margin: 0;
+  padding: 0 15px 8px;
+  font-size: 10px;
+}
+.demo-studio-result > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 15px;
+  border-top: 1px solid var(--line);
+  padding: 10px 0;
+}
+.demo-studio-result dt {
+  color: var(--muted);
+}
+.demo-studio-result dd {
+  margin: 0;
+  color: var(--soft);
+  text-align: right;
+}
+.demo-studio-next {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 20px;
+}
+.demo-studio-next strong {
+  font-size: 12px;
+  font-weight: 500;
+}
+.demo-studio-next p {
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.7;
+  margin-top: 7px;
+  max-width: 680px;
+}
+.demo-studio-command {
+  display: block;
+  margin-top: 13px;
+  font: 11px var(--font-mono);
+  color: var(--soft);
+  overflow-wrap: anywhere;
+}
+@media (max-width: 800px) {
+  .demo-studio-evidence {
+    grid-template-columns: 1fr;
+  }
+}
+@media (max-width: 480px) {
+  .demo-studio {
+    padding: 16px 13px;
+  }
+  .demo-studio-heading {
+    gap: 12px;
+  }
+  .demo-studio-heading h3 {
+    font-size: 18px;
+  }
+  .demo-studio-heading .demo-state-tag {
+    white-space: normal;
+    justify-content: flex-start;
+    line-height: 1.5;
+  }
+  .demo-studio-file-heading,
+  .demo-studio-evidence pre {
+    padding: 12px;
+  }
+  .demo-studio-task,
+  .demo-studio-task code,
+  .demo-studio-command {
+    font-size: 10px;
+  }
+}
 .demo-instruction {
   display: flex;
   align-items: center;
