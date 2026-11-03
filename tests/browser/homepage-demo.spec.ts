@@ -214,6 +214,65 @@ test('ready demo opens the existing owned terminal and keeps a revealed key out 
   expect(f.writes).toHaveLength(1);
 });
 
+test('using both Muse calls keeps the connected terminal usable for the remaining rental', async ({
+  page,
+}) => {
+  const ready = receipt('ready');
+  const f = await fixture(page, state(ready));
+  let connections = 0;
+  let terminalInput = '';
+  await page.routeWebSocket('**/api/vms/*/terminal', (ws) => {
+    connections++;
+    let announced = false;
+    ws.onMessage((data) => {
+      const frame = JSON.parse(String(data));
+      if (frame.type === 'resize' && !announced) {
+        announced = true;
+        ws.send(JSON.stringify({ type: 'ready' }));
+      }
+      if (frame.type === 'input') {
+        terminalInput += frame.data;
+        if (terminalInput.endsWith('\r')) {
+          ws.send(
+            JSON.stringify({
+              type: 'output',
+              data: Buffer.from('\r\nterminal remains usable\r\n').toString('base64'),
+            }),
+          );
+        }
+      }
+    });
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Connect terminal', exact: true }).click();
+  await expect(page.locator('.terminal-status')).toHaveText('Connected');
+  await page.getByRole('button', { name: 'Get demo key' }).click();
+  await expect(page.getByRole('button', { name: 'Copy key', exact: true })).toBeVisible();
+
+  const exhausted = structuredClone(ready);
+  exhausted.tokens!.requestsUsed = 2;
+  exhausted.canIssueKey = false;
+  f.set(state(exhausted));
+
+  // The normal status poll must update allowance without replacing or ending the terminal.
+  await expect(page.getByText('Muse calls used. Your terminal is still available.')).toBeVisible();
+  await expect(page.getByText('0 calls left', { exact: true })).toBeVisible();
+  await expect(
+    page.getByText(/run Python and shell commands until the session timer expires/),
+  ).toBeVisible();
+  await expect(page.locator('.terminal-status')).toHaveText('Connected');
+  await expect(
+    page.getByRole('button', { name: /^(Get demo key|Replace key|Copy key|Reveal key)$/ }),
+  ).toHaveCount(0);
+  await page.locator('.xterm-helper-textarea').focus();
+  await page.keyboard.type('echo terminal remains usable');
+  await page.keyboard.press('Enter');
+  await expect.poll(() => terminalInput).toBe('echo terminal remains usable\r');
+  await expect(page.locator('.xterm-rows')).toContainText('terminal remains usable');
+  expect(connections).toBe(1);
+  expect(f.writes.map((w) => w.path)).toEqual(['/api/demo/key']);
+});
+
 test('an uncertain key requires explicit replacement and ending waits for cleanup before a server-clock cooldown', async ({
   page,
 }) => {

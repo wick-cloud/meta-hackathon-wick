@@ -265,7 +265,7 @@ async function advance(ctx: AppContext, run: Row) {
   if (
     !vm.environment_id ||
     !vm.expires_at ||
-    new Date(vm.expires_at).getTime() <= Date.now() + 30_000 ||
+    new Date(vm.expires_at).getTime() <= Date.now() ||
     vm.catalog_snapshot?.provider !== 'modal' ||
     vm.catalog_snapshot?.profile !== 'micro'
   ) {
@@ -274,6 +274,11 @@ async function advance(ctx: AppContext, run: Row) {
   }
   if (run.bootstrap_completed_at) {
     await phase(ctx, run, 'ready', 'Your Modal terminal and Baseten Muse tokens are ready.');
+    return;
+  }
+  // Reserve time for initialization without shortening an already-ready VM's lease.
+  if (new Date(vm.expires_at).getTime() <= Date.now() + 30_000) {
+    await fail(ctx, run, 'The VM has too little time remaining to initialize the demo.');
     return;
   }
   if (run.bootstrap_started_at) {

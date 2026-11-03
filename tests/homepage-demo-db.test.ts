@@ -16,6 +16,7 @@ import {
 } from '../src/server/demo/index.js';
 import { reconcileDisk } from '../src/server/disks/index.js';
 import { createInferenceRuntime } from '../src/server/inference/runtime.js';
+import { registerInference } from '../src/server/inference/index.js';
 import { initializeInference, closeTokenAuction } from '../src/server/inference/market.js';
 import { createMuseAdapter } from '../src/server/integrations/muse.js';
 import { createWickAdapter } from '../src/server/integrations/wick.js';
@@ -118,6 +119,7 @@ describe.skipIf(!databaseUrl)(
       });
       await app.register(websocket);
       await registerDemo(app, ctx);
+      await registerInference(app, ctx);
       await registerTerminal(app, ctx);
       app.get('/terminal-identity/:id', async (request) => demoTerminalActor(ctx, request));
       app.get('/api/me', async (request) => ({ user: await ctx.requireActor(request) }));
@@ -308,6 +310,39 @@ describe.skipIf(!databaseUrl)(
       });
       expect(response.statusCode, response.body).toBe(200);
       return response.json<DemoState>();
+    }
+    async function openTerminal(client: Awaited<ReturnType<typeof visitor>>, vmId: string) {
+      const socket = new WebSocket(`${socketOrigin}/api/vms/${vmId}/terminal`, {
+        headers: headers(client.ip, client.cookie),
+      });
+      sockets.push(socket);
+      await new Promise<void>((resolve, reject) => {
+        socket.once('error', reject);
+        socket.on('message', (data) => {
+          if (JSON.parse(data.toString()).type === 'ready') resolve();
+        });
+      });
+      return socket;
+    }
+    async function useTerminal(socket: WebSocket) {
+      const output = new Promise<void>((resolve, reject) => {
+        const closed = () => reject(new Error('The active terminal closed before responding.'));
+        const message = (data: WebSocket.RawData) => {
+          const frame = JSON.parse(data.toString());
+          if (
+            frame.type === 'output' &&
+            Buffer.from(frame.data, 'base64').toString('utf8') === '/workspace (simulated)\r\n'
+          ) {
+            socket.off('message', message);
+            socket.off('close', closed);
+            resolve();
+          }
+        };
+        socket.once('close', closed);
+        socket.on('message', message);
+      });
+      socket.send(JSON.stringify({ type: 'input', data: 'pwd\r' }));
+      await output;
     }
     async function finishCleanup(runId: string) {
       let current = await row(runId);
@@ -615,6 +650,124 @@ describe.skipIf(!databaseUrl)(
       expect(
         (await pool.query('SELECT count(*)::int n FROM broker_fixture_drives')).rows[0].n,
       ).toBe(1);
+    });
+
+    it('keeps a bootstrapped terminal ready in its final 30 seconds and revokes it at actual expiry', async () => {
+      const guest = await visitor();
+      const current = await readyRun(guest);
+      const expiresAt = new Date(Date.now() + 20_000);
+      await pool.query('UPDATE broker_vms SET expires_at=$2 WHERE id=$1', [
+        current.vm_id,
+        expiresAt,
+      ]);
+      await pool.query('UPDATE broker_demo_runs SET expires_at=$2 WHERE id=$1', [
+        current.id,
+        expiresAt,
+      ]);
+      const socket = await openTerminal(guest, current.vm_id);
+
+      await reconcileDemo(ctx, current.id);
+      expect(await row(current.id)).toMatchObject({
+        status: 'ready',
+        stop_requested: false,
+        expires_at: expiresAt,
+      });
+      expect((await read(guest)).run!.vm!.terminalPath).toBe(`/api/vms/${current.vm_id}/terminal`);
+      expect(commands).toHaveBeenCalledTimes(1);
+      await useTerminal(socket);
+
+      const closed = new Promise<void>((resolve) => socket.once('close', () => resolve()));
+      const expiredAt = new Date(Date.now() - 1000);
+      await pool.query('UPDATE broker_vms SET expires_at=$2 WHERE id=$1', [
+        current.vm_id,
+        expiredAt,
+      ]);
+      await pool.query('UPDATE broker_demo_runs SET expires_at=$2 WHERE id=$1', [
+        current.id,
+        expiredAt,
+      ]);
+      await reconcileDemo(ctx, current.id);
+      expect(await row(current.id)).toMatchObject({ status: 'ending', stop_requested: true });
+      expect((await read(guest)).run!.vm!.terminalPath).toBeNull();
+      const denied = await app.inject({
+        method: 'GET',
+        url: `/terminal-identity/${current.vm_id}`,
+        headers: headers(guest.ip, guest.cookie),
+      });
+      expect(denied.statusCode).toBe(403);
+      await closed;
+      expect((await finishCleanup(current.id)).status).toBe('ended');
+    });
+
+    it('still refuses to bootstrap a VM with fewer than 30 seconds remaining', async () => {
+      const guest = await visitor();
+      const current = await readyRun(guest, false);
+      await pool.query(
+        "UPDATE broker_vms SET expires_at=clock_timestamp()+interval '20 seconds' WHERE id=$1",
+        [current.vm_id],
+      );
+      await reconcileDemo(ctx, current.id);
+      expect(await row(current.id)).toMatchObject({
+        status: 'ending',
+        stop_requested: true,
+        failed: true,
+        bootstrap_started_at: null,
+        bootstrap_completed_at: null,
+      });
+      expect(commands).not.toHaveBeenCalled();
+      expect((await read(guest)).run!.vm!.terminalPath).toBeNull();
+      expect((await finishCleanup(current.id)).status).toBe('failed');
+    });
+
+    it('keeps the terminal usable and reconnectable after both model requests are used', async () => {
+      const guest = await visitor();
+      const current = await readyRun(guest);
+      const socket = await openTerminal(guest, current.vm_id);
+      const issued = await app.inject({
+        method: 'POST',
+        url: '/api/demo/key',
+        headers: headers(guest.ip, guest.cookie),
+        payload: { operationKey: randomUUID() },
+      });
+      expect(issued.statusCode, issued.body).toBe(200);
+      const request = () =>
+        app.inject({
+          method: 'POST',
+          url: '/api/v1/chat/completions',
+          headers: { authorization: `Bearer ${issued.json().token}` },
+          payload: {
+            operationKey: randomUUID(),
+            model: 'meta/muse-spark-open',
+            messages: [{ role: 'user', content: 'Hello Muse' }],
+            max_tokens: 1024,
+          },
+        });
+      for (let call = 0; call < 2; call++) {
+        const completion = await request();
+        expect(completion.statusCode, completion.body).toBe(200);
+      }
+      const exhausted = await request();
+      expect(exhausted.statusCode, exhausted.body).toBe(429);
+      expect(exhausted.json().code).toBe('demo_request_limit');
+
+      await reconcileDemo(ctx, current.id);
+      expect(await row(current.id)).toMatchObject({
+        status: 'ready',
+        stop_requested: false,
+        ended_at: null,
+        expires_at: current.expires_at,
+      });
+      expect(
+        (await pool.query('SELECT status,expires_at FROM broker_vms WHERE id=$1', [current.vm_id]))
+          .rows[0],
+      ).toMatchObject({ status: 'running', expires_at: current.expires_at });
+      const state = await read(guest);
+      expect(state.run!.tokens!.requestsUsed).toBe(2);
+      expect(state.run!.canIssueKey).toBe(false);
+      expect(state.run!.vm!.terminalPath).toBe(`/api/vms/${current.vm_id}/terminal`);
+      await useTerminal(socket);
+      await useTerminal(await openTerminal(guest, current.vm_id));
+      expect(commands).toHaveBeenCalledTimes(1);
     });
 
     it('admits only the owner terminal, revokes its socket on End, and cleans the private resources', async () => {

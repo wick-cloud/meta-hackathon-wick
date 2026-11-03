@@ -487,6 +487,29 @@
   border-radius: 8px;
   margin-bottom: 16px;
 }
+.demo-allowance-used {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 16px;
+  margin-bottom: 16px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.demo-allowance-used > svg {
+  color: var(--accent);
+  margin-top: 2px;
+}
+.demo-allowance-used strong {
+  font-size: 12px;
+  font-weight: 550;
+}
+.demo-allowance-used p {
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 11px;
+}
 .demo-instruction {
   display: flex;
   align-items: center;

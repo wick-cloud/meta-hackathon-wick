@@ -16,8 +16,10 @@ switches provider or VM size.
 4. Connect the browser terminal and run `python3 /workspace/hello_muse.py`.
 5. Paste the key at the hidden prompt. The Python script calls the Broker's
    OpenAI-compatible gateway, which redeems the Baseten pack for Muse Spark Open.
-6. Read the real response and usage, then select **End demo**. Reconnection uses
-   the same VM. Closing the browser does not stop its lease or extend it.
+6. Keep using the terminal for the rest of the 15-minute lease, even after both
+   Muse calls are used. Explore files, edit the Python script, or run shell commands.
+   Select **End demo** only when finished. Reconnection uses the same VM; closing
+   the browser does not stop its lease or extend it. The timer includes VM setup.
 
 The key remains in browser memory only, and the script uses `getpass` without
 writing it to disk, shell history, or command arguments. Reloading the page may
@@ -103,7 +105,9 @@ and these judge instructions alongside the public GitHub repo and demo video.
 
 The opt-in verifier runs that journey through public HTTP and terminal WebSocket
 APIs. It allocates one real demo VM/disk, makes two bounded Baseten requests,
-checks that a third request is rejected, then verifies cleanup and cooldown.
+checks that a third request is rejected, then explicitly ends its own test run
+to verify cleanup and cooldown. Ordinary judge sessions stay open after token
+exhaustion until their lease expires or the judge selects **End demo**.
 It requires no provider or account credentials and never logs the key or terminal
 text. Do not force-kill it during cleanup.
 
