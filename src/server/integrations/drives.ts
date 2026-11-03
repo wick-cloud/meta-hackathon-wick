@@ -80,7 +80,7 @@ export async function driveRequest(
       headers: {
         Authorization: `Bearer ${config.wickApiKey}`,
         Accept: 'application/json',
-        'Content-Type': 'application/json',
+        ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
         'x-wick-vocabulary': 'snapshots',
         ...(key ? { 'idempotency-key': key } : {}),
       },

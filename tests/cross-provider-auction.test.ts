@@ -603,7 +603,6 @@ describe.skipIf(!databaseUrl)(
         generation: 'mount-generation-1',
         attachmentMode: 'shared' as const,
         accessMode: 'mount' as const,
-        workspacePath: '/workspace',
         status: 'mounted',
       };
       expect(
@@ -618,12 +617,31 @@ describe.skipIf(!databaseUrl)(
           workspaceDrive: { ...mount, driveId: 'another-drive' },
         }),
       ).toBe(false);
+      expect(
+        await observeVmDisk(ctx, vm, {
+          ...environment,
+          workspaceDrive: { ...mount, workspacePath: '/temporary-workspace' },
+        }),
+      ).toBe(false);
+      // Real E2B mount observations omit the optional workspacePath; native
+      // mount access still means the documented canonical /workspace path.
       expect(await observeVmDisk(ctx, vm, { ...environment, workspaceDrive: mount })).toBe(true);
       expect(
         await observeVmDisk(ctx, vm, {
           ...environment,
           workspaceDrive: { ...mount, generation: 'stale-other-generation' },
         }),
+      ).toBe(false);
+      expect(
+        await markReady(
+          ctx,
+          vm.id,
+          {
+            ...environment,
+            workspaceDrive: { ...mount, workspacePath: '/temporary-workspace' },
+          },
+          true,
+        ),
       ).toBe(false);
       expect(await markReady(ctx, vm.id, { ...environment, workspaceDrive: mount }, true)).toBe(
         true,

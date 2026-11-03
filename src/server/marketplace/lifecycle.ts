@@ -101,13 +101,15 @@ export async function markReady(
     )
       return false;
     if (vm.disk_id) {
+      // Native mount mode defaults to /workspace when its optional path is omitted.
       if (
         !observation?.workspaceDrive ||
         observation.workspaceDrive.driveId !== vm.create_input.workspaceDrive?.driveId ||
         observation.workspaceDrive.status !== 'mounted' ||
         observation.workspaceDrive.accessMode !== 'mount' ||
         observation.workspaceDrive.attachmentMode !== 'shared' ||
-        observation.workspaceDrive.workspacePath !== '/workspace'
+        (observation.workspaceDrive.workspacePath !== undefined &&
+          observation.workspaceDrive.workspacePath !== '/workspace')
       )
         return false;
       const attachment = (

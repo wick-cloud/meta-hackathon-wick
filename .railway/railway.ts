@@ -43,6 +43,8 @@ export default defineRailway(() => {
       INFERENCE_MODAL_MODEL: preserve(),
       INFERENCE_MODAL_PROXY_TOKEN: preserve(),
       MAX_CONCURRENT_VMS: preserve(),
+      DISKS_ENABLED: preserve(),
+      DISK_QUALIFIED_CATALOG_IDS: preserve(),
       LOG_LEVEL: preserve(),
       SEED_BUYER_EMAIL: preserve(),
       SEED_BUYER_PASSWORD: preserve(),
