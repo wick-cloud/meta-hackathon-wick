@@ -263,9 +263,7 @@ test('includes the disk and existing workspace in the reviewed Studio start', as
   });
 });
 
-test('filters VM configurations to qualified routes and sends the selected disk', async ({
-  page,
-}) => {
+test('matches only disk-qualified routes and sends the selected disk', async ({ page }) => {
   const writes = await fixture(page);
   await page.addInitScript(() =>
     sessionStorage.setItem(
@@ -282,15 +280,15 @@ test('filters VM configurations to qualified routes and sends the selected disk'
   );
   await page.goto('/requests/review');
   await page.getByLabel('Workspace disk · optional').selectOption(diskId);
-  await expect(page.getByRole('combobox', { name: /^Configuration\b/ })).toHaveValue('sku-native');
-  await expect(
-    page
-      .getByRole('combobox', { name: /^Configuration\b/ })
-      .getByRole('option', { name: /Temporary Linux/ }),
-  ).toHaveCount(0);
+  await expect(page.getByRole('combobox', { name: /configuration|region/i })).toHaveCount(0);
   await page.getByRole('button', { name: 'Start 30-second auction' }).click();
   await expect.poll(() => writes.length).toBe(1);
-  expect(writes[0]!.body).toMatchObject({ diskId, catalogId: 'sku-native' });
+  expect(writes[0]!.body).toMatchObject({
+    diskId,
+    catalogId: 'sku-native',
+    region: 'any',
+    matchAcrossProviders: true,
+  });
 });
 
 const shapeCatalog: CatalogItem[] = [
@@ -355,29 +353,27 @@ test('waits for disk routes and defaults a new disk-linked rental to a supported
     releaseOptions();
     await page.getByRole('button', { name: 'Review manually', exact: true }).click();
     await expect(page).toHaveURL(/\/requests\/review$/);
-    await expect(page.getByRole('combobox', { name: /^Configuration\b/ })).toHaveValue(
-      'e2b:small:us',
-    );
-    await expect(
-      page.getByRole('combobox', { name: /^Configuration\b/ }).getByRole('option'),
-    ).toHaveCount(2);
-    await expect(page.getByRole('combobox', { name: /^Configuration\b/ })).not.toContainText(
-      'Daytona',
-    );
-    await expect(page.getByRole('combobox', { name: /^Configuration\b/ })).toContainText(
-      'Large · Modal',
-    );
+    await expect(page.getByRole('combobox', { name: /configuration|region/i })).toHaveCount(0);
     await expect(page.getByLabel('Workspace disk · optional')).toHaveValue(diskId);
     await expect(page.getByLabel('Minimum vCPUs', { exact: true })).toHaveValue('2');
     await expect(page.getByLabel('Minimum memory (GiB)', { exact: true })).toHaveValue('4');
     await expect(page.getByRole('alert')).toHaveCount(0);
     expect(writes).toEqual([]);
+    await page.getByRole('button', { name: 'Start 30-second auction' }).click();
+    await expect.poll(() => writes.length).toBe(1);
+    expect(writes[0]!.body).toMatchObject({
+      catalogId: 'e2b:small:us',
+      diskId,
+      region: 'any',
+      matchAcrossProviders: true,
+      requirements: { cpu: 2, memoryGb: 4 },
+    });
   } finally {
     releaseOptions();
   }
 });
 
-test('adding a disk preserves an already reviewed configuration and resource requirements', async ({
+test('adding a disk preserves reviewed resources and finds a qualified provider', async ({
   page,
 }) => {
   const previous = {
@@ -407,26 +403,31 @@ test('adding a disk preserves an already reviewed configuration and resource req
   );
   await page.goto('/new/vm?diskId=' + diskId);
   await page.getByRole('button', { name: 'Review manually', exact: true }).click();
-  await expect(page.getByRole('combobox', { name: /^Configuration\b/ })).toHaveValue(
-    'daytona:large:us',
-  );
+  await expect(page.getByRole('combobox', { name: /configuration|region/i })).toHaveCount(0);
   await expect(page.getByLabel('Minimum vCPUs', { exact: true })).toHaveValue('4');
   await expect(page.getByLabel('Minimum memory (GiB)', { exact: true })).toHaveValue('12');
-  await expect(page.getByRole('alert')).toContainText(
-    'selected configuration cannot mount this disk',
-  );
-  await expect(page.getByRole('button', { name: 'Start 30-second auction' })).toBeDisabled();
+  await expect(page.getByRole('alert')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Start 30-second auction' })).toBeEnabled();
   const saved = await page.evaluate(() => JSON.parse(sessionStorage.getItem('wick-draft')!));
   expect(saved).toMatchObject({
-    catalogId: 'daytona:large:us',
     diskId,
     durationMinutes: 60,
     requirements: { cpu: 4, memoryGb: 12 },
   });
   expect(writes).toEqual([]);
+  await page.getByRole('button', { name: 'Start 30-second auction' }).click();
+  await expect.poll(() => writes.length).toBe(1);
+  expect(writes[0]!.body).toMatchObject({
+    catalogId: 'modal:large:auto',
+    diskId,
+    region: 'any',
+    matchAcrossProviders: true,
+    durationMinutes: 60,
+    requirements: { cpu: 4, memoryGb: 12 },
+  });
 });
 
-test('rejects an unsupported Muse disk proposal without replacing reviewed requirements', async ({
+test('reconciles a Muse disk proposal through a qualified provider without changing its resources', async ({
   page,
 }) => {
   const writes = await fixture(page, {
@@ -437,10 +438,22 @@ test('rejects an unsupported Muse disk proposal without replacing reviewed requi
   await page.goto('/new/vm?diskId=' + diskId);
   await page.getByLabel('Describe your environment').fill('A shared disk environment');
   await page.getByRole('button', { name: 'Prepare with Muse' }).click();
-  await expect(page.getByRole('alert')).toContainText('cannot mount this disk');
-  await expect(page).toHaveURL(new RegExp('/new/vm\\?diskId=' + diskId));
-  expect(await page.evaluate(() => sessionStorage.getItem('wick-draft'))).toBeNull();
+  await expect(page).toHaveURL(/\/requests\/review$/);
+  await expect(page.getByRole('alert')).toHaveCount(0);
+  await expect(page.getByLabel('Minimum vCPUs', { exact: true })).toHaveValue('2');
+  await expect(page.getByLabel('Minimum memory (GiB)', { exact: true })).toHaveValue('4');
+  await expect(page.getByRole('button', { name: 'Start 30-second auction' })).toBeEnabled();
   expect(writes.map((write) => write.path)).toEqual(['/api/muse/translate']);
+  await page.getByRole('button', { name: 'Start 30-second auction' }).click();
+  await expect.poll(() => writes.length).toBe(2);
+  expect(writes[1]!.body).toMatchObject({
+    catalogId: 'e2b:small:us',
+    diskId,
+    region: 'any',
+    matchAcrossProviders: true,
+    durationMinutes: 30,
+    requirements: { cpu: 2, memoryGb: 4 },
+  });
 });
 
 test('shows disk unavailability before preparing a linked VM rental', async ({ page }) => {

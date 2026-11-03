@@ -7,8 +7,7 @@ import {
   TableState,
   TableStatus,
 } from './table';
-import { lazy, Suspense, useEffect, useState, type FormEvent } from 'react';
-import { fixedQuote, managedPricing } from '../shared/pricing';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { parseExplicitBuyerDescription } from '../shared/muse-contracts';
 import { addCents, isMoneyCents, MIN_ORDER_PRICE_CENTS } from '../shared/money';
 import { seedAlternativeDraft } from './negotiation';
@@ -54,7 +53,6 @@ import {
   saveDraft,
   shortDate,
   type Bid,
-  type Draft,
   type EnvironmentRequest,
   type Invoice,
   type Proposal,
@@ -183,8 +181,8 @@ export function NewEnvironment() {
         description: description.trim(),
         ...(linkedDiskId || reviewed.diskId ? { diskId: linkedDiskId || reviewed.diskId } : {}),
         catalogId: reviewed.catalogId,
-        region: reviewed.region,
-        matchAcrossProviders: reviewed.matchAcrossProviders,
+        region: 'any',
+        matchAcrossProviders: true,
         durationMinutes: reviewed.durationMinutes,
         maxPriceCents: budget,
         requirements: reviewed.requirements,
@@ -192,24 +190,21 @@ export function NewEnvironment() {
       navigate('/requests/review');
       return;
     }
-    const explicitRegion = parseExplicitBuyerDescription(description).region;
-    const reference =
-      (explicitRegion
-        ? (approved.find((item) => item.region === explicitRegion && item.profile === 'small') ??
-          approved.find((item) => item.region === explicitRegion))
-        : undefined) ?? first;
+    const explicit = parseExplicitBuyerDescription(description);
     saveDraft({
       description: description.trim(),
       ...(linkedDiskId ? { diskId: linkedDiskId } : {}),
-      catalogId: reference.id,
-      region: modes.wick === 'real' ? (explicitRegion ?? 'any') : reference.region,
-      matchAcrossProviders: modes.wick === 'real',
-      durationMinutes: reference.durationMinutes.includes(30) ? 30 : reference.durationMinutes[0]!,
+      catalogId: first.id,
+      region: 'any',
+      matchAcrossProviders: true,
+      durationMinutes:
+        explicit.durationMinutes ??
+        (first.durationMinutes.includes(30) ? 30 : first.durationMinutes[0]!),
       maxPriceCents: budget,
       requirements: {
-        cpu: reference.cpu,
-        memoryGb: reference.memoryGb,
-        ...(reference.gpu ? { gpu: reference.gpu } : {}),
+        cpu: explicit.requirements.cpu ?? first.cpu,
+        memoryGb: explicit.requirements.memoryGb ?? first.memoryGb,
+        ...(explicit.requirements.gpu ? { gpu: explicit.requirements.gpu } : {}),
       },
     });
     navigate('/requests/review');
@@ -233,18 +228,11 @@ export function NewEnvironment() {
       const result = await post<Proposal>('/api/muse/translate', {
         description: description.trim(),
       });
-      if (linkedDiskId && !approved.some((item) => item.id === result.proposal.catalogId))
-        throw new Error(
-          'Muse selected a configuration that cannot mount this disk. Use manual review to choose a disk-compatible configuration.',
-        );
       saveDraft({
         ...result.proposal,
         ...(linkedDiskId ? { diskId: linkedDiskId } : {}),
-        region:
-          modes.wick === 'real'
-            ? (parseExplicitBuyerDescription(description).region ?? 'any')
-            : result.proposal.region,
-        matchAcrossProviders: modes.wick === 'real',
+        region: 'any',
+        matchAcrossProviders: true,
         description: description.trim(),
         maxPriceCents: budget,
         receipt: result.receipt,
@@ -381,7 +369,7 @@ export function NewEnvironment() {
           <div className="market-divider" />
           <h3>From review to terminal</h3>
           <ol className="market-explain-list">
-            <li>Review your configuration, duration and maximum price.</li>
+            <li>Review your minimum resources, duration and maximum price.</li>
             <li>Providers bid for 30 seconds. The lowest eligible offer wins.</li>
             <li>Open your VM and run your own commands.</li>
           </ol>
@@ -393,7 +381,8 @@ export function NewEnvironment() {
             <Sparkles size={15} /> Muse drafts
           </h3>
           <p className="market-copy">
-            Muse suggests an approved configuration. You can edit every choice before submitting.
+            Muse turns your description into resource requirements. Review and edit them before
+            submitting.
           </p>
           <span className="quiet-badge">
             {modes.muse === 'fixture' ? 'Fixture mode · no model call' : museLabel}
@@ -407,371 +396,7 @@ export function NewEnvironment() {
   );
 }
 
-export function RequestReview() {
-  const { catalog, modes } = useSession(),
-    navigate = useNavigate();
-  const [draft, setDraft] = useState<Draft | null>(loadDraft),
-    [busy, setBusy] = useState(false),
-    [error, setError] = useState('');
-  const diskOptions = useDiskOptions();
-  const approved = catalog.filter(
-      (item) =>
-        item.approved && (!draft?.diskId || diskOptions.data?.eligibleCatalogIds.includes(item.id)),
-    ),
-    selected = approved.find((item) => item.id === draft?.catalogId);
-  function update(change: Partial<Draft>) {
-    setDraft((old) => (old ? { ...old, ...change } : old));
-  }
-  useEffect(() => {
-    if (draft) saveDraft(draft);
-  }, [draft]);
-  if (!draft)
-    return (
-      <>
-        <PageHeader title="Review instant order" />
-        <EmptyState
-          icon={<SquareTerminal size={26} />}
-          title="No request to review yet"
-          description="Describe what you need, or choose your configuration manually."
-        >
-          <Link href="/new/vm" className="button primary">
-            New environment
-            <ArrowRight size={16} />
-          </Link>
-        </EmptyState>
-      </>
-    );
-  async function submit(event: FormEvent) {
-    event.preventDefault();
-    if (!draft || !selected) return;
-    setBusy(true);
-    setError('');
-    try {
-      const request = await post<EnvironmentRequest>('/api/requests', {
-        description: draft.description.trim() || `${selected.name} environment`,
-        ...(draft.diskId ? { diskId: draft.diskId } : {}),
-        catalogId: draft.catalogId,
-        region: draft.region,
-        matchAcrossProviders: draft.matchAcrossProviders === true,
-        durationMinutes: draft.durationMinutes,
-        maxPriceCents: draft.maxPriceCents,
-        requirements: draft.requirements,
-      });
-      sessionStorage.removeItem('wick-draft');
-      navigate(`/requests/${request.id}`);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unable to start auction.');
-    } finally {
-      setBusy(false);
-    }
-  }
-  return (
-    <>
-      <Link href="/new/vm" className="back-link">
-        <ChevronLeft size={16} />
-        Back to description
-      </Link>
-      <PageHeader
-        title="Review instant order"
-        description="Review your environment before providers start bidding."
-      />
-      <Steps active={1} />
-      {!selected && (!draft.diskId || !diskOptions.loading) && (
-        <ErrorBox
-          error={
-            draft.diskId
-              ? diskOptions.error ||
-                (!diskOptions.data?.enabled
-                  ? 'Disk support is currently unavailable. Remove the disk or try again after support is restored.'
-                  : 'The selected configuration cannot mount this disk. Choose an available disk-compatible configuration before starting a new auction.')
-              : 'The original configuration is no longer approved. Choose an available configuration before starting a new auction.'
-          }
-        />
-      )}
-      <form onSubmit={submit}>
-        <div className="review-grid">
-          <section className="card">
-            <div className="section-heading">
-              <h2>Environment specification</h2>
-              <span className="quiet-badge">Editable review</span>
-            </div>
-            <label className="field" htmlFor="review-description">
-              <span>Your requirement</span>
-              <textarea
-                id="review-description"
-                rows={3}
-                maxLength={4000}
-                value={draft.description}
-                onChange={(e) => update({ description: e.target.value })}
-                placeholder="Describe your environment"
-              />
-            </label>
-            <label className="field" htmlFor="configuration">
-              <span>
-                {draft.matchAcrossProviders ? 'Reference configuration' : 'Configuration'}
-              </span>
-              <select
-                id="configuration"
-                value={draft.catalogId}
-                onChange={(e) => {
-                  const item = approved.find((c) => c.id === e.target.value)!;
-                  update({
-                    catalogId: item.id,
-                    region:
-                      draft.matchAcrossProviders && draft.region === 'any' ? 'any' : item.region,
-                    requirements: {
-                      cpu: item.cpu,
-                      memoryGb: item.memoryGb,
-                      ...(item.gpu ? { gpu: item.gpu } : {}),
-                    },
-                    durationMinutes: item.durationMinutes.includes(draft.durationMinutes)
-                      ? draft.durationMinutes
-                      : item.durationMinutes.includes(30)
-                        ? 30
-                        : item.durationMinutes[0]!,
-                  });
-                }}
-                required
-              >
-                {!selected && (
-                  <option value={draft.catalogId} disabled>
-                    Choose an available configuration
-                  </option>
-                )}
-                {approved.map((item) => (
-                  <option value={item.id} key={item.id}>
-                    {item.name} · {item.cpu} vCPU · {item.memoryGb} GiB RAM
-                  </option>
-                ))}
-              </select>
-              {selected && <span className="field-hint">{selected.description}</span>}
-            </label>
-            {modes.wick === 'real' && (
-              <div className="catalog-checks">
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={draft.matchAcrossProviders === true}
-                    onChange={(e) =>
-                      update({
-                        matchAcrossProviders: e.target.checked,
-                        region: e.target.checked
-                          ? draft.region
-                          : (selected?.region ?? draft.region),
-                      })
-                    }
-                  />
-                  <div>
-                    <strong>Let compatible providers compete</strong>
-                    <span>
-                      Match your minimum resources and exact rental length across available
-                      providers. Region limits below remain binding. Blaxel CPU and disk figures are
-                      provider-managed estimates.
-                    </span>
-                  </div>
-                </label>
-              </div>
-            )}
-            <div className="field-grid">
-              <label className="field" htmlFor="region">
-                <span>Region</span>
-                <select
-                  id="region"
-                  value={draft.region}
-                  onChange={(e) => update({ region: e.target.value })}
-                >
-                  {draft.matchAcrossProviders && <option value="any">Any available region</option>}
-                  {draft.region !== 'any' && draft.region !== selected?.region && (
-                    <option value={draft.region}>{regionName(draft.region)}</option>
-                  )}
-                  {selected && (
-                    <option value={selected.region}>{regionName(selected.region)}</option>
-                  )}
-                </select>
-              </label>
-              <label className="field" htmlFor="duration">
-                <span>Rental duration</span>
-                <select
-                  id="duration"
-                  value={draft.durationMinutes}
-                  onChange={(e) => update({ durationMinutes: Number(e.target.value) })}
-                >
-                  {selected?.durationMinutes
-                    .filter((n) => [15, 30, 60].includes(n))
-                    .map((n) => (
-                      <option value={n} key={n}>
-                        {n} minutes
-                      </option>
-                    ))}
-                </select>
-              </label>
-            </div>
-            <DiskPicker
-              value={draft.diskId ?? ''}
-              options={diskOptions.data}
-              onChange={(diskId) => update({ diskId: diskId || undefined })}
-            />
-            {draft.diskId && (
-              <p className="field-hint">
-                Only providers qualified to mount this disk are eligible. Use a separate folder for
-                each agent.
-              </p>
-            )}
-            <div className="field-grid">
-              <label className="field" htmlFor="cpus">
-                <span>Minimum vCPUs</span>
-                <input
-                  id="cpus"
-                  type="number"
-                  min={1}
-                  max={selected?.cpu || 256}
-                  step={1}
-                  value={draft.requirements.cpu}
-                  onChange={(e) =>
-                    update({ requirements: { ...draft.requirements, cpu: Number(e.target.value) } })
-                  }
-                  required
-                />
-              </label>
-              <label className="field" htmlFor="memory">
-                <span>Minimum memory (GiB)</span>
-                <input
-                  id="memory"
-                  type="number"
-                  min={Number.MIN_VALUE}
-                  max={selected?.memoryGb || 2048}
-                  step="any"
-                  value={draft.requirements.memoryGb}
-                  onChange={(e) =>
-                    update({
-                      requirements: { ...draft.requirements, memoryGb: Number(e.target.value) },
-                    })
-                  }
-                  required
-                />
-              </label>
-            </div>
-            <MoneyInput
-              id="max-price"
-              label="Maximum total price (USD)"
-              value={draft.maxPriceCents}
-              onChange={(maxPriceCents) => update({ maxPriceCents })}
-              min={1}
-            />
-            <p className="field-hint">
-              Your ceiling for the entire rental. The lowest eligible bid wins. No Broker fee is
-              added to the accepted total; the provider pays the 15% commission.
-            </p>
-            {draft.receipt && <ReceiptCard receipt={draft.receipt} mode={draft.museMode} />}
-          </section>
-          <aside className="review-side">
-            <div className="card order-summary">
-              <div className="icon-tile emerald">
-                <Layers3 size={21} />
-              </div>
-              <h2>Your environment, at a glance</h2>
-              <p>
-                {draft.matchAcrossProviders
-                  ? 'Lowest compatible provider offer'
-                  : selected?.name || 'Select a configuration'}
-              </p>
-              <DetailRow label="Resources">
-                {draft.requirements.cpu} vCPU · {draft.requirements.memoryGb} GiB
-              </DetailRow>
-              <DetailRow label="Region">{regionName(draft.region)}</DetailRow>
-              <DetailRow label="Rental">{draft.durationMinutes} minutes</DetailRow>
-              {draft.diskId && (
-                <DetailRow label="Persistent disk">
-                  <Link href={'/disks/' + draft.diskId}>
-                    View selected disk <ArrowRight size={13} />
-                  </Link>
-                </DetailRow>
-              )}
-              <DetailRow label="Auction length">30 seconds</DetailRow>
-              {selected?.pricingMode === 'managed' &&
-                selected.rateMicrosPerSecond !== undefined && (
-                  <>
-                    <DetailRow
-                      label={draft.matchAcrossProviders ? 'Reference managed rate' : 'Managed rate'}
-                    >
-                      {selected.rateMicrosPerSecond} µUSD / second
-                    </DetailRow>
-                    <DetailRow
-                      label={
-                        draft.matchAcrossProviders
-                          ? 'Reference target quote'
-                          : 'Suggested target quote'
-                      }
-                    >
-                      {money(
-                        fixedQuote(managedPricing(selected), draft.durationMinutes).totalPriceCents,
-                      )}
-                    </DetailRow>
-                    <p className="field-hint">
-                      The suggested total covers estimated compute after the provider’s 15%
-                      commission. Your accepted offer freezes the full rental price, with no added
-                      Broker fee.
-                    </p>
-                  </>
-                )}
-              <div className="summary-total">
-                <span>Maximum total</span>
-                <strong>
-                  {money(draft.maxPriceCents)}
-                  <small>USD</small>
-                </strong>
-              </div>
-              <span className="demo-price-note">
-                {modes.wick === 'real'
-                  ? 'Provider allocations backed by Wick'
-                  : 'Simulated demo supply'}{' '}
-                · No payment due
-              </span>
-              <button
-                type="submit"
-                className="button primary full-width"
-                disabled={busy || !selected}
-              >
-                {busy ? (
-                  <Spinner label="Starting auction" />
-                ) : (
-                  <>
-                    Start 30-second auction
-                    <ArrowRight size={16} />
-                  </>
-                )}
-              </button>
-            </div>
-            <div className="rental-notes">
-              <div>
-                <Clock3 size={17} />
-                <p>
-                  <strong>The clock includes setup.</strong> Your rental begins at Wick provisioning
-                  admission. The exact expiry appears on your VM.
-                </p>
-              </div>
-              <div>
-                <ShieldCheck size={17} />
-                <p>
-                  <strong>Ready is what counts.</strong> One fixed charge only after Wick confirms
-                  running and terminal capability. No charge if it expires before ready.
-                </p>
-              </div>
-              <div>
-                <LockKeyhole size={17} />
-                <p>
-                  <strong>Your request becomes final.</strong> Changing requirements after launch
-                  means starting a new auction.
-                </p>
-              </div>
-            </div>
-          </aside>
-        </div>
-        <ErrorBox error={error} />
-      </form>
-    </>
-  );
-}
+export { RequestReview } from './auction-review';
 
 export function AuctionPage({ id }: { id: string }) {
   const [poll, setPoll] = useState(2000);
