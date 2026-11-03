@@ -1,5 +1,14 @@
 import { useEffect, useState } from 'react';
-import { ArrowRight, ArrowUpRight, Bot, Clock3, RefreshCw, Sparkles } from 'lucide-react';
+import {
+  ArrowRight,
+  ArrowUpRight,
+  Bot,
+  Clock3,
+  Cpu,
+  RefreshCw,
+  Sparkles,
+  TerminalSquare,
+} from 'lucide-react';
 import { Brand } from './brand';
 import { Link } from './components';
 import {
@@ -37,6 +46,7 @@ export function DemoLanding() {
         </Link>
         <nav aria-label="Marketplace navigation">
           <Link href="/">Marketplace</Link>
+          <Link href="/demo/buyer">Interactive demo</Link>
           <Link href="/demos" aria-current="page">
             Live demos
           </Link>
@@ -67,6 +77,48 @@ export function DemoLanding() {
           </div>
         </section>
 
+        <section className="demos-interactive" aria-labelledby="interactive-demo-title">
+          <div className="demos-interactive-heading">
+            <div>
+              <span className="home-eyebrow">INTERACTIVE PRODUCT TOUR</span>
+              <h2 id="interactive-demo-title">See both sides of the market.</h2>
+              <p>
+                Step into a ready-to-explore workspace. Try a purchase or manage supply with sample
+                data, then reset and try again.
+              </p>
+            </div>
+            <span className="demos-interactive-badge">
+              <Sparkles size={13} /> Opens instantly · No signup
+            </span>
+          </div>
+          <div className="demos-interactive-options">
+            <Link href="/demo/buyer" className="demos-interactive-option">
+              <span className="demos-interactive-icon" aria-hidden="true">
+                <TerminalSquare size={22} />
+              </span>
+              <span>
+                <strong>Explore as a buyer</strong>
+                <span>Set your budget, compare bids and open a simulated workspace.</span>
+              </span>
+              <ArrowRight size={18} aria-hidden="true" />
+            </Link>
+            <Link href="/demo/seller" className="demos-interactive-option">
+              <span className="demos-interactive-icon" aria-hidden="true">
+                <Cpu size={22} />
+              </span>
+              <span>
+                <strong>Explore as a seller</strong>
+                <span>Set your capacity, control bidding limits and review sample earnings.</span>
+              </span>
+              <ArrowRight size={18} aria-hidden="true" />
+            </Link>
+          </div>
+          <p className="demos-interactive-note">
+            These tours use sample data and simulated actions. The live demos below connect to real
+            resources when available.
+          </p>
+        </section>
+
         {fixtureMode && (
           <p className="demo-fixture-note" role="status">
             Fixture preview · Resources, model responses, and execution are simulated.
@@ -75,7 +127,7 @@ export function DemoLanding() {
         {!demo.data?.run && <DemoError demo={demo} />}
         <div className="demos-toolbar">
           <div>
-            <h2>Choose a demo</h2>
+            <h2>Choose a live demo</h2>
             <DemoAvailability demo={demo} />
           </div>
           {!demo.data?.run && !demo.error && (

@@ -1,4 +1,5 @@
 import { PROVIDER_REGISTRY } from '../shared/providers.js';
+import { demoLocation, getDemoStore } from './demo-store';
 import { isSponsoredComputeQuote } from '../shared/pricing';
 import { centsToUsd, formatMoney, formatMoneyMicros } from '../shared/money';
 import type {
@@ -208,6 +209,20 @@ export class ApiError extends Error {
 }
 
 export async function api<T>(url: string, options: RequestInit = {}): Promise<T> {
+  const demo = demoLocation();
+  if (demo) {
+    const store = getDemoStore(demo.role);
+    const { demoRequest } = await import('./demo-api');
+    if (demoLocation()?.role !== demo.role || getDemoStore(demo.role) !== store)
+      throw new DOMException('Demo workspace changed', 'AbortError');
+    try {
+      return demoRequest(demo.role, url, options) as T;
+    } catch (error) {
+      if (error instanceof Error && 'status' in error)
+        throw new ApiError(error.message, Number(error.status));
+      throw error;
+    }
+  }
   const headers = new Headers(options.headers);
   if (options.body) headers.set('Content-Type', 'application/json');
   if (
@@ -294,14 +309,24 @@ export const statusLabel = (status: string) =>
 export const rentalSourceLabel = (mode: Mode | undefined) =>
   mode === 'real' ? 'Real Wick VM' : 'Fixture simulation';
 export const loadDraft = (): Draft | null => {
+  const demo = demoLocation();
+  if (demo) return (getDemoStore(demo.role).draft as Draft | undefined) ?? null;
   try {
     return JSON.parse(sessionStorage.getItem('wick-draft') || 'null') as Draft | null;
   } catch {
     return null;
   }
 };
-export const saveDraft = (draft: Draft) =>
-  sessionStorage.setItem('wick-draft', JSON.stringify(draft));
+export const saveDraft = (draft: Draft) => {
+  const demo = demoLocation();
+  if (demo) getDemoStore(demo.role).draft = structuredClone(draft);
+  else sessionStorage.setItem('wick-draft', JSON.stringify(draft));
+};
+export const clearDraft = () => {
+  const demo = demoLocation();
+  if (demo) delete getDemoStore(demo.role).draft;
+  else sessionStorage.removeItem('wick-draft');
+};
 
 export const cloudRouteName = (provider: string) =>
   provider === 'provider-blaxel'

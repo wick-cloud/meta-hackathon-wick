@@ -26,6 +26,7 @@ export function HomePage() {
           <Brand />
         </Link>
         <nav aria-label="Marketplace navigation">
+          <Link href="/demo/buyer">Interactive demo</Link>
           <Link href="/demos">Live demos</Link>
           <a href="#marketplace">Marketplace</a>
           <a href="#how-it-works">How it works</a>
@@ -49,21 +50,23 @@ export function HomePage() {
               private workspace, or bring your next task to Muse Studio.
             </p>
             <div className="home-hero-actions">
-              <Link href="/demos" className="button primary">
+              <Link href="/demo/buyer" className="button primary">
+                Try interactive demo <ArrowRight size={16} />
+              </Link>
+              <Link href="/demos" className="button secondary">
                 Explore live demos <ArrowRight size={16} />
               </Link>
+            </div>
+            <p className="home-access-note">
+              Explore with sample data. No account needed.{' '}
               <a
                 href="https://app.wick-cloud.com/waitlist"
-                className="button secondary"
                 target="_blank"
                 rel="noopener noreferrer"
                 aria-label="Join buyer beta (opens in a new tab)"
               >
-                Join buyer beta <ArrowUpRight size={16} />
+                Join buyer beta ↗
               </a>
-            </div>
-            <p className="home-access-note">
-              Try the platform without an account. Build with us in the buyer beta.
             </p>
             <div className="home-hero-facts">
               <span>
@@ -253,8 +256,8 @@ export function HomePage() {
                   </div>
                 </li>
               </ol>
-              <Link href="/login?intent=buy">
-                Enter buyer workspace <ArrowRight size={15} />
+              <Link href="/demo/buyer">
+                Try the buyer demo <ArrowRight size={15} />
               </Link>
             </article>
             <article>
@@ -294,8 +297,8 @@ export function HomePage() {
                   </div>
                 </li>
               </ol>
-              <Link href="/login?intent=sell">
-                Enter seller workspace <ArrowRight size={15} />
+              <Link href="/demo/seller">
+                Try the seller demo <ArrowRight size={15} />
               </Link>
             </article>
           </div>

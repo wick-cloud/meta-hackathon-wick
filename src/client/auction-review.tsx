@@ -1,7 +1,15 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { ArrowRight, Clock3, Cpu, ShieldCheck, Sparkles } from 'lucide-react';
 import { isMoneyCents, MIN_ORDER_PRICE_CENTS } from '../shared/money';
-import { loadDraft, money, post, saveDraft, type Draft, type EnvironmentRequest } from './api';
+import {
+  clearDraft,
+  loadDraft,
+  money,
+  post,
+  saveDraft,
+  type Draft,
+  type EnvironmentRequest,
+} from './api';
 import {
   EmptyState,
   ErrorBox,
@@ -129,7 +137,7 @@ export function RequestReview() {
         maxPriceCents: draft.maxPriceCents,
         requirements: draft.requirements,
       });
-      sessionStorage.removeItem('wick-draft');
+      clearDraft();
       navigate(`/requests/${request.id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to start auction.');

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { demoDownloadHref, demoLocation } from './demo-store';
 import {
   ArrowLeft,
   ArrowRight,
@@ -767,7 +768,11 @@ export function CodingJobPage({ id }: { id: string }) {
                     {patch.output || 'No source changes were recorded in this job.'}
                   </pre>
                   {!patch.truncated && patch.output && (
-                    <a className="button secondary" href={'/api/coding/jobs/' + id + '/patch'}>
+                    <a
+                      className="button secondary"
+                      href={demoDownloadHref('/api/coding/jobs/' + id + '/patch', patch.output)}
+                      download={demoLocation() ? 'wick-demo.patch' : undefined}
+                    >
                       <Download size={15} />
                       Download patch
                     </a>

@@ -1,4 +1,5 @@
 import { centsToUsd, usdToCents } from '../shared/money';
+import { demoHref, demoLocation } from './demo-store';
 import {
   createContext,
   useContext,
@@ -30,6 +31,8 @@ export const useSession = () => useContext(SessionContext);
 export const useNavigate = () => useContext(NavigationContext);
 export function Link({ href = '', onClick, ...props }: AnchorHTMLAttributes<HTMLAnchorElement>) {
   const navigate = useNavigate();
+  const demo = demoLocation();
+  if (demo) href = demoHref(href, demo.role);
   return (
     <a
       href={href}
