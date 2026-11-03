@@ -1090,7 +1090,8 @@ function liveBids(): TokenBid[] {
 test('token auctions share the VM countdown, retain the deadline on refresh, and await a confirmed award', async ({
   page,
 }) => {
-  await page.clock.install({ time: new Date('2026-10-30T20:00:00Z') });
+  await page.clock.install({ time: new Date('2026-10-30T19:59:59Z') });
+  await page.clock.pauseAt(new Date('2026-10-30T20:00:00Z'));
   const f = await fixture(page);
   f.orders.push(liveOrder());
   f.bids.push(...liveBids());

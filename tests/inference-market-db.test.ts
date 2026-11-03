@@ -2361,15 +2361,23 @@ describe.skipIf(!url)(
         clock_timestamp()-interval '1 day',clock_timestamp()-interval '2 days'-n*interval '1 second' FROM generate_series(1,14000)n`,
         [owner.id, other.id],
       );
+      await pool.query(
+        `INSERT INTO broker_inference_grants(buyer_id,name,status,source_mode,funding_source,funded_cents,available_cents,returned_cents,max_purchase_cents,allowed_providers,expires_at,created_at)
+        SELECT $1,'Wallet purchase '||n,'closed','fixture','wallet',1,0,1,1,'["modal","baseten"]',
+        clock_timestamp()+interval '1 day',clock_timestamp()-n*interval '1 second' FROM generate_series(1,4000)n`,
+        [owner.id],
+      );
       await pool.query(`INSERT INTO broker_inference_buying_policies(grant_id,mode,paused,max_purchase_cents,output_per_call,target_calls,refill_at_calls)
-        SELECT id,'automatic',true,1,512,1,0 FROM broker_inference_grants WHERE status='closed'`);
+        SELECT id,'automatic',true,1,512,1,0 FROM broker_inference_grants WHERE funding_source='agent' AND status='closed'`);
       await pool.query('ANALYZE broker_inference_grants');
       await pool.query('ANALYZE broker_inference_buying_policies');
       const spy = vi.spyOn(pool, 'query');
       let pageCalls: unknown[][] = [],
         dueCalls: unknown[][] = [];
       try {
-        expect((await listAgents(ctx, owner, { limit: '5' })).items).toHaveLength(5);
+        const listed = (await listAgents(ctx, owner, { limit: '5' })).items;
+        expect(listed).toHaveLength(5);
+        expect(listed.every((item) => item.fundingSource === 'agent')).toBe(true);
         pageCalls = spy.mock.calls.map((args) => [...args]);
         spy.mockClear();
         await maintainBuying(ctx);
@@ -2378,11 +2386,13 @@ describe.skipIf(!url)(
         spy.mockRestore();
       }
       expect(pageCalls).toHaveLength(2);
+      expect(String(pageCalls[0][0])).toContain("g.funding_source='agent'");
       expect((pageCalls[1][1] as string[][])[0]).toHaveLength(5);
       const due = dueCalls.find((args) =>
         String(args[0]).includes('SELECT p.grant_id,g.buyer_id'),
       )!;
       expect(due).toBeDefined();
+      expect(String(due[0])).toContain("g.funding_source='agent'");
       await pool.query(
         "UPDATE broker_inference_buying_policies SET next_evaluation_at=clock_timestamp()-interval '1 second' WHERE grant_id=$1",
         [g.id],
@@ -2402,8 +2412,12 @@ describe.skipIf(!url)(
           label === 'agents' ? 6 : label === 'worker' ? 4 : 5,
         );
         expect(nodes.some((n) => String(n['Sort Method']).includes('external'))).toBe(false);
-        if (label === 'agents')
-          expect(nodes.some((n) => n['Index Name'] === 'broker_inference_grants_owner')).toBe(true);
+        if (label === 'agents') {
+          const pageScan = nodes.find((n) => n['Index Name'] === 'broker_agent_grants_owner_page');
+          expect(pageScan).toBeDefined();
+          expect(pageScan['Actual Rows']).toBeLessThanOrEqual(6);
+          expect(pageScan['Rows Removed by Filter'] ?? 0).toBe(0);
+        }
         if (label === 'worker')
           expect(nodes.some((n) => n['Index Name'] === 'broker_inference_buying_due')).toBe(true);
         evidence.push({
@@ -2416,7 +2430,9 @@ describe.skipIf(!url)(
       }
       if (process.env.BUYING_QUERY_EVIDENCE)
         process.stdout.write(
-          'Local buying query evidence: 14,000 closed grants ' + JSON.stringify(evidence) + '\n',
+          'Local buying query evidence: 14,000 agent and 4,000 wallet grants ' +
+            JSON.stringify(evidence) +
+            '\n',
         );
     });
 
