@@ -438,6 +438,7 @@ export function HomepageDemoSession({ demo }: { demo: HomepageDemo }) {
   const callsRemaining = run.tokens
     ? Math.max(0, data.limits.maxRequests - run.tokens.requestsUsed)
     : 0;
+  const museCallsUsed = terminalReady && !!run.tokens && callsRemaining === 0;
   const title = ready
     ? 'Your live workspace is ready.'
     : ending
@@ -535,43 +536,56 @@ export function HomepageDemoSession({ demo }: { demo: HomepageDemo }) {
               {callsRemaining} {callsRemaining === 1 ? 'call' : 'calls'} left
             </span>
           </div>
-          <div className="demo-run-instructions">
-            <div className="demo-instruction">
-              <span className="demo-step-number">1</span>
+          {museCallsUsed ? (
+            <div className="demo-allowance-used" role="status">
+              <Sparkles size={18} />
               <div>
-                <strong>Get your Muse key</strong>
-                <p>This key uses only the token pack you won.</p>
+                <strong>Muse calls used. Your terminal is still available.</strong>
+                <p>
+                  Keep inspecting or editing files, or run Python and shell commands until the
+                  session timer expires.
+                </p>
               </div>
-              {key ? (
-                <CopyButton label="Copy key" text={key.token} />
-              ) : (
-                <button
-                  className="button secondary small"
-                  disabled={!run.canIssueKey || !terminalReady || !!busy}
-                  onClick={() => {
-                    if (run.keyIssued || demo.keyUncertain) setConfirmKey(true);
-                    else void demo.act('key');
-                  }}
-                >
-                  <KeyRound size={14} />
-                  {busy === 'key'
-                    ? 'Issuing…'
-                    : run.keyIssued || demo.keyUncertain
-                      ? 'Replace key'
-                      : 'Get demo key'}
-                </button>
-              )}
             </div>
-            <div className="demo-instruction">
-              <span className="demo-step-number">2</span>
-              <div>
-                <strong>Run your script in the terminal</strong>
-                <code>{command}</code>
+          ) : (
+            <div className="demo-run-instructions">
+              <div className="demo-instruction">
+                <span className="demo-step-number">1</span>
+                <div>
+                  <strong>Get your Muse key</strong>
+                  <p>This key uses only the token pack you won.</p>
+                </div>
+                {key ? (
+                  <CopyButton label="Copy key" text={key.token} />
+                ) : (
+                  <button
+                    className="button secondary small"
+                    disabled={!run.canIssueKey || !terminalReady || !!busy}
+                    onClick={() => {
+                      if (run.keyIssued || demo.keyUncertain) setConfirmKey(true);
+                      else void demo.act('key');
+                    }}
+                  >
+                    <KeyRound size={14} />
+                    {busy === 'key'
+                      ? 'Issuing…'
+                      : run.keyIssued || demo.keyUncertain
+                        ? 'Replace key'
+                        : 'Get demo key'}
+                  </button>
+                )}
               </div>
-              <CopyButton text={command} label="Copy command" />
+              <div className="demo-instruction">
+                <span className="demo-step-number">2</span>
+                <div>
+                  <strong>Run your script in the terminal</strong>
+                  <code>{command}</code>
+                </div>
+                <CopyButton text={command} label="Copy command" />
+              </div>
             </div>
-          </div>
-          {key && (
+          )}
+          {key && !museCallsUsed && (
             <div className="demo-key-reveal">
               <button className="demo-text-button" onClick={() => setShowKey(!showKey)}>
                 {showKey ? 'Hide key' : 'Reveal key'}
@@ -591,7 +605,7 @@ export function HomepageDemoSession({ demo }: { demo: HomepageDemo }) {
               </p>
             </div>
           )}
-          {confirmKey && (
+          {confirmKey && !museCallsUsed && (
             <div className="demo-confirm" role="group" aria-label="Replace demo key">
               <p>
                 Replacing this key immediately revokes the previous one. Update the key in your
@@ -638,9 +652,17 @@ export function HomepageDemoSession({ demo }: { demo: HomepageDemo }) {
               <Sparkles size={15} />
               Meta Muse · Baseten
             </span>
-            <span>{count(run.tokens?.availableInput ?? 0)} input left</span>
-            <span>{count(run.tokens?.availableOutput ?? 0)} output left</span>
-            <span>Up to {data.limits.maxOutputTokens} output tokens per call</span>
+            <span>
+              {count(run.tokens?.availableInput ?? 0)} input {museCallsUsed ? 'unused' : 'left'}
+            </span>
+            <span>
+              {count(run.tokens?.availableOutput ?? 0)} output {museCallsUsed ? 'unused' : 'left'}
+            </span>
+            <span>
+              {museCallsUsed
+                ? 'Muse call limit reached'
+                : `Up to ${data.limits.maxOutputTokens} output tokens per call`}
+            </span>
           </div>
         </>
       )}

@@ -1,6 +1,7 @@
 import {
   ArrowDown,
   ArrowRight,
+  ArrowUpRight,
   Bot,
   Clock3,
   Code2,
@@ -60,14 +61,20 @@ export function HomePage() {
             </p>
             <div className="home-hero-actions">
               <DemoAction demo={demo} />
-              <Link href="/login?intent=buy" className="home-demo-market-link">
-                Buy resources <ArrowRight size={16} />
-              </Link>
+              <a
+                href="https://app.wick-cloud.com/waitlist"
+                className="button secondary"
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label="Join buyer beta (opens in a new tab)"
+              >
+                Join buyer beta <ArrowUpRight size={16} />
+              </a>
               <Link href="/login?intent=sell" className="home-demo-market-link">
                 Sell capacity <ArrowRight size={16} />
               </Link>
             </div>
-            <p className="home-access-note">Free during the hackathon. No signup.</p>
+            <p className="home-access-note">Live demo: free during the hackathon. No signup.</p>
             {!demo.data?.run && <DemoError demo={demo} />}
             <div className="home-hero-facts">
               <span>
