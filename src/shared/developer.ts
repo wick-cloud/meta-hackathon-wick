@@ -105,6 +105,8 @@ export const BROKER_PUBLIC_ROUTES: readonly BrokerPublicRoute[] = [
   route('POST', '/api/disks', 'disks:write', true),
   route('GET', '/api/disks/:id', 'disks:read'),
   route('GET', '/api/disks/:id/workspaces', 'disks:read'),
+  route('GET', '/api/disks/:id/files', 'disks:read'),
+  route('GET', '/api/disks/:id/file', 'disks:read'),
   route('PATCH', '/api/disks/:id', 'disks:write', true),
   route('DELETE', '/api/disks/:id', 'disks:write', true),
   route('GET', '/api/inference/models', 'inference:read'),

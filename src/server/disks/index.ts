@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { HttpError, type AppContext } from '../context.js';
 import { transaction, enqueue } from '../marketplace/db.js';
 import { uuid } from '../marketplace/data.js';
+import { listDiskFiles, previewDiskFile } from './files.js';
 import {
   createDisk,
   deleteDisk,
@@ -33,6 +34,14 @@ export async function registerDisks(app: FastifyInstance, ctx: AppContext) {
   app.get<{ Params: { id: string } }>('/api/disks/:id/workspaces', async (r) =>
     listWorkspaces(ctx, await ctx.requireActor(r, ['buyer']), uuid(r.params.id), r.query),
   );
+  app.get<{ Params: { id: string } }>('/api/disks/:id/files', async (r, reply) => {
+    reply.header('Cache-Control', 'private, no-store');
+    return listDiskFiles(ctx, await ctx.requireActor(r, ['buyer']), uuid(r.params.id), r.query);
+  });
+  app.get<{ Params: { id: string } }>('/api/disks/:id/file', async (r, reply) => {
+    reply.header('Cache-Control', 'private, no-store');
+    return previewDiskFile(ctx, await ctx.requireActor(r, ['buyer']), uuid(r.params.id), r.query);
+  });
   app.patch<{ Params: { id: string } }>('/api/disks/:id', async (r) =>
     renameDisk(ctx, await ctx.requireActor(r, ['buyer']), uuid(r.params.id), {
       ...(r.body as object),

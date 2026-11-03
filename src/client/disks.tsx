@@ -31,6 +31,7 @@ import {
   TableViewport,
 } from './table';
 import './disks.css';
+import { DiskFiles } from './disk-files';
 
 export interface DiskOptions {
   enabled: boolean;
@@ -517,6 +518,7 @@ export function DiskDetail({ id }: { id: string }) {
           </p>
         </div>
       )}
+      <DiskFiles key={id} disk={disk} />
       <TablePanel label="Attached VMs" className="disk-detail-panel">
         <TableTabs>
           <h2>

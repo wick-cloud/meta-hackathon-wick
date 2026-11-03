@@ -199,6 +199,26 @@ export const BROKER_API_SCHEMAS: Record<string, JsonSchema> = {
     workspaces: arr(ref('DiskWorkspace')),
     attachments: arr(ref('DiskAttachment')),
   }),
+  DiskFileEntry: object(
+    {
+      key: string,
+      name: string,
+      kind: { type: 'string', enum: ['directory', 'file'] },
+      size: { type: 'integer', minimum: 0 },
+    },
+    ['key', 'name', 'kind'],
+  ),
+  DiskFilePage: object(
+    { prefix: string, entries: arr(ref('DiskFileEntry')), nextContinuationToken: string },
+    ['prefix', 'entries'],
+  ),
+  DiskFilePreview: object({
+    key: string,
+    size: { type: 'integer', minimum: 0 },
+    content: { type: ['string', 'null'] },
+    truncated: bool,
+    binary: bool,
+  }),
   InferenceModelList: object({
     object: { const: 'list' },
     data: arr(object({ id, object: { const: 'model' }, created: tokens, owned_by: string })),
@@ -1334,6 +1354,16 @@ export const BROKER_OPERATION_SCHEMAS: Record<string, OperationSchema> = {
     summary: 'List persistent workspaces on an owned disk',
     output: 'DiskWorkspacesPage',
     paginated: true,
+  },
+  'GET /api/disks/:id/files': {
+    operationId: 'listDiskFiles',
+    summary: 'Browse files and folders on an owned disk without starting a VM',
+    output: 'DiskFilePage',
+  },
+  'GET /api/disks/:id/file': {
+    operationId: 'previewDiskFile',
+    summary: 'Preview bounded text from an owned disk file',
+    output: 'DiskFilePreview',
   },
   'PATCH /api/disks/:id': {
     operationId: 'renameDisk',

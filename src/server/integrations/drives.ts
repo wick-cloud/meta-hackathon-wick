@@ -52,6 +52,12 @@ interface DriveConfig {
   wickOrganizationId: string;
   wickGroupId: string;
 }
+/** Retains only the HTTP status, never the upstream response or its credentials. */
+export class WickDriveHttpError extends Error {
+  constructor(readonly statusCode: number) {
+    super(`Wick drive API rejected the request (HTTP ${statusCode}).`);
+  }
+}
 /** Native drive endpoints are newer than the published SDK. This boundary is server-only. */
 export async function driveRequest(
   config: DriveConfig,
@@ -91,7 +97,7 @@ export async function driveRequest(
   }
   if (!response.ok) {
     await response.body?.cancel();
-    throw new Error(`Wick drive API rejected the request (HTTP ${response.status}).`);
+    throw new WickDriveHttpError(response.status);
   }
   const max = 2 * 1024 * 1024;
   if (Number(response.headers.get('content-length')) > max) {
@@ -248,7 +254,7 @@ export function fixtureDrives(config: DriveConfig, pool: Pool): WickDrives {
           key,
         ])
       ).rows[0];
-      if (!row) throw new Error('Simulated drive file not found.');
+      if (!row) throw new WickDriveHttpError(404);
       return {
         key,
         contentBase64: row.content_base64,
@@ -257,10 +263,24 @@ export function fixtureDrives(config: DriveConfig, pool: Pool): WickDrives {
     },
     async listFiles(value, input = {}) {
       await get(value);
+      const prefix = input.prefix ?? '';
+      let after: string | null = null;
+      if (input.continuationToken) {
+        try {
+          const decoded = z
+            .object({ prefix: z.string(), key: z.string() })
+            .strict()
+            .parse(JSON.parse(Buffer.from(input.continuationToken, 'base64url').toString('utf8')));
+          if (decoded.prefix !== prefix || !decoded.key.startsWith(prefix)) throw new Error();
+          after = decoded.key;
+        } catch {
+          throw new WickDriveHttpError(400);
+        }
+      }
       const rows = (
         await pool.query(
-          'SELECT key,content_base64 FROM broker_fixture_drive_files WHERE drive_id=$1 AND left(key,length($2))=$2 ORDER BY key LIMIT 1001',
-          [value, input.prefix ?? ''],
+          'SELECT key,content_base64 FROM broker_fixture_drive_files WHERE drive_id=$1 AND left(key,length($2))=$2 AND ($3::text IS NULL OR key>$3) ORDER BY key LIMIT 1001',
+          [value, prefix, after],
         )
       ).rows;
       return {
@@ -269,6 +289,13 @@ export function fixtureDrives(config: DriveConfig, pool: Pool): WickDrives {
           .map((r) => ({ key: r.key, size: Buffer.from(r.content_base64, 'base64').length })),
         commonPrefixes: [],
         isTruncated: rows.length > 1000,
+        ...(rows.length > 1000
+          ? {
+              nextContinuationToken: Buffer.from(
+                JSON.stringify({ prefix, key: rows[999]!.key }),
+              ).toString('base64url'),
+            }
+          : {}),
       };
     },
   };
