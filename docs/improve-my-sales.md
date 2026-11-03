@@ -60,7 +60,9 @@ policy revision are rechecked after inference.
 ## Applying and recovering
 
 The review calls the existing `PUT /api/provider/policy` with the exact selected
-policy, `expectedRevision` and a stable `operationKey`. Existing row locks,
+policy, `expectedProviderId`, `expectedRevision` and a stable `operationKey`. The
+locked provider identity must match the recommendation, including if another
+browser tab changed the signed-in account. Existing row locks,
 provider identity, reserve/capacity validation and the durable policy-apply
 receipt remain authoritative. Applying a recommendation creates the normal
 policy activity record; accepted bids and existing commitments retain their
@@ -91,8 +93,8 @@ Tests use synthetic data and do not change production seller settings.
 ### Verification on November 3, 2026
 
 TypeScript, production builds and the full then-current suite passed (1,290
-tests). After adding the final scenario and isolation cases, all 67 focused
-sales tests passed against a disposable local PostgreSQL database. Eighteen
+tests). After adding the final scenario and account-switch isolation cases, all
+93 focused sales and policy checks passed against a disposable local PostgreSQL database. Eighteen
 browser checks passed across the six new sales scenarios and existing provider
 flows; desktop and mobile screenshots were inspected.
 

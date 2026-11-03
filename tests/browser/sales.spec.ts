@@ -10,6 +10,7 @@ const policy = {
   allowedCatalogIds: ['e2b-micro'],
 };
 const report: SalesReport = {
+  providerId: '77ce9a4b-5593-4b8d-9625-575361567d3e',
   generatedAt: '2026-11-03T16:00:00Z',
   baseRevision: 7,
   currentPolicy: policy,
@@ -148,7 +149,12 @@ test('seller reviews evidence and exact policy changes before applying one recom
   await page.getByRole('button', { name: 'Apply this change', exact: true }).click();
   await expect(page.getByRole('status')).toContainText('Your selling policy is updated.');
   expect(applies).toHaveLength(1);
-  expect(applies[0]).toMatchObject({ ...policy, autoBid: true, expectedRevision: 7 });
+  expect(applies[0]).toMatchObject({
+    ...policy,
+    autoBid: true,
+    expectedRevision: 7,
+    expectedProviderId: report.providerId,
+  });
   expect(applies[0].operationKey).toMatch(/^[0-9a-f-]{36}$/);
   await expect(page.getByRole('button', { name: 'Review changes', exact: true })).toHaveCount(0);
 });

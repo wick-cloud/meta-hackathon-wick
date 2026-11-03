@@ -37,6 +37,7 @@ export interface SalesAdviceSelection {
 }
 
 export interface SalesReport {
+  providerId: string;
   generatedAt: string;
   baseRevision: number;
   currentPolicy: SupplierPolicy;

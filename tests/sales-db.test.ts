@@ -346,6 +346,7 @@ describe.skipIf(!databaseUrl)('seller sales recommendations (isolated PostgreSQL
     expect(recommendation).toBeDefined();
     const attempt = {
       ...recommendation.policy,
+      expectedProviderId: report.providerId,
       expectedRevision: report.baseRevision,
       operationKey: 'sales-reviewed-apply-123',
     };
@@ -380,5 +381,53 @@ describe.skipIf(!databaseUrl)('seller sales recommendations (isolated PostgreSQL
         )
       ).rows[0].n,
     ).toBe(1);
+  });
+
+  it('rejects a recommendation after another tab switches to a same-cloud seller', async () => {
+    // Both sellers deliberately have the same revision and compatible capacity/catalog permissions.
+    // Revision checks alone cannot bind the earlier review to its original owner.
+    await pool.query(`UPDATE broker_providers SET cloud_provider='e2b' WHERE id=$1`, [
+      otherProviderId,
+    ]);
+    const response = await propose();
+    expect(response.statusCode, response.body).toBe(200);
+    const report = response.json<SalesReport>();
+    expect(report.providerId).toBe(providerId);
+    const otherBefore = (
+      await pool.query(
+        'SELECT policy,policy_revision,policy_apply_receipt,total_capacity FROM broker_providers WHERE id=$1',
+        [otherProviderId],
+      )
+    ).rows[0];
+    expect(otherBefore.policy_revision).toBe(report.baseRevision);
+    actor = { ...owner, id: 'other-private-seller' };
+    const applied = await app.inject({
+      method: 'PUT',
+      url: '/api/provider/policy',
+      headers: { origin },
+      payload: {
+        ...report.recommendations[0]!.policy,
+        expectedProviderId: report.providerId,
+        expectedRevision: report.baseRevision,
+        operationKey: 'sales-owner-bound-apply',
+      },
+    });
+    expect(applied.statusCode, applied.body).toBe(409);
+    expect(
+      (
+        await pool.query(
+          'SELECT policy,policy_revision,policy_apply_receipt,total_capacity FROM broker_providers WHERE id=$1',
+          [otherProviderId],
+        )
+      ).rows[0],
+    ).toEqual(otherBefore);
+    expect((await providerState()).policy).toEqual(policy);
+    expect(
+      (
+        await pool.query(
+          "SELECT count(*)::int AS n FROM broker_activity WHERE kind='policy_changed'",
+        )
+      ).rows[0].n,
+    ).toBe(0);
   });
 });

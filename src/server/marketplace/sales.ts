@@ -178,6 +178,7 @@ export function registerSales(app: FastifyInstance, ctx: AppContext) {
         return { ...candidate, evidenceIds: rec.evidenceIds, explanation: rec.explanation };
       });
       return {
+        providerId: provider.id,
         generatedAt: new Date().toISOString(),
         baseRevision: provider.policy_revision,
         currentPolicy: policy,

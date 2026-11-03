@@ -16,7 +16,11 @@ import { FormPanel, FormSection } from './form-layout';
 import './sales.css';
 
 type Recommendation = SalesReport['recommendations'][number];
-type ApplyAttempt = SupplierPolicy & { expectedRevision: number; operationKey: string };
+type ApplyAttempt = SupplierPolicy & {
+  expectedRevision: number;
+  expectedProviderId: string;
+  operationKey: string;
+};
 
 const goals = [
   'Help me reach more suitable buyer requests.',
@@ -182,6 +186,7 @@ export function ProviderSales() {
     const pending = attempt ?? {
       ...selected.policy,
       expectedRevision: report.baseRevision,
+      expectedProviderId: report.providerId,
       operationKey: crypto.randomUUID(),
     };
     setAttempt(pending);
