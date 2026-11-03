@@ -79,6 +79,7 @@ export async function observeVmDisk(
     ])
   ).rows[0];
   const a = environment.workspaceDrive;
+  // Native mount mode fixes /workspace; its optional response path may be omitted.
   if (
     !disk ||
     disk.source_mode !== ctx.wick.mode ||
@@ -87,7 +88,7 @@ export async function observeVmDisk(
     a.driveId !== vm.create_input.workspaceDrive?.driveId ||
     a.accessMode !== 'mount' ||
     a.attachmentMode !== 'shared' ||
-    a.workspacePath !== '/workspace' ||
+    (a.workspacePath !== undefined && a.workspacePath !== '/workspace') ||
     !a.generation ||
     environment.id !== vm.environment_id
   )

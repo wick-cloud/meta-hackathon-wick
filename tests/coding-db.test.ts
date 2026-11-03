@@ -363,6 +363,34 @@ describe.skipIf(!url)('durable coding jobs (disposable PostgreSQL; no live provi
     expect(context.recentSteps.some((s: any) => s.result?.result?.path === 'test_0.py')).toBe(true);
     expect(JSON.stringify(context.writtenFiles)).not.toContain('#');
   });
+  it('retains successful read counts beyond the receipt window so repeated reads keep distinct progress', async () => {
+    actions = [
+      ...Array.from({ length: 9 }, () => ({ action: 'read', path: 'average.py' })),
+      { action: 'finish', summary: 'Reviewed the current file and passing tests.' },
+    ];
+    await buy();
+    const job = await createCodingJob(ctx, owner, { ...input(), maxCalls: 12 }, verify);
+    const dispatch = vi.mocked(ctx.inference!.dispatch);
+    dispatch.mockClear();
+    await processCodingJob(ctx, job.id);
+    expect((await codingDetail(ctx, owner, job.id)).job.status).toBe('ready');
+    const before = dispatch.mock.calls.at(-2)![1];
+    const after = dispatch.mock.calls.at(-1)![1];
+    const prior = JSON.parse(before.messages[1]!.content);
+    const current = JSON.parse(after.messages[1]!.content);
+    expect(prior.readFiles).toEqual([{ path: 'average.py', readCount: 8, lastSequence: 17 }]);
+    expect(current.readFiles).toEqual([{ path: 'average.py', readCount: 9, lastSequence: 19 }]);
+    const receipts = current.recentSteps.filter((step: any) => step.kind === 'command');
+    expect(receipts).toHaveLength(8);
+    expect(receipts.every((step: any) => step.result.result.content === readContent)).toBe(true);
+    expect(new Set(receipts.map((step: any) => step.sequence)).size).toBe(8);
+    expect(after.messages[1]!.content).not.toBe(before.messages[1]!.content);
+    expect(after.messages[0]!.content).toContain('do not repeat the same read');
+    expect(after.messages[0]!.content).toContain('a write failed because the file changed');
+    expect(after.messages[0]!.content).toContain('content was omitted from context');
+    expect(JSON.stringify(current.readFiles)).not.toContain(readContent);
+    expect(Buffer.byteLength(JSON.stringify(after), 'utf8')).toBeLessThan(65536);
+  });
   it('serializes concurrent approvals on one VM and preserves the original operation', async () => {
     const outcomes = await Promise.allSettled([
       createCodingJob(ctx, owner, input(), verify),

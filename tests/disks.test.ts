@@ -1,3 +1,4 @@
+import Fastify from 'fastify';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { realDrives } from '../src/server/integrations/drives.js';
 import {
@@ -52,7 +53,43 @@ describe('persistent disk native contract', () => {
     expect((options.headers as Record<string, string>)['idempotency-key']).toBe(
       'original-disk-key',
     );
+    expect((options.headers as Record<string, string>)['Content-Type']).toBe('application/json');
     expect(options.redirect).toBe('error');
+  });
+  it('sends bodyless native DELETE requests without a JSON content type and keeps the durable key', async () => {
+    const app = Fastify();
+    app.delete('/api/v1/drives/:id', async (request) => {
+      expect(request.headers['content-type']).toBeUndefined();
+      expect(request.headers['idempotency-key']).toBe('original-delete-key');
+      expect(request.body).toBeUndefined();
+      return {
+        drive: { ...native, status: 'deleting' },
+        operation: { id: 'op_delete', status: 'queued' },
+      };
+    });
+    const fetcher = vi.fn(async (input: string | URL | Request, options?: RequestInit) => {
+      const url = new URL(String(input));
+      const response = await app.inject({
+        method: 'DELETE',
+        url: url.pathname,
+        headers: options?.headers as Record<string, string>,
+        ...(options?.body === undefined ? {} : { payload: String(options.body) }),
+      });
+      return new Response(response.body, { status: response.statusCode });
+    });
+    vi.stubGlobal('fetch', fetcher);
+    try {
+      const deleted = await realDrives(config).delete('drive_1', 'original-delete-key');
+      expect(deleted.drive.status).toBe('deleting');
+      expect(deleted.operation).toEqual({ id: 'op_delete', status: 'queued' });
+      const options = fetcher.mock.calls[0]![1]!;
+      expect(options.method).toBe('DELETE');
+      expect(options.body).toBeUndefined();
+      expect(new Headers(options.headers).has('content-type')).toBe(false);
+      expect(fetcher).toHaveBeenCalledTimes(1);
+    } finally {
+      await app.close();
+    }
   });
   it('rejects tenant drift and sanitizes upstream errors', async () => {
     vi.stubGlobal(
@@ -145,6 +182,48 @@ describe('persistent disk native contract', () => {
     expect(diskCatalogEligible(ctx, { ...item, capabilities: ['shared-files'] })).toBe(false);
     ctx.config.disksEnabled = false;
     expect(diskCatalogEligible(ctx, item)).toBe(false);
+  });
+  it('accepts the documented native mount path default and rejects an explicit different path', async () => {
+    const query = vi.fn(async (sql: string) =>
+      sql.startsWith('SELECT')
+        ? { rows: [{ id: 'disk_1', source_mode: 'real', upstream_id: 'drive_1' }] }
+        : { rowCount: 1 },
+    );
+    const ctx = { pool: { query }, wick: { mode: 'real' } } as unknown as AppContext;
+    const vm = {
+      id: 'vm_1',
+      disk_id: 'disk_1',
+      buyer_id: 'buyer',
+      environment_id: 'env_1',
+      create_input: { workspaceDrive: { driveId: 'drive_1' } },
+    };
+    const environment = {
+      id: 'env_1',
+      status: 'running' as const,
+      expiresAt: null,
+      workspaceDrive: {
+        driveId: 'drive_1',
+        generation: 'gen_1',
+        status: 'mounted',
+        attachmentMode: 'shared' as const,
+        accessMode: 'mount' as const,
+      },
+    };
+    expect(await observeVmDisk(ctx, vm, environment)).toBe(true);
+    expect(
+      await observeVmDisk(ctx, vm, {
+        ...environment,
+        workspaceDrive: { ...environment.workspaceDrive, workspacePath: '/workspace' },
+      }),
+    ).toBe(true);
+    query.mockClear();
+    expect(
+      await observeVmDisk(ctx, vm, {
+        ...environment,
+        workspaceDrive: { ...environment.workspaceDrive, workspacePath: '/temporary-workspace' },
+      }),
+    ).toBe(false);
+    expect(query).toHaveBeenCalledTimes(1); // A wrong path never persists mounted state.
   });
   it('does not confirm files-mode, stale generations, or a mount on another environment', async () => {
     const query = vi.fn(async (sql: string) =>

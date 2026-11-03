@@ -37,6 +37,9 @@ export function createAuth(config: Config, pool: Pool) {
     advanced: {
       useSecureCookies: config.nodeEnv === 'production',
       defaultCookieAttributes: { sameSite: 'lax', httpOnly: true },
+      // Railway's public HTTP edge overwrites X-Real-IP. Enable only when auth
+      // traffic uses that ingress; private/internal or TCP ingress has no such guarantee.
+      ...(config.authTrustRailwayProxy ? { ipAddress: { ipAddressHeaders: ['x-real-ip'] } } : {}),
     },
   });
 }
