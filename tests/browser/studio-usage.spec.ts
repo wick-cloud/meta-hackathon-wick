@@ -375,7 +375,7 @@ test('a saved response offers recovery before another paid generation', async ({
   ).toHaveCount(0);
 });
 
-async function composerFixture(page: Page) {
+async function composerFixture(page: Page, historyFailure = false) {
   const writes: string[] = [];
   await page.route('**/api/**', async (route) => {
     const path = new URL(route.request().url()).pathname;
@@ -394,14 +394,18 @@ async function composerFixture(page: Page) {
     if (path === '/api/disks/options')
       return route.fulfill({ json: { enabled: false, eligibleCatalogIds: [] } });
     if (path === '/api/studio/tasks')
-      return route.fulfill({ json: { items: [], nextCursor: null } });
+      return route.fulfill(
+        historyFailure
+          ? { status: 503, json: { error: 'Saved tasks are temporarily unavailable.' } }
+          : { json: { items: [], nextCursor: null } },
+      );
     if (path === '/api/studio/tasks/' + id) return route.fulfill({ json: detail() });
     return route.fulfill({
       status: 500,
       json: { error: 'Unexpected presentation fixture request.' },
     });
   });
-  await page.goto('/studio?new=1');
+  await page.goto(historyFailure ? '/studio' : '/studio?new=1');
   return writes;
 }
 
@@ -471,5 +475,29 @@ test('Studio rejects an over-budget draft before any purchase authorization', as
     'Add available Broker credit before starting this task.',
   );
   await expect(page.getByRole('dialog')).toHaveCount(0);
+  expect(writes).toEqual([]);
+});
+
+test('an initial Studio history failure still allows a new task to be reviewed without purchasing', async ({
+  page,
+}) => {
+  const writes = await composerFixture(page, true);
+  await expect(
+    page.getByText('Saved tasks are temporarily unavailable.', { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByRole('textbox', { name: 'Task', exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: 'New task', exact: true }).click();
+  await page
+    .getByRole('textbox', { name: 'Task', exact: true })
+    .fill('Fix the parser and verify the regression tests.');
+  await page
+    .getByRole('textbox', { name: 'Public repository', exact: true })
+    .fill('https://github.com/example/project');
+  await page.getByLabel('Maximum total spend · USD', { exact: true }).fill('2.3456');
+  await page.getByRole('button', { name: 'Review task · $2.3456 maximum', exact: true }).click();
+  await expect(page.getByRole('dialog')).toBeVisible();
+  await expect(
+    page.getByRole('dialog').getByRole('button', { name: 'Start within $2.3456', exact: true }),
+  ).toBeEnabled();
   expect(writes).toEqual([]);
 });

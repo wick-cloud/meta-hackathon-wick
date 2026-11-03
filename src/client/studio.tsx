@@ -231,7 +231,7 @@ export function Studio({ search = '' }: { search?: string }) {
         description="Set a goal, choose a repository, and review one budget for compute and model allowance."
       >
         <Meta />
-        {!compose && !!list.data?.items.length && (
+        {!compose && list.data?.items.length !== 0 && (
           <button
             className="button primary"
             onClick={() => {
