@@ -1,3 +1,4 @@
+import { diskCatalogEligible, requireDisk } from '../disks/service.js';
 import { isMoneyCents, MIN_ORDER_PRICE_CENTS } from '../../shared/money.js';
 import { moneyCents } from './data.js';
 import { enforceKeyLimit, recordKeyAction } from '../operations.js';
@@ -22,6 +23,7 @@ import { availableForBids } from './policy.js';
 import { assertProviderCatalog } from './provider-identity.js';
 
 type Desired = {
+  diskId?: string;
   cpu: number;
   memoryGb: number;
   gpu?: string;
@@ -69,6 +71,7 @@ function parseDesired(value: Row): Desired {
   if (!value || typeof value !== 'object' || Array.isArray(value))
     throw new HttpError(400, 'Review desired resources, region, duration and budget.');
   return {
+    ...(value.diskId === undefined ? {} : { diskId: uuid(value.diskId) }),
     cpu: integer(value.cpu, 'Desired CPU', 1, 1024),
     memoryGb: positiveNumber(value.memoryGb, 'Desired memory (GiB)', 16384),
     ...(value.gpu ? { gpu: shortText(value.gpu, 'Desired GPU', 120) } : {}),
@@ -190,6 +193,8 @@ export async function createIntent(ctx: AppContext, actor: Actor, body: Row) {
   const key = operationKey(body.operationKey);
   const description = shortText(body.description, 'Description', 4000);
   const desired = parseDesired(body.desired);
+  if (desired.diskId && actor.apiKey && !actor.apiKey.scopes.includes('disks:use'))
+    throw new HttpError(403, 'This key requires disks:use to attach a disk.');
   const flexibility = parseFlexibility(body.flexibility, desired);
   const sourceId = body.sourceRequestId ? uuid(body.sourceRequestId) : null;
   return transaction(ctx.pool, async (db) => {
@@ -213,6 +218,7 @@ export async function createIntent(ctx: AppContext, actor: Actor, body: Row) {
         throw new HttpError(409, 'This operation already has a different intent.');
       return intentView(duplicate);
     }
+    if (desired.diskId) await requireDisk(ctx, db, actor.id, desired.diskId);
     if (source?.resolution_request_id)
       throw new HttpError(409, 'The original request has already been resolved.');
     if (source && (source.catalog_snapshot.sourceMode ?? 'fixture') !== ctx.wick.mode)
@@ -223,6 +229,7 @@ export async function createIntent(ctx: AppContext, actor: Actor, body: Row) {
         hash(
           parseDesired({
             ...source.requirements,
+            ...(source.disk_id ? { diskId: source.disk_id } : {}),
             region: source.region,
             durationMinutes: source.duration_minutes,
             maxPriceCents: source.max_price_cents,
@@ -451,7 +458,7 @@ async function generateCounteroffers(
   for (const row of rows) {
     const p = row.provider,
       offering = row.offering,
-      item = row.item as CatalogItem;
+      item = { ...row.item, approved: true } as CatalogItem;
     if (ctx.wick.mode === 'real' && item.provider === 'boat') continue;
     if (p.cloud_provider && p.cloud_provider !== item.provider) continue;
     if (
@@ -465,7 +472,12 @@ async function generateCounteroffers(
       candidates: [],
     };
     for (const duration of item.durationMinutes) {
-      if (group.candidates.length >= 12 || !feasible(item, duration, desired, flex)) continue;
+      if (
+        group.candidates.length >= 12 ||
+        !feasible(item, duration, desired, flex) ||
+        (desired.diskId && !diskCatalogEligible(ctx, item))
+      )
+        continue;
       let quote;
       try {
         quote = quoteCandidate(ctx, p, offering, item, duration);
@@ -479,6 +491,7 @@ async function generateCounteroffers(
       )
         continue;
       const after: Desired = {
+        ...(desired.diskId ? { diskId: desired.diskId } : {}),
         ...requirements(item),
         region: item.region,
         durationMinutes: duration,
@@ -681,6 +694,10 @@ export async function acceptCounteroffer(
         actor.id,
       ])
     ).rows[0];
+    if (intent.desired.diskId) {
+      if (actor.apiKey && !actor.apiKey.scopes.includes('disks:use'))
+        throw new HttpError(403, 'This key requires disks:use to attach a disk.');
+    }
     if (intent.status === 'accepted') {
       if (intent.accepted_offer_id !== offerId || intent.acceptance_key !== key)
         throw new HttpError(
@@ -695,6 +712,7 @@ export async function acceptCounteroffer(
       return { requestId: intent.accepted_request_id, vmId: vm.id, winningBidId: vm.bid_id };
     }
     ensureOpen(intent, ctx);
+    if (intent.desired.diskId) await requireDisk(ctx, db, actor.id, intent.desired.diskId);
     if (source?.resolution_request_id)
       throw new HttpError(409, 'The original request has already been resolved.');
     const offer = (
@@ -742,6 +760,11 @@ export async function acceptCounteroffer(
     if (ctx.wick.mode === 'real' && catalog.item.provider === 'boat')
       throw new HttpError(409, 'This provider is unavailable for customer rentals.');
     assertProviderCatalog(p, catalog.item);
+    if (
+      intent.desired.diskId &&
+      !diskCatalogEligible(ctx, { ...catalog.item, approved: catalog.approved })
+    )
+      throw new HttpError(409, 'The reviewed provider no longer supports this disk.');
     if (p.policy.allowedCatalogIds && !p.policy.allowedCatalogIds.includes(catalog.item.id))
       throw new HttpError(409, 'The provider no longer permits this configuration.');
     if (
@@ -766,6 +789,7 @@ export async function acceptCounteroffer(
         'The reviewed fixed total or provider commission changed. Review a new alternative.',
       );
     const reviewedAfter: Desired = {
+      ...(intent.desired.diskId ? { diskId: intent.desired.diskId } : {}),
       ...requirements(catalog.item),
       region: catalog.item.region,
       durationMinutes: snap.after.durationMinutes,
@@ -812,7 +836,7 @@ export async function acceptCounteroffer(
     const pricing = ctx.wick.mode === 'real' ? managedPricing(catalog.item) : undefined;
     const request = (
       await db.query(
-        `INSERT INTO broker_requests(buyer_id,description,catalog_id,catalog_snapshot,region,duration_minutes,max_price_cents,requirements,prior_request_id,negotiation_intent_id,source_api_key_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
+        `INSERT INTO broker_requests(buyer_id,description,catalog_id,catalog_snapshot,region,duration_minutes,max_price_cents,requirements,prior_request_id,negotiation_intent_id,source_api_key_id,disk_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
         [
           actor.id,
           intent.description,
@@ -830,6 +854,7 @@ export async function acceptCounteroffer(
           source?.id ?? null,
           intent.id,
           actor.apiKey?.id ?? null,
+          intent.desired.diskId ?? null,
         ],
       )
     ).rows[0];

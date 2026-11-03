@@ -36,6 +36,7 @@ import {
 } from './components';
 
 interface Desired {
+  diskId?: string;
   cpu: number;
   memoryGb: number;
   gpu?: string;
@@ -161,6 +162,7 @@ export function AlternativeComposer({ sourceRequestId }: { sourceRequestId?: str
         }
         const desired = {
           ...request.requirements,
+          ...(request.diskId ? { diskId: request.diskId } : {}),
           region: request.region,
           durationMinutes: request.durationMinutes,
           maxPriceCents: request.maxPriceCents,
@@ -541,6 +543,13 @@ function DesiredSummary({ desired }: { desired: Desired }) {
       <DetailRow label="Region">{desired.region}</DetailRow>
       <DetailRow label="Duration">{desired.durationMinutes} minutes</DetailRow>
       <DetailRow label="Maximum total">{money(desired.maxPriceCents)}</DetailRow>
+      {desired.diskId && (
+        <DetailRow label="Persistent disk">
+          <Link href={'/disks/' + desired.diskId}>
+            View disk <ArrowRight size={13} />
+          </Link>
+        </DetailRow>
+      )}
     </>
   );
 }

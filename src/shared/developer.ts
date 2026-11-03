@@ -8,6 +8,9 @@ export const BROKER_SCOPES = [
   'agreements:read',
   'agreements:write',
   'agreements:activate',
+  'disks:read',
+  'disks:write',
+  'disks:use',
   'vms:read',
   'vms:terminal',
   'vms:terminate',
@@ -97,6 +100,13 @@ const route = (
 ): BrokerPublicRoute => ({ method, path, scope, ...(mutation ? { mutation: true } : {}) });
 /** Explicit machine-access allowlist. Missing routes fail closed, including admin and auth. */
 export const BROKER_PUBLIC_ROUTES: readonly BrokerPublicRoute[] = [
+  route('GET', '/api/disks/options', 'disks:read'),
+  route('GET', '/api/disks', 'disks:read'),
+  route('POST', '/api/disks', 'disks:write', true),
+  route('GET', '/api/disks/:id', 'disks:read'),
+  route('GET', '/api/disks/:id/workspaces', 'disks:read'),
+  route('PATCH', '/api/disks/:id', 'disks:write', true),
+  route('DELETE', '/api/disks/:id', 'disks:write', true),
   route('GET', '/api/inference/models', 'inference:read'),
   route('GET', '/api/inference/grant', 'inference:read'),
   route('GET', '/api/inference/packs', 'inference:read'),

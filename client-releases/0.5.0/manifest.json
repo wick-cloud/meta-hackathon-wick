@@ -1,0 +1,30 @@
+{
+  "version": "0.5.0",
+  "files": [
+    {
+      "name": "wick-cloud-broker-sdk-0.5.0.tgz",
+      "sha256": "c3fcf426daabd7096b04c5b4fb98c93bc6548bf808ef30f98e8ff2b6a8b11e01",
+      "size": 28861
+    },
+    {
+      "name": "wick-cloud-broker-cli-0.5.0.tgz",
+      "sha256": "b23c4a8d67b02d96efbffefcb53ccfb969c98501b3370db05218db68670dccba",
+      "size": 12423
+    },
+    {
+      "name": "wick-cloud-broker-mcp-0.5.0.tgz",
+      "sha256": "fc384da11daaa0e07f8f92c6f62f3c9793da634db8442207b671d8151d3a8383",
+      "size": 9998
+    },
+    {
+      "name": "SHA256SUMS",
+      "sha256": "9c7c88865d790553205d1679ee89f298e8f542d68c026e2689d69fc9056ce313",
+      "size": 294
+    },
+    {
+      "name": "INSTALL.md",
+      "sha256": "43bcfff3a3ebd21b1e22d388c233ca8dd4009693001dc420430b90b3e0547d48",
+      "size": 5489
+    }
+  ]
+}

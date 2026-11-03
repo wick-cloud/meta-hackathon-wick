@@ -2,7 +2,7 @@ export type Role = 'buyer' | 'provider';
 export interface Operation {
   command: string;
   tool: string;
-  method: 'GET' | 'POST' | 'PUT' | 'PATCH';
+  method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   path: string;
   scope: string;
   role?: Role;
@@ -12,6 +12,76 @@ export interface Operation {
 }
 /** Client routing only: authorization, pricing and lifecycle always belong to Broker. */
 export const OPERATIONS: readonly Operation[] = [
+  {
+    command: 'disks options',
+    tool: 'disk_options',
+    method: 'GET',
+    path: '/api/disks/options',
+    scope: 'disks:read',
+    role: 'buyer',
+    description: 'Read disk availability and qualified compute routes.',
+  },
+  {
+    command: 'disks list',
+    tool: 'disk_list',
+    method: 'GET',
+    path: '/api/disks',
+    scope: 'disks:read',
+    role: 'buyer',
+    description: 'List your persistent workspace disks.',
+  },
+  {
+    command: 'disks create',
+    tool: 'disk_create',
+    method: 'POST',
+    path: '/api/disks',
+    scope: 'disks:write',
+    role: 'buyer',
+    description: 'Create a private shared persistent disk. Does not rent a VM.',
+    mutation: true,
+    body: 'disk',
+  },
+  {
+    command: 'disks get',
+    tool: 'disk_get',
+    method: 'GET',
+    path: '/api/disks/:id',
+    scope: 'disks:read',
+    role: 'buyer',
+    description: 'Inspect your disk and its VM attachments.',
+  },
+  {
+    command: 'disks workspaces',
+    tool: 'disk_workspaces_list',
+    method: 'GET',
+    path: '/api/disks/:id/workspaces',
+    scope: 'disks:read',
+    role: 'buyer',
+    description: 'List your disk workspaces for later continuation.',
+  },
+  {
+    command: 'disks rename',
+    tool: 'disk_rename',
+    method: 'PATCH',
+    path: '/api/disks/:id',
+    scope: 'disks:write',
+    role: 'buyer',
+    description: 'Rename your disk without changing its files.',
+    mutation: true,
+    body: 'disk',
+  },
+  {
+    command: 'disks delete',
+    tool: 'disk_delete',
+    method: 'DELETE',
+    path: '/api/disks/:id',
+    scope: 'disks:write',
+    role: 'buyer',
+    description:
+      'Permanently delete your detached disk. Active and unresolved uses block deletion.',
+    mutation: true,
+  },
+
   {
     command: 'inference compatible-models',
     tool: 'inference_compatible_models_list',

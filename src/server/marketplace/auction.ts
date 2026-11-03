@@ -1,3 +1,4 @@
+import { diskCatalogEligible, requireDisk, reserveVmDisk } from '../disks/service.js';
 import { moneyCents } from './data.js';
 import { studioAuthority, type StudioSource } from '../coding/studio-budget.js';
 import { MIN_ORDER_PRICE_CENTS } from '../../shared/money.js';
@@ -36,6 +37,7 @@ import {
   requestView,
   shortText,
   type Row,
+  uuid,
 } from './data.js';
 
 export async function createRequest(
@@ -47,6 +49,9 @@ export async function createRequest(
 ) {
   if (!body || typeof body !== 'object' || Array.isArray(body))
     throw new HttpError(400, 'A request body is required.');
+  const diskId = body.diskId === undefined ? undefined : uuid(body.diskId);
+  if (diskId && actor.apiKey && !actor.apiKey.scopes.includes('disks:use'))
+    throw new HttpError(403, 'This key requires disks:use to attach a disk.');
   const description = shortText(body.description, 'Description', 4000);
   const catalogId = shortText(body.catalogId, 'Catalog configuration', 160);
   const region = shortText(body.region, 'Region', 120);
@@ -82,6 +87,7 @@ export async function createRequest(
       {
         description,
         catalogId,
+        ...(diskId ? { diskId } : {}),
         region,
         matchAcrossProviders,
         durationMinutes,
@@ -127,13 +133,18 @@ export async function createRequest(
           if ((prior.catalog_snapshot.sourceMode ?? 'fixture') !== ctx.wick.mode)
             throw new HttpError(409, 'The integration mode changed. Review a new request.');
         }
+        if (diskId) await requireDisk(ctx, db, actor.id, diskId);
         const result = await db.query(
           'SELECT item,approved FROM broker_catalog WHERE id=$1 AND source_mode=$2 FOR SHARE',
           [catalogId, ctx.wick.mode],
         );
-        const catalog = result.rows[0]?.item as CatalogItem | undefined;
+        const catalog = result.rows[0]
+          ? ({ ...result.rows[0].item, approved: result.rows[0].approved } as CatalogItem)
+          : undefined;
         if (!catalog || !result.rows[0].approved)
           throw new HttpError(400, 'Choose an administrator-approved configuration.');
+        if (diskId && !diskCatalogEligible(ctx, catalog))
+          throw new HttpError(400, 'Choose a qualified persistent-disk configuration.');
         let pricing;
         if (ctx.wick.mode === 'real') {
           try {
@@ -192,7 +203,8 @@ export async function createRequest(
               'Too many matching configurations. Choose a region or narrower resources.',
             );
           eligibleCatalogs = rows
-            .map((row) => ({ ...row.item, id: row.id }) as CatalogItem)
+            .map((row) => ({ ...row.item, id: row.id, approved: true }) as CatalogItem)
+            .filter((item) => !diskId || diskCatalogEligible(ctx, item))
             .filter((item) =>
               catalogSatisfiesRequest(item, {
                 requirements: { cpu, memoryGb, ...(gpu ? { gpu } : {}) },
@@ -240,8 +252,8 @@ export async function createRequest(
             );
         }
         const r = await db.query(
-          `INSERT INTO broker_requests(buyer_id,description,catalog_id,catalog_snapshot,region,duration_minutes,max_price_cents,requirements,prior_request_id,source_api_key_id,studio_task_id)
-      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
+          `INSERT INTO broker_requests(buyer_id,description,catalog_id,catalog_snapshot,region,duration_minutes,max_price_cents,requirements,prior_request_id,source_api_key_id,studio_task_id,disk_id)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
           [
             actor.id,
             description,
@@ -257,6 +269,7 @@ export async function createRequest(
             priorRequestId || null,
             actor.apiKey?.id ?? null,
             studio?.id ?? null,
+            diskId ?? null,
           ],
         );
         const request = r.rows[0];
@@ -354,6 +367,8 @@ async function publishedMatches(
     const selected = frozen.find((item) => item.id === catalog.id)!;
     try {
       assertProviderCatalog(provider, catalog);
+      if (request.disk_id && !diskCatalogEligible(ctx, catalog))
+        throw new HttpError(409, 'The provider no longer supports the requested disk.');
       if (!sameCatalogAllocation(selected, catalog) || !catalogSatisfiesRequest(catalog, request))
         throw new HttpError(409, 'The reviewed configuration changed. Start a new request.');
       let minimumPriceCents = Math.max(MIN_ORDER_PRICE_CENTS, provider.policy.minimumPriceCents);
@@ -590,6 +605,35 @@ export async function closeAuction(ctx: AppContext, requestId: string) {
       );
       return;
     }
+    if (request.disk_id) {
+      try {
+        await requireDisk(ctx, db, request.buyer_id, request.disk_id);
+        const winningCatalogId = bids[0].offering_snapshot?.catalog?.id ?? request.catalog_id;
+        const current = (
+          await db.query(
+            'SELECT item,approved FROM broker_catalog WHERE id=$1 AND source_mode=$2 FOR SHARE',
+            [winningCatalogId, ctx.wick.mode],
+          )
+        ).rows[0];
+        if (!current || !diskCatalogEligible(ctx, { ...current.item, approved: current.approved }))
+          throw new HttpError(409, 'Persistent disk support changed before admission.');
+      } catch (error) {
+        if (!(error instanceof HttpError)) throw error;
+        await db.query(
+          "UPDATE broker_requests SET status='failed',failure_reason='The disk or its qualified provider route is unavailable. Review a new rental.' WHERE id=$1",
+          [requestId],
+        );
+        await db.query(
+          "UPDATE broker_bids SET status='lost' WHERE request_id=$1 AND status='held'",
+          [requestId],
+        );
+        await db.query(
+          "UPDATE broker_holds SET released_at=now(),release_reason='Disk unavailable before admission' WHERE bid_id IN(SELECT id FROM broker_bids WHERE request_id=$1) AND released_at IS NULL",
+          [requestId],
+        );
+        return;
+      }
+    }
     return awardHeldBid(ctx, db, request, bids[0]);
   });
 }
@@ -666,6 +710,11 @@ export async function awardHeldBid(ctx: AppContext, db: PoolClient, request: Row
     ).rowCount;
     if (!allowed) throw new HttpError(409, 'Studio no longer authorizes this compute award.');
   }
+  const disk = request.disk_id
+    ? await requireDisk(ctx, db, request.buyer_id, request.disk_id)
+    : null;
+  if (disk && !diskCatalogEligible(ctx, catalog))
+    throw new HttpError(409, 'The selected provider is no longer qualified for persistent disks.');
   const requestId = request.id;
   await db.query(
     "UPDATE broker_bids SET status=CASE WHEN id=$2 THEN 'won' ELSE 'lost' END WHERE request_id=$1",
@@ -690,6 +739,9 @@ export async function awardHeldBid(ctx: AppContext, db: PoolClient, request: Row
       : {}),
     ttlSeconds: request.duration_minutes * 60,
     visibility: 'private',
+    ...(disk
+      ? { workspaceDrive: { driveId: disk.upstream_id, accessMode: 'mount' as const } }
+      : {}),
   };
   if (
     ctx.wick.mode === 'real' &&
@@ -701,8 +753,8 @@ export async function awardHeldBid(ctx: AppContext, db: PoolClient, request: Row
       'Real Wick organization and group must be configured before awarding.',
     );
   await db.query(
-    `INSERT INTO broker_vms(id,request_id,buyer_id,provider_id,bid_id,create_key,create_input,catalog_snapshot,quote_snapshot)
-      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+    `INSERT INTO broker_vms(id,request_id,buyer_id,provider_id,bid_id,create_key,create_input,catalog_snapshot,quote_snapshot,disk_id)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
     [
       vmId,
       requestId,
@@ -727,8 +779,10 @@ export async function awardHeldBid(ctx: AppContext, db: PoolClient, request: Row
         admissionDeadlineAt: instantReservationInterval(request).admissionDeadlineAt,
         ...(winner.offering_snapshot.pricing ? { pricing: winner.offering_snapshot.pricing } : {}),
       },
+      request.disk_id ?? null,
     ],
   );
+  if (disk) await reserveVmDisk(db, vmId, request.disk_id);
   await db.query("UPDATE broker_requests SET status='provisioning',winning_bid_id=$2 WHERE id=$1", [
     requestId,
     winner.id,

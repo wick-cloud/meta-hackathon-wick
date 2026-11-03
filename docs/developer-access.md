@@ -25,12 +25,12 @@ The client packages are downloadable directly from Broker. Repository access and
 
 ```sh
 npm install \
-  https://meta-hackathon-wick-production.up.railway.app/downloads/0.4.0/wick-cloud-broker-sdk-0.4.0.tgz \
-  https://meta-hackathon-wick-production.up.railway.app/downloads/0.4.0/wick-cloud-broker-cli-0.4.0.tgz \
-  https://meta-hackathon-wick-production.up.railway.app/downloads/0.4.0/wick-cloud-broker-mcp-0.4.0.tgz
+  https://meta-hackathon-wick-production.up.railway.app/downloads/0.5.0/wick-cloud-broker-sdk-0.5.0.tgz \
+  https://meta-hackathon-wick-production.up.railway.app/downloads/0.5.0/wick-cloud-broker-cli-0.5.0.tgz \
+  https://meta-hackathon-wick-production.up.railway.app/downloads/0.5.0/wick-cloud-broker-mcp-0.5.0.tgz
 ```
 
-Use `npx --no-install wick-broker` for the installed CLI. For MCP, configure `node` with the absolute path to the installed `node_modules/@wick-cloud/broker-mcp/dist/index.js`; it uses the same saved origin-bound profile or Broker environment variables. Release hashes and byte sizes are listed at `/downloads/0.4.0/manifest.json`. Published version directories are immutable; client changes require a new package version and a new directory.
+Use `npx --no-install wick-broker` for the installed CLI. For MCP, configure `node` with the absolute path to the installed `node_modules/@wick-cloud/broker-mcp/dist/index.js`; it uses the same saved origin-bound profile or Broker environment variables. Release hashes and byte sizes are listed at `/downloads/0.5.0/manifest.json`. Published version directories are immutable; client changes require a new package version and a new directory.
 
 The standard npm registry commands below apply after registry publication. The direct downloads above are available independently.
 
@@ -144,7 +144,7 @@ Configure an MCP-capable host to launch the local package:
   "mcpServers": {
     "wick-broker": {
       "command": "npx",
-      "args": ["-y", "@wick-cloud/broker-mcp@0.4.0"]
+      "args": ["-y", "@wick-cloud/broker-mcp@0.5.0"]
     }
   }
 }
@@ -171,3 +171,7 @@ Provider Policy Apply retains its existing latest accepted receipt: immediate ex
 A local Node 24.7 benchmark compared legacy-compatible creation with idempotent creation, using 10 warmups and 100 sequential samples per path before and after 20,000 unrelated receipts and 10,000 expired keys. With large history, median/p95 service-call times were 0.324/0.507 ms for legacy-compatible creation, 0.443/0.626 ms for idempotent creation, 0.499/0.780 ms including key attribution, and 0.121/0.199 ms for exact replay. Idempotency adds three bounded SQL commands; attribution adds one. These fixture measurements exclude HTTP and upstream provisioning and are not production latency claims. EXPLAIN ANALYZE confirmed indexed one-row key/receipt lookups and bounded owner-key pagination, including a deep cursor.
 
 Key issuance and role/provider revocation use a stable statement timestamp in their indexed expiry predicate. With 10,000 expired nonrevoked keys plus 20 active keys for one owner, EXPLAIN ANALYZE showed the active-key partial index reading 20 rows with no filtered history rows for both count and revocation. The previous volatile-clock form examined all 10,020 rows. This check used disposable local data and rolled back revocation updates.
+
+## Persistent disks
+
+Client release `0.5.0` adds disk CRUD and workspace listing, plus optional `diskId` on VM requests and alternative intents. Buyer keys need `disks:read`, `disks:write`, and `disks:use` as appropriate. Existing published downloads remain immutable. See [persistent disks](persistent-disks.md) for native attachment, lifecycle, Studio continuation and provider qualification.

@@ -15,7 +15,8 @@ import {
   proposeBid,
   submitBid,
 } from '../src/server/marketplace/auction.js';
-import { markReady } from '../src/server/marketplace/lifecycle.js';
+import { markReady, confirmCleanup } from '../src/server/marketplace/lifecycle.js';
+import { observeVmDisk, reconcileVmDisk } from '../src/server/disks/service.js';
 import { QUEUES } from '../src/server/marketplace/db.js';
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
@@ -69,6 +70,9 @@ describe.skipIf(!databaseUrl)(
 
     beforeEach(async () => {
       vi.mocked(ctx.boss.send).mockClear();
+      ctx.config.disksEnabled = false;
+      ctx.config.diskQualifiedCatalogIds = [];
+      delete ctx.wick.drives;
       await pool.query(
         'TRUNCATE broker_activity,broker_invoices,broker_holds,broker_vms,broker_bids,broker_requests,broker_offerings,broker_providers,broker_catalog CASCADE',
       );
@@ -475,6 +479,249 @@ describe.skipIf(!databaseUrl)(
       expect(
         (await pool.query('SELECT status FROM broker_bids WHERE id=$1', [bid.id])).rows[0].status,
       ).toBe('held');
+    });
+
+    async function persistentDisk() {
+      ctx.config.disksEnabled = true;
+      ctx.config.diskQualifiedCatalogIds = catalogs.slice(0, 2).map((item) => item.id);
+      ctx.wick.drives = {} as NonNullable<typeof ctx.wick.drives>;
+      await pool.query(
+        'INSERT INTO "user"(id,name,email,role) VALUES($1,$2,$3,$4) ON CONFLICT(id) DO NOTHING',
+        [buyer.id, buyer.name, buyer.email, 'buyer'],
+      );
+      for (const item of catalogs.slice(0, 2)) {
+        item.capabilities = ['persistent-drives'];
+        item.approved = false; // Upstream JSON stays unapproved after the DB approval changes.
+        await storeCatalog(item);
+      }
+      const id = randomUUID();
+      await pool.query(
+        "INSERT INTO broker_disks(id,buyer_id,name,source_mode,status,upstream_id,create_key) VALUES($1,$2,'Persistent project','real','ready',$3,$4)",
+        [id, buyer.id, `drive-${id}`, `disk-${id}`],
+      );
+      return id;
+    }
+
+    it('freezes owned disks across requests, filters unsupported providers and preserves API key scope boundaries', async () => {
+      const diskId = await persistentDisk();
+      const req = await request({ diskId });
+      expect(req.diskId).toBe(diskId);
+      const frozen = await storedRequest(req.id);
+      expect(
+        frozen.catalog_snapshot.eligibleCatalogs.map((item: CatalogItem) => item.id).sort(),
+      ).toEqual(
+        catalogs
+          .slice(0, 2)
+          .map((item) => item.id)
+          .sort(),
+      );
+      await expect(
+        pool.query('UPDATE broker_requests SET disk_id=NULL WHERE id=$1', [req.id]),
+      ).rejects.toThrow(/immutable/);
+      await expect(
+        createRequest(ctx, { ...buyer, id: randomUUID() }, { ...req, diskId }),
+      ).rejects.toThrow('Disk not found');
+      await expect(
+        createRequest(
+          ctx,
+          {
+            ...buyer,
+            apiKey: {
+              id: randomUUID(),
+              scopes: ['orders:write'],
+              limits: { maxAuctionCents: 100 },
+            },
+          },
+          { ...req, diskId, operationKey: 'no-disk-authority' },
+        ),
+      ).rejects.toThrow('disks:use');
+      await expect(
+        submitBid(ctx, providers[2]!.actor, req.id, { totalPriceCents: 20 }),
+      ).rejects.toThrow();
+    });
+
+    it('releases pre-admission holds when disk qualification is withdrawn before closing', async () => {
+      const diskId = await persistentDisk();
+      const req = await request({ diskId });
+      await submitBid(ctx, providers[0]!.actor, req.id, { totalPriceCents: 20 });
+      ctx.config.disksEnabled = false;
+      // Fixture-only clock advancement in this disposable schema. Production
+      // request specifications remain immutable (covered separately above).
+      await pool.query('ALTER TABLE broker_requests DISABLE TRIGGER broker_request_immutable');
+      try {
+        await pool.query(
+          "UPDATE broker_requests SET closes_at=clock_timestamp()-interval '1 second' WHERE id=$1",
+          [req.id],
+        );
+      } finally {
+        await pool.query('ALTER TABLE broker_requests ENABLE TRIGGER broker_request_immutable');
+      }
+      await closeAuction(ctx, req.id);
+      expect((await storedRequest(req.id)).status).toBe('failed');
+      expect(
+        (await pool.query('SELECT count(*)::int n FROM broker_holds WHERE released_at IS NULL'))
+          .rows[0].n,
+      ).toBe(0);
+      expect(
+        (await pool.query('SELECT count(*)::int n FROM broker_vms WHERE request_id=$1', [req.id]))
+          .rows[0].n,
+      ).toBe(0);
+    });
+
+    it('requires the exact native shared mount before invoice and confirmed detachment before releasing capacity', async () => {
+      const diskId = await persistentDisk();
+      const req = await request({ diskId });
+      const bid = await submitBid(ctx, providers[1]!.actor, req.id, { totalPriceCents: 20 });
+      const result = await award(req.id, bid.id);
+      let vm = (await pool.query('SELECT * FROM broker_vms WHERE id=$1', [result.vmId])).rows[0];
+      expect(vm.create_input.workspaceDrive).toEqual({
+        driveId: `drive-${diskId}`,
+        accessMode: 'mount',
+      });
+      const environment: WickEnvironment = {
+        id: `offline-${randomUUID()}`,
+        status: 'running',
+        name: vm.create_input.name,
+        createdAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 1800000).toISOString(),
+        organizationId: 'test-org',
+        groupId: 'test-group',
+        provider: 'daytona',
+        profile: 'small',
+        billingMode: 'wick_managed',
+      };
+      await pool.query('UPDATE broker_vms SET environment_id=$2,expires_at=$3 WHERE id=$1', [
+        vm.id,
+        environment.id,
+        environment.expiresAt,
+      ]);
+      vm = { ...vm, environment_id: environment.id };
+      expect(await markReady(ctx, vm.id, environment, true)).toBe(false);
+      const mount = {
+        driveId: `drive-${diskId}`,
+        generation: 'mount-generation-1',
+        attachmentMode: 'shared' as const,
+        accessMode: 'mount' as const,
+        workspacePath: '/workspace',
+        status: 'mounted',
+      };
+      expect(
+        await observeVmDisk(ctx, vm, {
+          ...environment,
+          workspaceDrive: { ...mount, accessMode: 'files' },
+        }),
+      ).toBe(false);
+      expect(
+        await observeVmDisk(ctx, vm, {
+          ...environment,
+          workspaceDrive: { ...mount, driveId: 'another-drive' },
+        }),
+      ).toBe(false);
+      expect(await observeVmDisk(ctx, vm, { ...environment, workspaceDrive: mount })).toBe(true);
+      expect(
+        await observeVmDisk(ctx, vm, {
+          ...environment,
+          workspaceDrive: { ...mount, generation: 'stale-other-generation' },
+        }),
+      ).toBe(false);
+      expect(await markReady(ctx, vm.id, { ...environment, workspaceDrive: mount }, true)).toBe(
+        true,
+      );
+      expect(
+        (await pool.query('SELECT count(*)::int n FROM broker_invoices WHERE vm_id=$1', [vm.id]))
+          .rows[0].n,
+      ).toBe(1);
+      await expect(confirmCleanup(ctx, vm.id)).rejects.toThrow(/detachment/);
+      const attached = {
+        drive: { cleanupPending: false, attachments: [{ environmentId: environment.id }] },
+      };
+      ctx.wick.drives!.get = vi.fn(async () => attached) as never;
+      expect(await reconcileVmDisk(ctx, vm, { ...environment, status: 'terminated' })).toBe(false);
+      ctx.wick.drives!.get = vi.fn(async () => ({
+        drive: { cleanupPending: false, attachments: [] },
+      })) as never;
+      expect(await reconcileVmDisk(ctx, vm, { ...environment, status: 'terminated' })).toBe(true);
+      await confirmCleanup(ctx, vm.id);
+      expect(
+        (await pool.query('SELECT cleanup_confirmed_at FROM broker_vms WHERE id=$1', [vm.id]))
+          .rows[0].cleanup_confirmed_at,
+      ).not.toBeNull();
+      expect(
+        (await pool.query('SELECT status FROM broker_disks WHERE id=$1', [diskId])).rows[0].status,
+      ).toBe('ready');
+    });
+
+    it('shares one disk across providers and cleans only the terminated VM attachment', async () => {
+      const diskId = await persistentDisk();
+      const vms = [];
+      for (const provider of providers.slice(0, 2)) {
+        const req = await request({ diskId });
+        const bid = await submitBid(ctx, provider.actor, req.id, { totalPriceCents: 20 });
+        const result = await award(req.id, bid.id);
+        const row = (await pool.query('SELECT * FROM broker_vms WHERE id=$1', [result.vmId]))
+          .rows[0];
+        const environment: WickEnvironment = {
+          id: `offline-${randomUUID()}`,
+          status: 'running',
+          name: row.create_input.name,
+          createdAt: new Date().toISOString(),
+          expiresAt: new Date(Date.now() + 1800000).toISOString(),
+          organizationId: 'test-org',
+          groupId: 'test-group',
+          provider: provider.item.provider,
+          profile: 'small',
+          billingMode: 'wick_managed',
+          workspaceDrive: {
+            driveId: `drive-${diskId}`,
+            generation: `generation-${row.id}`,
+            status: 'mounted',
+            attachmentMode: 'shared',
+            accessMode: 'mount',
+            workspacePath: '/workspace',
+          },
+        };
+        await pool.query('UPDATE broker_vms SET environment_id=$2,expires_at=$3 WHERE id=$1', [
+          row.id,
+          environment.id,
+          environment.expiresAt,
+        ]);
+        const vm = { ...row, environment_id: environment.id };
+        expect(await observeVmDisk(ctx, vm, environment)).toBe(true);
+        expect(await markReady(ctx, vm.id, environment, true)).toBe(true);
+        vms.push({ vm, environment });
+      }
+      expect(
+        (
+          await pool.query(
+            "SELECT count(*)::int n FROM broker_disk_attachments WHERE disk_id=$1 AND status='mounted'",
+            [diskId],
+          )
+        ).rows[0].n,
+      ).toBe(2);
+      ctx.wick.drives!.get = vi.fn(async () => ({
+        drive: { cleanupPending: false, attachments: [{ environmentId: vms[1].environment.id }] },
+      })) as never;
+      expect(
+        await reconcileVmDisk(ctx, vms[0].vm, { ...vms[0].environment, status: 'terminated' }),
+      ).toBe(true);
+      await confirmCleanup(ctx, vms[0].vm.id);
+      expect(
+        (
+          await pool.query('SELECT status,cleanup_confirmed_at FROM broker_vms WHERE id=$1', [
+            vms[1].vm.id,
+          ])
+        ).rows[0],
+      ).toMatchObject({ status: 'running', cleanup_confirmed_at: null });
+      expect(
+        (
+          await pool.query('SELECT status FROM broker_disk_attachments WHERE vm_id=$1', [
+            vms[1].vm.id,
+          ])
+        ).rows[0].status,
+      ).toBe('mounted');
+      expect(
+        (await pool.query('SELECT status FROM broker_disks WHERE id=$1', [diskId])).rows[0].status,
+      ).toBe('ready');
     });
 
     it('rejects more than sixteen matching native routes without silently truncating the market', async () => {

@@ -25,6 +25,20 @@ const envSchema = z.object({
   INFERENCE_MODAL_PROVIDER_EMAIL: z.string().email().default('modal@providers.wick.local'),
   INFERENCE_MODAL_MODEL: z.string().optional(),
   INFERENCE_MODAL_PROXY_TOKEN: z.string().optional(),
+  DISKS_ENABLED: z.enum(['true', 'false']).default('false'),
+  DISK_QUALIFIED_CATALOG_IDS: z
+    .string()
+    .max(2575)
+    .default('')
+    .transform((v) => [
+      ...new Set(
+        v
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean),
+      ),
+    ])
+    .pipe(z.array(z.string().min(1).max(160)).max(16)),
   MAX_CONCURRENT_VMS: z.coerce.number().int().min(1).max(20).default(20),
   STUDIO_APPROVED_COMPUTE_CATALOG_IDS: z
     .string()
@@ -87,6 +101,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     inferenceModalModel: e.INFERENCE_MODAL_MODEL,
     inferenceModalProxyToken: e.INFERENCE_MODAL_PROXY_TOKEN,
     maxConcurrentVms: e.MAX_CONCURRENT_VMS,
+    disksEnabled: e.DISKS_ENABLED === 'true',
+    diskQualifiedCatalogIds: e.DISK_QUALIFIED_CATALOG_IDS,
     studioApprovedComputeCatalogIds: e.STUDIO_APPROVED_COMPUTE_CATALOG_IDS,
     logLevel: e.LOG_LEVEL,
   };

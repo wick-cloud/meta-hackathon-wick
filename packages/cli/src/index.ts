@@ -18,7 +18,7 @@ import {
   validateBrokerKey,
 } from './profile.js';
 
-const VERSION = '0.4.0';
+const VERSION = '0.5.0';
 const MAX_INPUT = 65536;
 const MAX_TERMINAL_FRAME = 32768;
 export interface CliIO {

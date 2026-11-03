@@ -10,6 +10,9 @@ export type BrokerScope =
   | 'agreements:read'
   | 'agreements:write'
   | 'agreements:activate'
+  | 'disks:read'
+  | 'disks:write'
+  | 'disks:use'
   | 'vms:read'
   | 'vms:terminal'
   | 'vms:terminate'
@@ -48,6 +51,7 @@ export interface Requirements {
   gpu?: string;
 }
 export interface CatalogItem extends Requirements {
+  capabilities?: string[];
   id: string;
   name: string;
   description: string;
@@ -115,6 +119,7 @@ export interface TranslationResult {
   modelCalled?: boolean;
 }
 export interface CreateOrderInput {
+  diskId?: string;
   description: string;
   catalogId: string;
   region: string;
@@ -137,7 +142,7 @@ export interface EnvironmentRequest extends Omit<CreateOrderInput, 'durationMinu
   pricing?: FixedQuote;
   revenueShare?: RevenueShare;
 }
-export type ProviderRequest = Omit<EnvironmentRequest, 'buyerId' | 'source'>;
+export type ProviderRequest = Omit<EnvironmentRequest, 'buyerId' | 'source' | 'diskId'>;
 export interface Bid {
   id: string;
   requestId?: string;
@@ -156,6 +161,7 @@ export interface Bid {
   simulated?: boolean;
 }
 export interface VM {
+  diskId?: string;
   id: string;
   requestId: string;
   buyerId: string;
@@ -321,6 +327,7 @@ export interface ProviderEarning {
   label: string;
 }
 export interface Desired extends Requirements {
+  diskId?: string;
   region: string;
   durationMinutes: number;
   maxPriceCents: number;

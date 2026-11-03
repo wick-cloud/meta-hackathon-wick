@@ -19,6 +19,7 @@ export function publicCatalogView(item: CatalogItem) {
     'pricingMode',
     'managedRouteVerification',
     'resources',
+    'capabilities',
     'maxTtlSeconds',
     'deadlineEnforcement',
   ] as const;

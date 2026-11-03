@@ -6,6 +6,8 @@ A single-process environment marketplace: describe an environment, review an imm
 
 The permanent **Orders** hub retains VM auctions and AI token purchases, including completed and archived orders. The hackathon product uses instant VM rentals; scheduled and bulk VM agreements have been retired. Existing billing records and previously accepted commitments retain their legacy accounting and cleanup support. See [Orders and legacy records](docs/orders-and-agreements.md).
 
+**Persistent disks:** buyer-owned shared Wick drives retain agent workspaces across VM and task lifetimes. Disk management, VM selection, Studio continuation and developer access are available behind `DISKS_ENABLED`; real provider routes require independent shared-mount qualification. See [persistent disks](docs/persistent-disks.md).
+
 **Developer access:** buyers and providers can create separate Broker API keys in **API keys**, then use the [TypeScript SDK, CLI and local MCP server](docs/developer-access.md). The same account, orders, funding and capacity rules apply. Broker keys are independent of Wick service credentials.
 
 **Agent purchasing:** the [buying workspace](docs/agent-buying.md) adds owner-reviewed Muse recommendations, optional automatic refills, purchase comparison receipts, and provider selling windows. It uses the existing app, database, wallet and worker. New agent grants default to two hours; buying never extends their deadline.

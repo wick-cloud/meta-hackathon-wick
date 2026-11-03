@@ -1,0 +1,188 @@
+.disk-inventory-head,
+.disk-picker-head,
+.disk-dialog-head,
+.disk-dialog-actions,
+.disk-delete-area {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.disk-inventory-head {
+  margin: -6px 0 20px;
+  flex-wrap: wrap;
+}
+.disk-private {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.disk-footnote {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 16px 0 22px;
+}
+.disk-detail-panel {
+  margin-top: 24px;
+}
+.disk-detail-panel h2 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.disk-info {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 16px 0;
+  color: var(--muted);
+}
+.disk-info > svg {
+  flex: none;
+  margin-top: 3px;
+}
+.disk-info p {
+  font-size: 13px;
+  line-height: 1.7;
+}
+.disk-delete-area {
+  justify-content: flex-start;
+  margin-top: 28px;
+  border-top: 1px solid var(--line);
+  padding-top: 22px;
+  color: var(--muted);
+  font-size: 12px;
+  flex-wrap: wrap;
+}
+.disk-repository {
+  overflow-wrap: anywhere;
+}
+.disk-picker {
+  margin: 20px 0;
+}
+.disk-picker-head {
+  margin-bottom: 9px;
+}
+.disk-picker-head label {
+  font-size: 13px;
+  color: var(--soft);
+  font-weight: 500;
+}
+.disk-picker select {
+  width: 100%;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--ink);
+  border-radius: 6px;
+  padding: 11px 12px;
+}
+.disk-picker .field-hint {
+  display: flex;
+  gap: 7px;
+  align-items: flex-start;
+}
+.disk-picker .field-hint svg {
+  margin-top: 2px;
+  flex: none;
+}
+.disk-more {
+  margin-top: 10px;
+}
+.disk-workspace-picker .field {
+  margin-bottom: 8px;
+}
+.disk-workspace-picker {
+  margin-bottom: 22px;
+}
+.disk-dialog-head {
+  margin-bottom: 30px;
+}
+.disk-dialog-head h2 {
+  margin: 0;
+}
+.disk-dialog-actions {
+  justify-content: flex-end;
+  margin-top: 24px;
+}
+.disk-create-form {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+.disk-create-form .disk-dialog-actions {
+  margin-top: auto;
+  padding-top: 30px;
+}
+.disk-create-form .disk-private {
+  margin-top: 0;
+  margin-bottom: 14px;
+}
+.disk-create-form .field {
+  margin-bottom: 12px;
+}
+.disk-action-copy {
+  color: var(--muted);
+  font-size: 13px;
+  margin: 16px 0 24px;
+}
+.market-dialog:has(.disk-create-form) {
+  margin: 0 0 0 auto;
+  max-height: 100dvh;
+  height: 100dvh;
+  width: min(440px, 100vw);
+  max-width: 100vw;
+  border-radius: 0;
+  border-width: 0 0 0 1px;
+  padding: 28px;
+}
+.disk-workspace-detail {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  margin: 0 0 22px;
+  color: var(--soft);
+  font-size: 13px;
+}
+.disk-workspace-detail a {
+  color: var(--accent);
+}
+.disk-workspace-detail > svg {
+  flex: none;
+  color: var(--accent);
+}
+.disk-workspace-detail small {
+  display: block;
+  color: var(--muted);
+  margin-top: 4px;
+  font-size: 12px;
+}
+.disk-action-copy + .error-box {
+  margin-top: 16px;
+}
+@media (max-width: 640px) {
+  .disk-picker-head {
+    align-items: flex-start;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .disk-delete-area {
+    align-items: flex-start;
+  }
+  .disk-workspace-detail {
+    align-items: flex-start;
+  }
+  .disk-dialog-actions .button {
+    flex: 1;
+  }
+  .market-dialog:has(.disk-create-form) {
+    padding: 22px;
+  }
+  .disk-inventory-head .button {
+    width: 100%;
+  }
+}

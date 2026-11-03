@@ -93,6 +93,8 @@ describe.skipIf(!databaseUrl)('buyer-reviewed nonbinding negotiation', () => {
     };
   }, 30000);
   beforeEach(async () => {
+    ctx.config.disksEnabled = false;
+    ctx.config.diskQualifiedCatalogIds = [];
     await pool.query(
       'TRUNCATE broker_activity,broker_invoices,broker_holds,broker_vms,broker_bids,broker_counteroffers,broker_intents,broker_requests,broker_offerings,broker_providers,broker_catalog CASCADE',
     );
@@ -376,6 +378,58 @@ describe.skipIf(!databaseUrl)('buyer-reviewed nonbinding negotiation', () => {
     await expect(
       pool.query("UPDATE broker_requests SET region='changed' WHERE id=$1", [row.id]),
     ).rejects.toThrow(/immutable/);
+  });
+  it('preserves a reviewed disk through counteroffer acceptance and replays after disk deletion', async () => {
+    ctx.config.disksEnabled = true;
+    await pool.query(
+      'INSERT INTO "user"(id,email,name,role,"emailVerified") VALUES($1,$2,$3,$4,true) ON CONFLICT(id) DO NOTHING',
+      [buyer.id, buyer.email, buyer.name, buyer.role],
+    );
+    const upstream = await ctx.wick.drives!.create(
+      { name: 'Persistent reviewed workspace' },
+      randomUUID(),
+    );
+    const diskId = randomUUID();
+    await pool.query(
+      `INSERT INTO broker_disks(id,buyer_id,name,source_mode,status,upstream_id,create_key)
+       VALUES($1,$2,'Persistent reviewed workspace','fixture','ready',$3,$4)`,
+      [diskId, buyer.id, upstream.drive.id, randomUUID()],
+    );
+    // SQL approval is authoritative; refreshed raw catalog JSON may still say unapproved.
+    await pool.query('UPDATE broker_catalog SET item=$2,approved=true WHERE id=$1', [
+      item.id,
+      { ...item, approved: false, capabilities: ['persistent-drives'] },
+    ]);
+    const p = await proposed({ desired: { ...desired, diskId } });
+    const offer = p.offers[0];
+    expect(offer.before.diskId).toBe(diskId);
+    expect(offer.after.diskId).toBe(diskId);
+    const key = randomUUID();
+    const accepted = await acceptCounteroffer(ctx, buyer, p.intent.id, offer.id, {
+      operationKey: key,
+    });
+    const frozen = (
+      await pool.query(
+        `SELECT r.disk_id AS request_disk_id,v.disk_id AS vm_disk_id,v.create_input
+         FROM broker_requests r JOIN broker_vms v ON v.request_id=r.id WHERE r.id=$1`,
+        [accepted.requestId],
+      )
+    ).rows[0];
+    expect(frozen.request_disk_id).toBe(diskId);
+    expect(frozen.vm_disk_id).toBe(diskId);
+    expect(frozen.create_input.workspaceDrive).toEqual({
+      driveId: upstream.drive.id,
+      accessMode: 'mount',
+    });
+    // Cancel before admission, then simulate the owner's later completed disk deletion.
+    await terminateVm(ctx, buyer.id, accepted.vmId);
+    await cleanupVm(ctx, accepted.vmId);
+    await pool.query("UPDATE broker_disks SET status='deleted' WHERE id=$1", [diskId]);
+    ctx.config.disksEnabled = false;
+    await expect(
+      acceptCounteroffer(ctx, buyer, p.intent.id, offer.id, { operationKey: key }),
+    ).resolves.toEqual(accepted);
+    expect(await counts()).toEqual({ requests: 1, holds: 0, vms: 1 });
   });
   it('serializes sibling acceptance and capacity races with no reserve leakage', async () => {
     const a = await proposed(),

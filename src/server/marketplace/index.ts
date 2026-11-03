@@ -436,7 +436,7 @@ export async function registerMarketplace(app: FastifyInstance, ctx: AppContext)
       )
     ).rows;
     return page(rows, limit, (r) => {
-      const { buyerId, source, ...visible } = requestView(r);
+      const { buyerId, source, diskId, ...visible } = requestView(r);
       return visible;
     });
   });

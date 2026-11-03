@@ -1,3 +1,5 @@
+import { registerDisks, reconcileDisk } from '../src/server/disks/index.js';
+import { fixtureDrives } from '../src/server/integrations/drives.js';
 import { randomBytes, randomUUID } from 'node:crypto';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { Pool } from 'pg';
@@ -110,6 +112,7 @@ describe.skipIf(!databaseUrl)(
         BETTER_AUTH_SECRET: 'wire-fixture-secret-with-at-least-32-characters',
         WICK_MODE: 'fixture',
         MUSE_MODE: 'fixture',
+        DISKS_ENABLED: 'true',
       });
       for (const item of fixtureCatalog(config))
         await pool.query('INSERT INTO broker_catalog(id,item,approved) VALUES($1,$2,true)', [
@@ -139,6 +142,7 @@ describe.skipIf(!databaseUrl)(
         muse: createMuseAdapter({ museMode: 'fixture' }),
         wick: {
           mode: 'fixture',
+          drives: fixtureDrives(config, pool),
           create: vi.fn(() => {
             throw Error('No native allocation allowed');
           }),
@@ -161,6 +165,7 @@ describe.skipIf(!databaseUrl)(
         };
       });
       await registerMarketplace(app, ctx);
+      await registerDisks(app, ctx);
       registerOrders(app, ctx);
       await registerAgreements(app, ctx);
       registerAgreementBilling(app, ctx);
@@ -170,7 +175,7 @@ describe.skipIf(!databaseUrl)(
       const fetcher: typeof fetch = async (input, init) => {
         const url = new URL(String(input));
         const response = await app.inject({
-          method: init?.method as 'GET' | 'POST' | 'PUT' | 'PATCH',
+          method: init?.method as 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE',
           url: url.pathname + url.search,
           headers: init?.headers as Record<string, string>,
           ...(init?.body ? { payload: String(init.body) } : {}),
@@ -288,6 +293,25 @@ describe.skipIf(!databaseUrl)(
       );
       await buyer.alternatives.list();
       await buyer.alternatives.get(intent.id);
+      await buyer.disks.options();
+      await buyer.disks.list({ limit: 10 });
+      const disk = await buyer.disks.create(
+        { name: 'Wire persistent project' },
+        { operationKey: 'wire-disk-create' },
+      );
+      expect(disk.status).toBe('creating');
+      await reconcileDisk(ctx, disk.id);
+      expect((await buyer.disks.get(disk.id)).disk.status).toBe('ready');
+      await buyer.disks.workspaces(disk.id, { limit: 10 });
+      await buyer.disks.rename(
+        disk.id,
+        { name: 'Renamed persistent project' },
+        { operationKey: 'wire-disk-rename' },
+      );
+      await reconcileDisk(ctx, disk.id);
+      await buyer.disks.delete(disk.id, { operationKey: 'wire-disk-delete' });
+      await reconcileDisk(ctx, disk.id);
+      expect((await buyer.disks.get(disk.id)).disk.status).toBe('deleted');
       for (const request of requests) {
         const template = Object.entries(BROKER_OPERATION_SCHEMAS).find(([signature]) => {
           const [method, path] = signature.split(' ');

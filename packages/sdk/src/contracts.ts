@@ -93,6 +93,7 @@ const offeringProperties = {
   normalRateCentsPerHour: cents,
 };
 const desiredProperties = {
+  diskId: id,
   cpu: integer,
   memoryGb: number,
   gpu: string,
@@ -133,6 +134,49 @@ const tokenOfferingProperties = {
 };
 
 export const BROKER_API_SCHEMAS: Record<string, JsonSchema> = {
+  DiskOptions: object({ enabled: bool, mode: inferenceMode, eligibleCatalogIds: arr(id) }),
+  DiskInput: object({ operationKey, name: { type: 'string', minLength: 1, maxLength: 100 } }),
+  Disk: object({
+    id,
+    name: string,
+    status: { type: 'string', enum: ['creating', 'ready', 'failed', 'deleting', 'deleted'] },
+    sourceMode: inferenceMode,
+    createdAt: date,
+    updatedAt: date,
+    cleanupPending: bool,
+    failureReason: { type: ['string', 'null'] },
+    workspaceCount: integer,
+    attachmentCount: integer,
+    canDelete: bool,
+  }),
+  DiskWorkspace: object({
+    id,
+    diskId: id,
+    name: string,
+    repositoryUrl: string,
+    commitSha: string,
+    initialized: bool,
+    activeTaskId: { type: ['string', 'null'] },
+    status: { type: 'string', enum: ['available', 'in_use'] },
+    createdAt: date,
+    updatedAt: date,
+  }),
+  DiskAttachment: object({
+    vmId: id,
+    environmentId: { type: ['string', 'null'] },
+    status: string,
+    generation: { type: ['string', 'null'] },
+    provider: string,
+    vmName: string,
+    createdAt: date,
+  }),
+  DisksPage: page(ref('Disk')),
+  DiskWorkspacesPage: page(ref('DiskWorkspace')),
+  DiskDetail: object({
+    disk: ref('Disk'),
+    workspaces: arr(ref('DiskWorkspace')),
+    attachments: arr(ref('DiskAttachment')),
+  }),
   InferenceModelList: object({
     object: { const: 'list' },
     data: arr(object({ id, object: { const: 'model' }, created: tokens, owned_by: string })),
@@ -411,6 +455,7 @@ export const BROKER_API_SCHEMAS: Record<string, JsonSchema> = {
   ),
   CatalogItem: object(
     {
+      capabilities: arr(string),
       id,
       name: string,
       description: string,
@@ -512,6 +557,7 @@ export const BROKER_API_SCHEMAS: Record<string, JsonSchema> = {
   ),
   CreateOrder: object(
     {
+      diskId: id,
       operationKey,
       description: { type: 'string', minLength: 1, maxLength: 4000 },
       catalogId: string,
@@ -533,6 +579,7 @@ export const BROKER_API_SCHEMAS: Record<string, JsonSchema> = {
   ),
   EnvironmentRequest: object(
     {
+      diskId: id,
       id,
       buyerId: string,
       catalogName: string,
@@ -590,6 +637,7 @@ export const BROKER_API_SCHEMAS: Record<string, JsonSchema> = {
   ),
   VM: object(
     {
+      diskId: id,
       id,
       environmentId: { type: ['string', 'null'] },
       admittedAt: nullableDate,
@@ -1233,6 +1281,46 @@ export interface OperationSchema {
 }
 /** Every explicitly key-enabled HTTP route has a concrete request/response contract. */
 export const BROKER_OPERATION_SCHEMAS: Record<string, OperationSchema> = {
+  'GET /api/disks/options': {
+    operationId: 'diskOptions',
+    summary: 'Read enabled disk support and qualified compute routes',
+    output: 'DiskOptions',
+  },
+  'GET /api/disks': {
+    operationId: 'listDisks',
+    summary: 'List customer-owned persistent disks',
+    output: 'DisksPage',
+    paginated: true,
+  },
+  'POST /api/disks': {
+    operationId: 'createDisk',
+    summary: 'Create a private shared persistent disk',
+    input: 'DiskInput',
+    output: 'Disk',
+  },
+  'GET /api/disks/:id': {
+    operationId: 'getDisk',
+    summary: 'Inspect an owned disk, workspaces and attachments',
+    output: 'DiskDetail',
+  },
+  'GET /api/disks/:id/workspaces': {
+    operationId: 'listDiskWorkspaces',
+    summary: 'List persistent workspaces on an owned disk',
+    output: 'DiskWorkspacesPage',
+    paginated: true,
+  },
+  'PATCH /api/disks/:id': {
+    operationId: 'renameDisk',
+    summary: 'Rename an owned persistent disk',
+    input: 'DiskInput',
+    output: 'Disk',
+  },
+  'DELETE /api/disks/:id': {
+    operationId: 'deleteDisk',
+    summary: 'Delete a disk only after all uses and attachments resolve',
+    input: 'Operation',
+    output: 'Disk',
+  },
   'GET /api/v1/models': {
     operationId: 'listCompatibleInferenceModels',
     summary: 'Read canonical model identifiers in the OpenAI-compatible discovery format',

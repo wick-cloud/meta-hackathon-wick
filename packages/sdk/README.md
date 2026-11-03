@@ -146,3 +146,7 @@ If a transport timeout provides no receipt identifier, explicitly repeat the ide
 ## Legacy scheduled VM compatibility
 
 Version `0.4.0` removes scheduled VM workflows from current discovery. Deprecated SDK methods and historical types remain so existing integrations can read records, cancel unmatched capacity and honor already-approved funded bookings. New agreements, previews, scheduled drafts and supply changes return HTTP 410. Legacy billing and capacity records remain readable; this compatibility does not enable new scheduling.
+
+## Persistent workspace disks (0.5.0)
+
+`broker.disks.options()`, `list()`, `get(id)`, `workspaces(id)`, `create({name}, {operationKey})`, `rename(id, {name}, {operationKey})`, and `delete(id, {operationKey})` call the same owner-scoped Broker APIs. Disk creation/deletion are asynchronous. Poll `get(id)` for the current disk status. Pass `diskId` to `orders.create` to mount an owned ready disk when a new VM starts; disk-backed alternative intents carry `desired.diskId`. Buyer keys need the relevant `disks:read`, `disks:write` and `disks:use` scopes. Disks persist after VM termination. Real shared mounts require operator-qualified routes.

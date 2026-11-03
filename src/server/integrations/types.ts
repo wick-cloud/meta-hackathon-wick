@@ -1,3 +1,4 @@
+import type { WickDrives } from './drives.js';
 import type {
   CatalogItem,
   Translation,
@@ -19,6 +20,7 @@ export interface CreateEnvironmentInput {
   hardEndAt?: string;
   maximumPriceMicrosPerSecond?: number;
   visibility: 'private';
+  workspaceDrive?: { driveId: string; accessMode: 'mount' };
 }
 export interface WickEnvironment {
   id: string;
@@ -33,6 +35,14 @@ export interface WickEnvironment {
   profile?: string;
   providerKeyId?: string;
   billingMode?: 'wick_managed' | 'byok';
+  workspaceDrive?: {
+    driveId: string;
+    generation?: string;
+    status?: string;
+    attachmentMode?: 'exclusive' | 'shared';
+    accessMode?: 'mount' | 'files';
+    workspacePath?: string;
+  };
   raw?: unknown;
 }
 export interface WickCreateResult {
@@ -66,6 +76,7 @@ export interface WickTerminalOptions {
 }
 export interface WickAdapter {
   mode: 'fixture' | 'real';
+  drives?: WickDrives;
   /** Structured execution, with native status/exit code. No command retries. */
   runCommand?(
     id: string,

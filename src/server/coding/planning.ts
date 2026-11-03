@@ -78,6 +78,13 @@ export function planMessages(
         goal,
         ownerTestCommand: command,
         repository: {
+          ...(input.context.continuingWorkspace
+            ? {
+                startingPoint:
+                  'Existing saved workspace; preserve current files and uncommitted changes.',
+                originalCommit: input.context.originalCommit,
+              }
+            : {}),
           files: (input.context.files ?? []).slice(0, 50),
           totalRootEntries: input.context.files?.length ?? 0,
           manifests: (input.context.manifests ?? [])
