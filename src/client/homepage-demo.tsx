@@ -60,6 +60,7 @@ export function useHomepageDemo() {
   const startOperation = useRef(crypto.randomUUID()),
     endOperation = useRef(crypto.randomUUID());
   const attemptedKind = useRef<DemoKind | null>(null);
+  const attemptedName = useRef('');
   const keyRun = useRef<string | null>(null);
   const wasCooling = useRef(false);
   const accept = useCallback((next: DemoState) => {
@@ -135,11 +136,12 @@ export function useHomepageDemo() {
     const timer = setInterval(() => setNow(Date.now() + offset.current), 1000);
     return () => clearInterval(timer);
   }, [active, cooldown]);
-  async function act(action: 'start' | 'end' | 'key', kind: DemoKind = 'terminal') {
+  async function act(action: 'start' | 'end' | 'key', kind: DemoKind = 'terminal', demoName = '') {
     if (actionLock.current) return;
     if (action === 'start') {
       // An uncertain start must retry the same kind with the same operation key.
       if (attemptedKind.current && attemptedKind.current !== kind) return;
+      if (!attemptedKind.current) attemptedName.current = demoName.trim();
       attemptedKind.current = kind;
       setStartKind(kind);
     }
@@ -162,7 +164,14 @@ export function useHomepageDemo() {
       } else {
         const next = await post<DemoState>(`/api/demo/${action}`, {
           operationKey: action === 'start' ? startOperation.current : endOperation.current,
-          ...(action === 'start' ? { kind: attemptedKind.current } : {}),
+          ...(action === 'start'
+            ? {
+                kind: attemptedKind.current,
+                ...(attemptedKind.current === 'studio' && attemptedName.current
+                  ? { demoName: attemptedName.current }
+                  : {}),
+              }
+            : {}),
         });
         if (mounted.current) {
           accept(next);
@@ -206,7 +215,30 @@ export function useHomepageDemo() {
 }
 export type HomepageDemo = ReturnType<typeof useHomepageDemo>;
 
-export function DemoAction({ demo, kind = 'terminal' }: { demo: HomepageDemo; kind?: DemoKind }) {
+export function StudioDemoTask({ name = '' }: { name?: string }) {
+  return (
+    <label className="demo-task-box">
+      <span>Your Muse task</span>
+      <textarea
+        aria-label="Your Muse task"
+        value={`Create hello_world.py that prints Hello, ${name.trim() || 'World'}! Run it and verify the output.`}
+        readOnly
+        rows={3}
+      />
+      <small>Fixed Hello World task for this hackathon demo · Up to 2 model calls</small>
+    </label>
+  );
+}
+
+export function DemoAction({
+  demo,
+  kind = 'terminal',
+  demoName = '',
+}: {
+  demo: HomepageDemo;
+  kind?: DemoKind;
+  demoName?: string;
+}) {
   const { data, loading, busy, active, cooldown } = demo;
   if (data?.run && (active || cooldown)) {
     if ((data.run.kind ?? 'terminal') !== kind)
@@ -229,13 +261,14 @@ export function DemoAction({ demo, kind = 'terminal' }: { demo: HomepageDemo; ki
   return (
     <button
       className="button primary"
-      onClick={() => void demo.act('start', kind)}
+      onClick={() => void demo.act('start', kind, demoName)}
       disabled={
         loading ||
         !!busy ||
         !data?.available ||
         !data?.enabled ||
-        (!!demo.startKind && demo.startKind !== kind)
+        (!!demo.startKind && demo.startKind !== kind) ||
+        (kind === 'studio' && !/^[\p{L}\p{N} .'-]{0,40}$/u.test(demoName.trim()))
       }
     >
       {busy === 'start' && demo.startKind === kind ? (
@@ -534,7 +567,7 @@ function GuidedStudio({
     status === 'passed' &&
     studio?.exitCode === 0 &&
     !!studio.verifiedAt &&
-    studio.stdout === 'Hello, World!\n';
+    studio.stdout === `Hello, ${run.demoName || 'World'}!\n`;
   const finished = verified || status === 'needs_attention';
   const label = verified
     ? mode === 'fixture'
@@ -566,8 +599,8 @@ function GuidedStudio({
         </span>
       </div>
       <p className="demo-studio-task">
-        The task: write <code>hello_world.py</code> to print <code>Hello, World!</code>, then run it
-        and check the result.
+        The task: write <code>hello_world.py</code> to print{' '}
+        <code>Hello, {run.demoName || 'World'}!</code>, then run it and check the result.
       </p>
       <p className="demo-studio-explanation">
         This guided demo generates one Python file. It uses the purchased Muse allowance
@@ -741,6 +774,7 @@ export function HomepageDemoSession({ demo }: { demo: HomepageDemo }) {
           Fixture environment · resources and inference are simulated.
         </p>
       )}
+      {isStudio && <StudioDemoTask name={run.demoName} />}
       <ol className="demo-progress" aria-label="Demo progress">
         {[
           'Live auctions',

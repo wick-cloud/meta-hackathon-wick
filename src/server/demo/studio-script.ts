@@ -1,12 +1,13 @@
 /** Fixed prompts, never supplied by the anonymous caller. No repository or arbitrary task input. */
-export function demoStudioMessages(attempt: 0 | 1) {
+export function demoStudioMessages(attempt: 0 | 1, name = '') {
+  const greeting = `Hello, ${name || 'World'}!`;
   return [
     {
       role: 'user' as const,
       content:
         attempt === 0
-          ? 'Return JSON only: {"source":"Python code"}. Write one Python print statement that outputs exactly Hello, World! followed by a newline. Use a string literal, no other statements, arguments, imports or markdown.'
-          : 'The previous answer failed validation. Return exactly one JSON object with a source string containing only print("Hello, World!") and a newline. No other keys, code, imports or markdown.',
+          ? `Return JSON only: {"source":"Python code"}. Write one Python print statement that outputs exactly ${JSON.stringify(greeting)} followed by a newline. Use a string literal, no other statements, arguments, imports or markdown.`
+          : `The previous answer failed validation. Return exactly one JSON object with a source string containing only print(${JSON.stringify(greeting)}) and a newline. No other keys, code, imports or markdown.`,
     },
   ];
 }
@@ -32,7 +33,7 @@ def valid_source():
     except (SyntaxError,ValueError,tokenize.TokenError): return False
     if len(tree.body)!=1 or type(tree.body[0]) is not ast.Expr: return False
     node=tree.body[0].value
-    return (type(node) is ast.Call and type(node.func) is ast.Name and node.func.id=="print" and len(node.args)==1 and not node.keywords and type(node.args[0]) is ast.Constant and type(node.args[0].value) is str and node.args[0].value=="Hello, World!")
+    return (type(node) is ast.Call and type(node.func) is ast.Name and node.func.id=="print" and len(node.args)==1 and not node.keywords and type(node.args[0]) is ast.Constant and type(node.args[0].value) is str and node.args[0].value==job.get("greeting","Hello, World!"))
 if not valid_source():
     result["errorCode"]="invalid_source"
     emit()
@@ -81,14 +82,20 @@ else:
         completed=subprocess.run([sys.executable,"-I","-S","-c",child,base64.b64encode(raw).decode()],cwd=BASE,env={"PATH":"/usr/bin:/bin","LANG":"C.UTF-8"},capture_output=True,timeout=min(3,max(0.01,job["deadline"]-time.time())),preexec_fn=limits)
         result["stdout"]=completed.stdout[:1024].decode("utf-8",errors="replace")
         result["exitCode"]=completed.returncode
-        if completed.returncode!=0 or completed.stdout!=b"Hello, World!\n": result["errorCode"]="test_failed"
+        if completed.returncode!=0 or completed.stdout!=(job.get("greeting","Hello, World!")+"\n").encode("utf-8"): result["errorCode"]="test_failed"
     except subprocess.TimeoutExpired: result["errorCode"]="execution_timeout"
 fd=os.open(journal,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
 with os.fdopen(fd,"w") as f: json.dump(result,f,separators=(",",":"))
 emit()
 `;
 }
-export function demoStudioCommand(runId: string, attempt: 0 | 1, source: string, deadline: string) {
+export function demoStudioCommand(
+  runId: string,
+  attempt: 0 | 1,
+  source: string,
+  deadline: string,
+  name = '',
+) {
   if (
     !/^[a-f0-9-]{36}$/.test(runId) ||
     ![0, 1].includes(attempt) ||
@@ -97,7 +104,13 @@ export function demoStudioCommand(runId: string, attempt: 0 | 1, source: string,
     throw new Error('Invalid guided Studio execution identity.');
   const runner = Buffer.from(demoStudioRunnerSource()).toString('base64');
   const input = Buffer.from(
-    JSON.stringify({ runId, attempt, source, deadline: Date.parse(deadline) / 1000 }),
+    JSON.stringify({
+      runId,
+      attempt,
+      source,
+      greeting: `Hello, ${name || 'World'}!`,
+      deadline: Date.parse(deadline) / 1000,
+    }),
   ).toString('base64');
   return `python3 -I -S -c 'import base64;exec(compile(base64.b64decode("${runner}"),"wick_demo_studio_runner.py","exec"))' '${input}'`;
 }

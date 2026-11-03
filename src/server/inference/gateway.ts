@@ -476,7 +476,7 @@ export async function completeDemoStudio(
     failure(403, 'owner_required', 'Guided Studio requires its worker authority.');
   const run = (
     await ctx.pool.query(
-      "SELECT grant_id,pack_id FROM broker_demo_runs WHERE id=$1 AND buyer_id=$2 AND kind='studio'",
+      "SELECT grant_id,pack_id,demo_name FROM broker_demo_runs WHERE id=$1 AND buyer_id=$2 AND kind='studio'",
       [runId, actor.id],
     )
   ).rows[0];
@@ -487,7 +487,7 @@ export async function completeDemoStudio(
     {
       operationKey: `demo-studio:${runId}:${attempt}`,
       model: INFERENCE_MODEL_ID,
-      messages: demoStudioMessages(attempt),
+      messages: demoStudioMessages(attempt, run.demo_name),
       max_tokens: 1024,
       stream: false,
     },

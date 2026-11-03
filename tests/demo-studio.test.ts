@@ -32,6 +32,23 @@ describe('guided Studio prompt and actual restricted Python runner', () => {
     }
   });
 
+  it('executes a personalized literal greeting and rejects a different output', () => {
+    const runner = localStudioRunner();
+    try {
+      const name = "Alex O'Neil";
+      const code = `print(${JSON.stringify(`Hello, ${name}!`)})\n`;
+      const receipt = runner.execute(demoStudioCommand(randomUUID(), 0, code, deadline(), name));
+      expect(receipt.stdout).toBe(`Hello, ${name}!\n`);
+      expect(receipt.exitCode).toBe(0);
+      expect(
+        runner.execute(demoStudioCommand(randomUUID(), 0, code, deadline(), 'Someone Else')).valid,
+      ).toBe(false);
+      expect(demoStudioMessages(0, name)[0].content).toContain(JSON.stringify(`Hello, ${name}!`));
+    } finally {
+      runner.close();
+    }
+  });
+
   it('writes the exact generated source and executes it in a real child Python process', () => {
     const runner = localStudioRunner(),
       id = randomUUID();

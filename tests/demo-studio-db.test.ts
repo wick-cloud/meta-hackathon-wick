@@ -17,6 +17,26 @@ describe.skipIf(!databaseUrl)(
       await f?.close();
     });
 
+    it('accepts a bounded optional name and freezes it with the admitted task', async () => {
+      const guest = demoGuest(),
+        key = randomUUID();
+      const result = await f.start(guest, 'studio', key, { demoName: '  Alex  ' });
+      expect(result.statusCode, result.body).toBe(200);
+      expect(result.json().run.demoName).toBe('Alex');
+      expect((await f.start(guest, 'studio', key, { demoName: 'Alex' })).statusCode).toBe(200);
+      expect((await f.start(guest, 'studio', key, { demoName: 'Other' })).statusCode).toBe(409);
+      await expect(
+        f.pool.query("UPDATE broker_demo_runs SET demo_name='Other' WHERE id=$1", [
+          result.json().run.id,
+        ]),
+      ).rejects.toThrow();
+      for (const name of ['x'.repeat(41), 'Alex\nimport os', '<script>', '\"; exec(1)']) {
+        expect(
+          (await f.start(demoGuest(), 'studio', randomUUID(), { demoName: name })).statusCode,
+        ).toBe(400);
+      }
+    });
+
     it('preserves terminal as the default and freezes the chosen kind across retries and SQL writes', async () => {
       const guest = demoGuest(),
         operationKey = randomUUID();

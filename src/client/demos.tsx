@@ -1,9 +1,10 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { ArrowRight, ArrowUpRight, Bot, Clock3, RefreshCw, Sparkles } from 'lucide-react';
 import { Brand } from './brand';
 import { Link } from './components';
 import {
   DemoAction,
+  StudioDemoTask,
   DemoError,
   DemoOverview,
   HomepageDemoSession,
@@ -15,6 +16,9 @@ import './demos.css';
 /** Public demo entry point. Visiting this page only reads an existing guest session. */
 export function DemoLanding() {
   const demo = useHomepageDemo();
+  const [name, setName] = useState('');
+  const locked = demo.active || demo.cooldown || !!demo.busy || !!demo.startKind;
+  const taskName = demo.data?.run?.kind === 'studio' ? (demo.data.run.demoName ?? '') : name;
   const fixtureMode = demo.data?.mode === 'fixture';
   useEffect(() => {
     const id = window.location.hash.slice(1);
@@ -128,7 +132,28 @@ export function DemoLanding() {
                 A guided Hello World task with visible source and execution results. Then explore
                 the files in your terminal. No API key to copy.
               </p>
-              <DemoAction demo={demo} kind="studio" />
+              <label className="demo-task-box">
+                <span>Choose a task</span>
+                <select aria-label="Choose a task" defaultValue="hello-world" disabled={locked}>
+                  <option value="hello-world">Hello World</option>
+                </select>
+              </label>
+              <label className="demo-task-box">
+                <span>Your name (optional)</span>
+                <input
+                  aria-label="Your name (optional)"
+                  value={taskName}
+                  maxLength={40}
+                  placeholder="e.g. Alex"
+                  disabled={locked}
+                  onChange={(event) => setName(event.target.value)}
+                />
+                <small>
+                  Letters, numbers, spaces, periods, apostrophes and hyphens. Leave blank for World.
+                </small>
+              </label>
+              <StudioDemoTask name={taskName} />
+              <DemoAction demo={demo} kind="studio" demoName={taskName} />
             </div>
           </section>
         </div>

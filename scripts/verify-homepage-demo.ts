@@ -116,7 +116,7 @@ function scriptReceipt(output: string, marker: string): { usage: Usage; answerCh
   };
 }
 
-function studioReceipt(value: unknown) {
+function studioReceipt(value: unknown, name = '') {
   const receipt = parse(
     z.object({
       kind: z.literal('studio'),
@@ -136,7 +136,7 @@ function studioReceipt(value: unknown) {
           .string()
           .min(1)
           .refine((source) => Buffer.byteLength(source) <= 256),
-        stdout: z.literal('Hello, World!\n'),
+        stdout: z.literal(`Hello, ${name || 'World'}!\n`),
         exitCode: z.literal(0),
         requestsUsed: z.number().int().min(1).max(2),
         verifiedAt: z.string().datetime(),
@@ -157,11 +157,12 @@ function studioReceipt(value: unknown) {
   };
 }
 
-function studioFileReceipt(output: string, marker: string, expectedHash: string) {
+function studioFileReceipt(output: string, marker: string, expectedHash: string, name = '') {
   check(/^[a-f0-9]{64}$/.test(expectedHash), 'studio_expected_hash_invalid');
+  const greeting = `Hello, ${name || 'World'}!`.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const match = plainTerminal(output).match(
     new RegExp(
-      `(?:^|\\n)${marker}:BEGIN\\nHello, World!\\n${marker}:SHA256:([a-f0-9]{64})\\n\\n${marker}:EXIT:0:0(?:\\n|$)`,
+      `(?:^|\\n)${marker}:BEGIN\\n${greeting}\\n${marker}:SHA256:([a-f0-9]{64})\\n\\n${marker}:EXIT:0:0(?:\\n|$)`,
     ),
   );
   check(match, 'studio_terminal_file_execution_invalid');
@@ -318,7 +319,7 @@ class LiveTerminal {
     );
     return scriptReceipt(this.output, marker);
   }
-  async runStudioFile(expectedHash: string) {
+  async runStudioFile(expectedHash: string, name = '') {
     await this.wait(() => this.ready, 20000, 'terminal_ready_timeout');
     this.output = '';
     const marker = `WICK_STUDIO_FILE_${randomUUID().replaceAll('-', '')}`;
@@ -335,7 +336,7 @@ class LiveTerminal {
       20000,
       'studio_terminal_file_timeout',
     );
-    return studioFileReceipt(this.output, marker, expectedHash);
+    return studioFileReceipt(this.output, marker, expectedHash, name);
   }
   async assertInteractive() {
     await this.wait(() => this.ready, 20000, 'terminal_ready_timeout');
@@ -362,6 +363,8 @@ class LiveTerminal {
 }
 
 async function verify(origin: string, kind: 'terminal' | 'studio' = 'terminal') {
+  const name = kind === 'studio' ? (process.env.DEMO_NAME ?? '').trim() : '';
+  check(/^[\p{L}\p{N} .'-]{0,40}$/u.test(name), 'invalid_demo_name');
   const began = performance.now();
   const log = (event: string, data: Record<string, unknown> = {}) =>
     console.log(
@@ -464,6 +467,7 @@ async function verify(origin: string, kind: 'terminal' | 'studio' = 'terminal') 
             'terminated',
             'deleting',
             'deleted',
+            'retained',
             'waiting',
             'generating',
             'passed',
@@ -510,7 +514,7 @@ async function verify(origin: string, kind: 'terminal' | 'studio' = 'terminal') 
     );
     check(
       (!ended.run?.vm?.id || ended.run.vm.cleanupConfirmed) &&
-        (!ended.run?.disk || ended.run.disk.status === 'deleted') &&
+        (!ended.run?.disk || ['deleted', 'retained'].includes(ended.run.disk.status)) &&
         !ended.run?.canIssueKey &&
         !ended.run?.vm?.terminalPath,
       'cleanup_resources_not_confirmed',
@@ -531,7 +535,7 @@ async function verify(origin: string, kind: 'terminal' | 'studio' = 'terminal') 
     active();
     startAttempted = true;
     const operationKey = randomUUID();
-    const startBody = { operationKey, ...(kind === 'studio' ? { kind } : {}) };
+    const startBody = { operationKey, ...(kind === 'studio' ? { kind, demoName: name } : {}) };
     const start = await request('/api/demo/start', startBody);
     if (start.status >= 400 && start.status < 500 && !cookie) startAttempted = false;
     check(start.status === 200 && cookie, `demo_start_http_${start.status}`);
@@ -629,13 +633,13 @@ async function verify(origin: string, kind: 'terminal' | 'studio' = 'terminal') 
           finished.run.expiresAt === run.expiresAt,
         'studio_resources_or_lease_changed',
       );
-      studioUsage = studioReceipt(finished.run);
+      studioUsage = studioReceipt(finished.run, name);
       expectedRequests = studioUsage.requestsUsed;
       const denied = await request('/api/demo/key', { operationKey: randomUUID() });
       check(denied.status === 403, 'studio_key_issuance_not_denied');
       check(key === '', 'studio_must_never_hold_api_key');
       terminal = new LiveTerminal(wsUrl, origin, cookie);
-      const file = await terminal.runStudioFile(studioUsage.sourceSha256);
+      const file = await terminal.runStudioFile(studioUsage.sourceSha256, name);
       log('studio_verified', {
         runId: ownedRunId,
         ...ownedIds,
