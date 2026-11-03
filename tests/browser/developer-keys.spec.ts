@@ -109,7 +109,11 @@ test('key setup gives copyable direct downloads and contains mobile overflow', a
   await fixture(page, 'buyer');
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/keys');
-  const install = await page.locator('.key-setup > pre').innerText();
+  const setup = page.locator('.key-setup');
+  await expect(setup).not.toHaveAttribute('open');
+  await expect(setup.locator('pre').first()).not.toBeVisible();
+  await setup.locator('summary').click();
+  const install = await setup.locator('pre').first().innerText();
   expect(install.split('\n')).toHaveLength(4);
   expect(install).not.toContain('\\n');
   expect(install).toContain('/downloads/0.5.0/wick-cloud-broker-sdk-0.5.0.tgz');

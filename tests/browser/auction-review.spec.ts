@@ -248,13 +248,15 @@ test('no compatible CPU and memory shape disables the auction without reducing r
   expect(fixture.writes).toEqual([]);
 });
 
-for (const width of [375, 1440])
+for (const width of [375, 768, 1440])
   test(`resource-first auction review fits at ${width}px`, async ({ page }, testInfo) => {
     const fixture = await review(page, {
       draft: { durationMinutes: 30, requirements: { cpu: 4, memoryGb: 8 } },
     });
     await page.setViewportSize({ width, height: width === 375 ? 812 : 1000 });
     await assertResourceOnly(page);
+    await expect(page.getByText('Step 2 of 3', { exact: true })).toBeVisible();
+    await expect(page.locator('main .button.primary:visible')).toHaveCount(1);
     await expect(
       page.getByRole('textbox', { name: 'Your requirement', exact: true }),
     ).toBeVisible();

@@ -30,6 +30,7 @@
   font: 12px/1.6 var(--font-mono);
   text-align: left;
   overflow-wrap: anywhere;
+  min-height: 36px;
 }
 .disk-files-breadcrumbs button:not(:disabled):hover {
   color: var(--ink);
@@ -63,6 +64,12 @@
   text-align: left;
   font-size: 13px;
   font-weight: 500;
+  min-height: 36px;
+}
+.disk-files-panel :is(button, pre):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 4px;
 }
 .disk-file-name svg {
   flex: none;
@@ -145,6 +152,9 @@
   tab-size: 4;
 }
 @media (max-width: 640px) {
+  .disk-files-panel :is(button, .button) {
+    min-height: 44px;
+  }
   .disk-file-preview-head {
     flex-wrap: wrap;
   }

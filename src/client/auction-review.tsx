@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import { ArrowRight, ChevronLeft, Clock3, Cpu, ShieldCheck, Sparkles } from 'lucide-react';
+import { ArrowRight, Clock3, Cpu, ShieldCheck, Sparkles } from 'lucide-react';
 import { isMoneyCents, MIN_ORDER_PRICE_CENTS } from '../shared/money';
 import { loadDraft, money, post, saveDraft, type Draft, type EnvironmentRequest } from './api';
 import {
@@ -13,6 +13,17 @@ import {
   useSession,
 } from './components';
 import { DiskPicker, useDiskOptions } from './disks';
+import {
+  FormPage,
+  FormLayout,
+  FormPanel,
+  FormSection,
+  FormSummary,
+  FormSummaryRows,
+  FormTotal,
+  FormNotice,
+  FormDisclosure,
+} from './form-layout';
 
 export function RequestReview() {
   const { catalog, modes } = useSession(),
@@ -62,26 +73,18 @@ export function RequestReview() {
   }
   if (!draft)
     return (
-      <>
-        <div className="auction-review">
-          <header className="auction-review-header">
-            <div>
-              <span className="auction-review-eyebrow">AUCTION REQUEST</span>
-              <h1>Review your auction</h1>
-            </div>
-          </header>
-          <EmptyState
-            icon={<Cpu size={26} />}
-            title="No request to review yet"
-            description="Describe the resources you need to get started."
-          >
-            <Link href="/new/vm" className="button primary">
-              New environment
-              <ArrowRight size={16} />
-            </Link>
-          </EmptyState>
-        </div>
-      </>
+      <FormPage eyebrow="AUCTION REQUEST" title="Review your auction" step="Step 2 of 3">
+        <EmptyState
+          icon={<Cpu size={26} />}
+          title="No request to review yet"
+          description="Describe the resources you need to get started."
+        >
+          <Link href="/new/vm" className="button primary">
+            New environment
+            <ArrowRight size={16} />
+          </Link>
+        </EmptyState>
+      </FormPage>
     );
   const resourcesValid =
     Number.isInteger(draft.requirements.cpu) &&
@@ -134,31 +137,92 @@ export function RequestReview() {
     }
   }
   return (
-    <div className="auction-review">
-      <Link href="/new/vm" className="back-link">
-        <ChevronLeft size={16} />
-        Back to description
-      </Link>
-      <header className="auction-review-header">
-        <div>
-          <span className="auction-review-eyebrow">AUCTION REQUEST</span>
-          <h1>Review your auction</h1>
-          <p>Define what you need. Let the best eligible offer win.</p>
-        </div>
-        <span className="auction-review-step">Step 2 of 3</span>
-      </header>
-      <form onSubmit={submit} className="auction-review-layout">
-        <div className="auction-review-main">
-          <section className="auction-review-panel" aria-label="Auction requirements">
-            <div className="auction-review-section">
-              <div className="auction-review-section-heading">
-                <h2>Environment requirements</h2>
-                <p>Set the minimum. Compatible providers compete to meet it.</p>
+    <FormPage
+      className="auction-review"
+      eyebrow="AUCTION REQUEST"
+      title="Review your auction"
+      description="Define what you need. Let the best eligible offer win."
+      back={{ href: '/new/vm', label: 'Back to description' }}
+      step="Step 2 of 3"
+    >
+      <form onSubmit={submit}>
+        <FormLayout
+          aside={
+            <FormSummary title="Ready for bids" description="Open to all compatible providers">
+              <FormSummaryRows
+                items={[
+                  { label: 'Compute', value: `${draft.requirements.cpu || '—'} vCPU minimum` },
+                  { label: 'Memory', value: `${draft.requirements.memoryGb || '—'} GiB minimum` },
+                  ...(draft.requirements.gpu
+                    ? [
+                        {
+                          label: 'GPU',
+                          value:
+                            draft.requirements.gpu === 'any' ? 'Any GPU' : draft.requirements.gpu,
+                        },
+                      ]
+                    : []),
+                  { label: 'Duration', value: `${draft.durationMinutes} minutes` },
+                  { label: 'Workspace', value: draft.diskId ? 'Persistent disk' : 'Temporary' },
+                ]}
+              />
+              <div className="auction-review-matches">
+                <strong>
+                  {diskPending
+                    ? 'Checking compatibility…'
+                    : `${matches.length} matching configuration${matches.length === 1 ? '' : 's'}`}
+                </strong>
+                <span>
+                  {matchingProviders
+                    ? `Across ${matchingProviders} provider${matchingProviders === 1 ? '' : 's'}. `
+                    : ''}
+                  Availability is confirmed when providers bid.
+                </span>
               </div>
+              <FormTotal
+                label="Maximum total"
+                value={money(draft.maxPriceCents)}
+                note="USD · entire rental"
+              />
+              <button
+                type="submit"
+                className="button primary form-submit"
+                disabled={busy || !canSubmit}
+              >
+                {busy ? (
+                  <Spinner label="Starting auction" />
+                ) : (
+                  <>
+                    Start 30-second auction
+                    <ArrowRight size={16} />
+                  </>
+                )}
+              </button>
+              <FormNotice icon={<Clock3 size={15} />}>
+                <p>
+                  Providers have 30 seconds to bid. The lowest eligible offer wins automatically.
+                </p>
+              </FormNotice>
+              <FormNotice icon={<ShieldCheck size={15} />}>
+                <p>Your accepted offer locks the rental price. The rental clock includes setup.</p>
+              </FormNotice>
+              <p className="demo-price-note">
+                {modes.wick === 'real' ? 'Wick-backed environments' : 'Simulated demo supply'} · No
+                payment due
+              </p>
+            </FormSummary>
+          }
+        >
+          <FormPanel aria-label="Auction requirements">
+            <FormSection
+              title="Environment requirements"
+              description="Set the minimum. Compatible providers compete to meet it."
+            >
               <label className="field" htmlFor="review-description">
                 <span>Your requirement</span>
                 <textarea
                   id="review-description"
+                  aria-label="Your requirement"
                   rows={3}
                   maxLength={4000}
                   value={draft.description}
@@ -166,10 +230,10 @@ export function RequestReview() {
                   placeholder="What will you use this environment for?"
                 />
               </label>
-              <div className="auction-review-resources">
+              <div className="form-resources">
                 <label className="field" htmlFor="cpus">
                   <span>Minimum vCPUs</span>
-                  <div className="auction-review-input-unit">
+                  <div className="form-input-unit">
                     <input
                       id="cpus"
                       aria-label="Minimum vCPUs"
@@ -190,7 +254,7 @@ export function RequestReview() {
                 </label>
                 <label className="field" htmlFor="memory">
                   <span>Minimum memory (GiB)</span>
-                  <div className="auction-review-input-unit">
+                  <div className="form-input-unit">
                     <input
                       id="memory"
                       aria-label="Minimum memory (GiB)"
@@ -218,11 +282,7 @@ export function RequestReview() {
               )}
               <div className="field">
                 <span id="duration-label">Rental duration</span>
-                <div
-                  className="auction-review-duration"
-                  role="group"
-                  aria-labelledby="duration-label"
-                >
+                <div className="form-duration" role="group" aria-labelledby="duration-label">
                   {[15, 30, 60].map((minutes) => (
                     <button
                       key={minutes}
@@ -238,8 +298,8 @@ export function RequestReview() {
                   ))}
                 </div>
               </div>
-            </div>
-            <div className="auction-review-section auction-review-storage">
+            </FormSection>
+            <FormSection className="auction-review-storage">
               <DiskPicker
                 value={draft.diskId ?? ''}
                 options={disks.data}
@@ -250,12 +310,12 @@ export function RequestReview() {
                   ? 'Your files persist. Only configurations that support this disk can bid.'
                   : 'Use a temporary workspace, or attach a disk to keep files between rentals.'}
               </p>
-            </div>
-            <div className="auction-review-section auction-review-budget">
-              <div className="auction-review-section-heading">
-                <h2>Your budget</h2>
-                <p>A ceiling for the entire rental, including setup time.</p>
-              </div>
+            </FormSection>
+            <FormSection
+              className="form-budget"
+              title="Your budget"
+              description="A ceiling for the entire rental, including setup time."
+            >
               <MoneyInput
                 id="max-price"
                 label="Maximum total price (USD)"
@@ -264,101 +324,23 @@ export function RequestReview() {
                 min={MIN_ORDER_PRICE_CENTS}
               />
               <p className="field-hint">The lowest eligible bid wins. No extra buyer fee.</p>
-            </div>
-          </section>
+            </FormSection>
+          </FormPanel>
           {draft.receipt && (
-            <details className="auction-review-receipt">
-              <summary>
-                <Sparkles size={15} />
-                How Muse prepared this request
-              </summary>
-              <div className="auction-review-receipt-content">
-                <ReceiptCard receipt={draft.receipt} mode={draft.museMode} />
-              </div>
-            </details>
+            <FormDisclosure
+              className="auction-review-receipt"
+              title="How Muse prepared this request"
+              icon={<Sparkles size={15} />}
+            >
+              <ReceiptCard receipt={draft.receipt} mode={draft.museMode} />
+            </FormDisclosure>
           )}
           <ErrorBox
             error={noMatch || error}
             retry={draft.diskId && disks.error ? disks.reload : undefined}
           />
-        </div>
-        <aside className="auction-review-aside">
-          <section className="auction-review-summary" aria-label="Auction summary">
-            <div className="auction-review-summary-heading">
-              <h2>Ready for bids</h2>
-              <p>Open to all compatible providers</p>
-            </div>
-            <dl className="auction-review-specs">
-              <div>
-                <dt>Compute</dt>
-                <dd>{draft.requirements.cpu || '—'} vCPU minimum</dd>
-              </div>
-              <div>
-                <dt>Memory</dt>
-                <dd>{draft.requirements.memoryGb || '—'} GiB minimum</dd>
-              </div>
-              {draft.requirements.gpu && (
-                <div>
-                  <dt>GPU</dt>
-                  <dd>{draft.requirements.gpu === 'any' ? 'Any GPU' : draft.requirements.gpu}</dd>
-                </div>
-              )}
-              <div>
-                <dt>Duration</dt>
-                <dd>{draft.durationMinutes} minutes</dd>
-              </div>
-              <div>
-                <dt>Workspace</dt>
-                <dd>{draft.diskId ? 'Persistent disk' : 'Temporary'}</dd>
-              </div>
-            </dl>
-            <div className="auction-review-matches">
-              <strong>
-                {diskPending
-                  ? 'Checking compatibility…'
-                  : `${matches.length} matching configuration${matches.length === 1 ? '' : 's'}`}
-              </strong>
-              <span>
-                {matchingProviders
-                  ? `Across ${matchingProviders} provider${matchingProviders === 1 ? '' : 's'}. `
-                  : ''}
-                Availability is confirmed when providers bid.
-              </span>
-            </div>
-            <div className="auction-review-total">
-              <span>Maximum total</span>
-              <strong>{money(draft.maxPriceCents)}</strong>
-              <small>USD · entire rental</small>
-            </div>
-            <button
-              type="submit"
-              className="button primary auction-review-submit"
-              disabled={busy || !canSubmit}
-            >
-              {busy ? (
-                <Spinner label="Starting auction" />
-              ) : (
-                <>
-                  Start 30-second auction
-                  <ArrowRight size={16} />
-                </>
-              )}
-            </button>
-            <div className="auction-review-explainer">
-              <Clock3 size={15} />
-              <p>Providers have 30 seconds to bid. The lowest eligible offer wins automatically.</p>
-            </div>
-            <div className="auction-review-explainer">
-              <ShieldCheck size={15} />
-              <p>Your accepted offer locks the rental price. The rental clock includes setup.</p>
-            </div>
-            <p className="demo-price-note">
-              {modes.wick === 'real' ? 'Wick-backed environments' : 'Simulated demo supply'} · No
-              payment due
-            </p>
-          </section>
-        </aside>
+        </FormLayout>
       </form>
-    </div>
+    </FormPage>
   );
 }

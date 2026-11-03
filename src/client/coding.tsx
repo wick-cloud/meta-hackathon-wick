@@ -50,6 +50,14 @@ import {
   testResult,
   type CodingTone,
 } from './coding-state';
+import {
+  FormPanel,
+  FormSection,
+  FormSummary,
+  FormSummaryRows,
+  FormNotice,
+  FormDisclosure,
+} from './form-layout';
 import './coding.css';
 
 const labels: Record<string, string> = {
@@ -163,11 +171,11 @@ export function CodingStudio({ search = '' }: { search?: string }) {
     }
   }
   return (
-    <div className="coding-page">
+    <div className="form-page coding-page">
       <PageHeader
-        eyebrow="MUSE STUDIO"
-        title="Turn a public repo into a working fix."
-        description="Meta edits a job branch and runs tests inside your Wick VM."
+        eyebrow="ADVANCED · EXISTING RESOURCES"
+        title="Coding with your resources"
+        description="Run a coding task in a VM and funded agent you already own. Review saved jobs below."
       >
         <Meta />
         {!compose && (
@@ -185,174 +193,174 @@ export function CodingStudio({ search = '' }: { search?: string }) {
       </PageHeader>
       <ErrorBox error={options.error || (list.data ? list.error : '')} />
       {data?.mode === 'fixture' && (
-        <div className="coding-notice">
+        <FormNotice icon={<ShieldCheck size={16} />}>
           Fixture environment: coding execution and Meta responses require explicit test adapters.
           No live provider calls are made here.
-        </div>
+        </FormNotice>
       )}
       {compose && (
         <div className="coding-compose">
-          <form className="coding-panel" onSubmit={openReview}>
-            <div className="coding-title">
-              <h2>What should Muse work on?</h2>
-              <TableStatus>Public GitHub only</TableStatus>
-            </div>
-            <label className="field">
-              <span>Public repository URL</span>
-              <input
-                type="url"
-                required
-                placeholder="https://github.com/owner/repository"
-                value={repo}
-                onChange={(e) => {
-                  setRepo(e.target.value);
-                  operation.current = crypto.randomUUID();
-                }}
-              />
-            </label>
-            <p className="coding-note">
-              Broker verifies anonymous public access and pins the source commit before cloning.
-            </p>
-            <label className="field">
-              <span>Task</span>
-              <textarea
-                required
-                minLength={10}
-                maxLength={4000}
-                placeholder="Describe the bug or small feature, and what passing tests should prove."
-                value={goal}
-                onChange={(e) => {
-                  setGoal(e.target.value);
-                  operation.current = crypto.randomUUID();
-                }}
-              />
-            </label>
-            <div className="coding-fields">
+          <form className="form-panel coding-compose-form" onSubmit={openReview}>
+            <FormSection
+              title="Repository and task"
+              description="Choose a public repository and describe the result you want."
+            >
               <label className="field">
-                <span>Running Wick VM</span>
-                <select
-                  required
-                  value={vmId}
-                  onChange={(e) => {
-                    setVm(e.target.value);
-                    operation.current = crypto.randomUUID();
-                  }}
-                >
-                  <option value="" disabled>
-                    Select a VM
-                  </option>
-                  {data?.vms.map((v) => (
-                    <option key={v.id} value={v.id}>
-                      {v.name || v.id.slice(0, 8)} · {v.provider}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="field">
-                <span>Base branch or commit</span>
+                <span>Public repository URL</span>
                 <input
-                  maxLength={100}
-                  placeholder="Default branch"
-                  value={ref}
+                  type="url"
+                  required
+                  placeholder="https://github.com/owner/repository"
+                  value={repo}
                   onChange={(e) => {
-                    setRef(e.target.value);
+                    setRepo(e.target.value);
                     operation.current = crypto.randomUUID();
                   }}
                 />
               </label>
-            </div>
-            <label className="field">
-              <span>Funded agent</span>
-              <select
-                required
-                value={grantId}
-                onChange={(e) => {
-                  setGrant(e.target.value);
-                  operation.current = crypto.randomUUID();
-                }}
-              >
-                <option value="" disabled>
-                  Select an agent
-                </option>
-                {data?.grants.map((g) => (
-                  <option key={g.id} value={g.id}>
-                    {g.name} · {money(g.available_cents)} unspent
+              <p className="coding-note">
+                Broker verifies anonymous public access and pins the source commit before cloning.
+              </p>
+              <label className="field">
+                <span>Task</span>
+                <textarea
+                  required
+                  minLength={10}
+                  maxLength={4000}
+                  placeholder="Describe the bug or small feature, and what passing tests should prove."
+                  value={goal}
+                  onChange={(e) => {
+                    setGoal(e.target.value);
+                    operation.current = crypto.randomUUID();
+                  }}
+                />
+              </label>
+            </FormSection>
+            <FormSection
+              title="Existing resources"
+              description="The task uses your running VM and prepaid model allowance."
+            >
+              <div className="coding-fields">
+                <label className="field">
+                  <span>Running Wick VM</span>
+                  <select
+                    required
+                    value={vmId}
+                    onChange={(e) => {
+                      setVm(e.target.value);
+                      operation.current = crypto.randomUUID();
+                    }}
+                  >
+                    <option value="" disabled>
+                      Select a VM
+                    </option>
+                    {data?.vms.map((v) => (
+                      <option key={v.id} value={v.id}>
+                        {v.name || v.id.slice(0, 8)} · {v.provider}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="field">
+                  <span>Base branch or commit</span>
+                  <input
+                    maxLength={100}
+                    placeholder="Default branch"
+                    value={ref}
+                    onChange={(e) => {
+                      setRef(e.target.value);
+                      operation.current = crypto.randomUUID();
+                    }}
+                  />
+                </label>
+              </div>
+              <label className="field">
+                <span>Funded agent</span>
+                <select
+                  required
+                  value={grantId}
+                  onChange={(e) => {
+                    setGrant(e.target.value);
+                    operation.current = crypto.randomUUID();
+                  }}
+                >
+                  <option value="" disabled>
+                    Select an agent
                   </option>
-                ))}
-              </select>
-            </label>
-            <label className="field">
-              <span>Test command</span>
-              <input
-                required
-                maxLength={500}
-                value={command}
-                onChange={(e) => {
-                  setCommand(e.target.value);
-                  operation.current = crypto.randomUUID();
-                }}
-              />
-            </label>
-            <p className="coding-note">
-              Tests use preinstalled tools and run without network access. Source edits stay in a
-              fresh job clone.
-            </p>
-            <ErrorBox error={error} />
-            <div className="coding-actions">
-              <button
-                className="button primary"
-                disabled={busy || !data?.executionAvailable || !vmId || !grantId}
-              >
-                <Sparkles size={16} />
-                Review coding task
-              </button>
-              <button type="button" className="button secondary" onClick={() => setCompose(false)}>
-                Cancel
-              </button>
-            </div>
+                  {data?.grants.map((g) => (
+                    <option key={g.id} value={g.id}>
+                      {g.name} · {money(g.available_cents)} unspent
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </FormSection>
+            <FormSection
+              title="Verification"
+              description="Define the command that should pass after the changes."
+            >
+              <label className="field">
+                <span>Test command</span>
+                <input
+                  required
+                  maxLength={500}
+                  value={command}
+                  onChange={(e) => {
+                    setCommand(e.target.value);
+                    operation.current = crypto.randomUUID();
+                  }}
+                />
+              </label>
+              <p className="coding-note">
+                Tests use preinstalled tools and run without network access. Source edits stay in a
+                fresh job clone.
+              </p>
+              <ErrorBox error={error} />
+              <div className="coding-actions">
+                <button
+                  className="button primary"
+                  disabled={busy || !data?.executionAvailable || !vmId || !grantId}
+                >
+                  <Sparkles size={16} />
+                  Review coding task
+                </button>
+                <button
+                  type="button"
+                  className="button secondary"
+                  onClick={() => setCompose(false)}
+                >
+                  Cancel
+                </button>
+              </div>
+            </FormSection>
           </form>
           <aside className="coding-stack">
-            <section className="coding-panel">
-              <h2>Bounded by your allowance</h2>
-              <dl className="coding-dl">
-                <div>
-                  <dt>Model</dt>
-                  <dd>Meta Muse Spark Open</dd>
-                </div>
-                <div>
-                  <dt>Job limit</dt>
-                  <dd>Up to 10 minutes within VM and grant deadlines</dd>
-                </div>
-                <div>
-                  <dt>Model allowance</dt>
-                  <dd>Existing purchased allowance</dd>
-                </div>
-                <div>
-                  <dt>Command limit</dt>
-                  <dd>90 seconds</dd>
-                </div>
-                <div>
-                  <dt>When quota runs low</dt>
-                  <dd>Pause for another purchase</dd>
-                </div>
-              </dl>
-              <p className="coding-note">
+            <FormSummary title="Bounded by your allowance">
+              <FormSummaryRows
+                items={[
+                  { label: 'Model', value: 'Meta Muse Spark Open' },
+                  { label: 'Job limit', value: 'Up to 10 minutes within VM and grant deadlines' },
+                  { label: 'Model allowance', value: 'Existing purchased allowance' },
+                  { label: 'Command limit', value: '90 seconds' },
+                  { label: 'When quota runs low', value: 'Pause for another purchase' },
+                ]}
+              />
+              <FormNotice icon={<ShieldCheck size={16} />}>
                 Every model call consumes purchased tokens. VM rental is separate. All deadlines
                 keep their original expiry.
-              </p>
-              <Link href="/agents">
+              </FormNotice>
+              <Link href="/agents" className="text-link">
                 Manage agents and allowance <ArrowRight size={14} />
               </Link>
-            </section>
-            <section className="coding-panel">
-              <h2>
-                <ShieldCheck size={17} /> Workspace boundary
-              </h2>
-              <p className="coding-note">{data?.requirements || 'Checking available execution…'}</p>
-              <p className="coding-note">
+            </FormSummary>
+            <FormDisclosure title="Workspace boundary" icon={<ShieldCheck size={17} />}>
+              <p>{data?.requirements || 'Checking available execution…'}</p>
+              <p>
                 Only the job clone and its output enter Meta context. Review or export the resulting
                 patch before merging it.
               </p>
+            </FormDisclosure>
+            <div className="coding-resource-notices">
               {data && !data.executionAvailable && (
                 <ErrorBox error="Structured coding execution is unavailable in this VM adapter. Fixture terminals cannot execute real repository jobs." />
               )}
@@ -366,7 +374,7 @@ export function CodingStudio({ search = '' }: { search?: string }) {
                   Create a funded agent <ArrowRight size={14} />
                 </Link>
               )}
-            </section>
+            </div>
           </aside>
         </div>
       )}
@@ -385,7 +393,7 @@ export function CodingStudio({ search = '' }: { search?: string }) {
             description="Pick a public repository, a VM, and a funded agent."
           >
             {!compose && (
-              <button className="button primary" onClick={() => setCompose(true)}>
+              <button className="button secondary" onClick={() => setCompose(true)}>
                 Create a coding task
               </button>
             )}
@@ -571,11 +579,16 @@ export function CodingJobPage({ id }: { id: string }) {
   }
   if (!job || !data)
     return (
-      <div className="coding-page">
+      <div className="form-page coding-page">
         <Link className="back-link" href="/studio">
           <ArrowLeft size={15} />
           Back to Studio
         </Link>
+        <PageHeader
+          eyebrow="CODING EXECUTION"
+          title="Execution details"
+          description="Saved results, verification, and usage from this job."
+        />
         {detail.loading ? (
           <Spinner label="Loading execution details" />
         ) : (
@@ -611,7 +624,7 @@ export function CodingJobPage({ id }: { id: string }) {
       (job.goal.length > 110 ? job.goal.slice(0, 107) + '…' : job.goal),
     settled = models.filter((s) => s.receipt?.status === 'settled').length;
   return (
-    <div className="coding-page coding-execution">
+    <div className="form-page coding-page coding-execution">
       <Link className="back-link" href={taskLink}>
         <ArrowLeft size={15} />
         {parent ? 'Back to Studio task' : 'Back to coding jobs'}
@@ -625,10 +638,9 @@ export function CodingJobPage({ id }: { id: string }) {
       >
         <Meta />
       </PageHeader>
-      <details className="coding-brief">
-        <summary>Task brief</summary>
+      <FormDisclosure title="Task brief" className="coding-brief">
         <p>{job.goal}</p>
-      </details>
+      </FormDisclosure>
       <div className="coding-jobbar">
         <Link href={'/vms/' + job.vmId}>
           <Server size={15} />
@@ -701,7 +713,7 @@ export function CodingJobPage({ id }: { id: string }) {
         </details>
       )}
       <div className="coding-workspace">
-        <section className="coding-panel">
+        <FormPanel className="coding-panel">
           <div className="coding-tabs" role="tablist" aria-label="Coding job details">
             {(['changes', 'tests', 'meta'] as const).map((key) => (
               <button
@@ -940,8 +952,8 @@ export function CodingJobPage({ id }: { id: string }) {
               ? 'Resources and prepaid model allowance share the Studio task budget.'
               : 'Commands run in the job sandbox. VM rental and prepaid allowance are purchased separately.'}
           </div>
-        </section>
-        <details className="coding-panel coding-history-details">
+        </FormPanel>
+        <details className="form-disclosure coding-panel coding-history-details">
           <summary>Execution history · {steps.length} recorded steps</summary>
           <p className="coding-note">
             Command receipt completion and command success are recorded separately. Expand

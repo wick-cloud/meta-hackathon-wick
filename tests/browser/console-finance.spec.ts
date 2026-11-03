@@ -150,7 +150,7 @@ async function finance(
   };
 }
 
-for (const width of [1440, 1280, 390]) {
+for (const width of [1440, 768, 375]) {
   test(`financial inventories retain exact prices and fit ${width}px`, async ({ page }, info) => {
     const { writes } = await finance(page);
     await page.setViewportSize({ width, height: 900 });
@@ -159,6 +159,12 @@ for (const width of [1440, 1280, 390]) {
     await expect(invoices.getByRole('cell', { name: '$1.7331', exact: true })).toBeVisible();
     await page.getByRole('button', { name: 'Load more', exact: true }).click();
     await expect(invoices.locator('tbody tr')).toHaveCount(2);
+    await expect(page.getByRole('region', { name: 'Loaded invoice summary' })).toContainText(
+      '$3.4662',
+    );
+    await expect(
+      page.getByText('Totals cover loaded invoices only.', { exact: false }),
+    ).toBeVisible();
     await expect(page.getByText('2 invoices shown', { exact: true })).toBeVisible();
     await expect(invoices.getByRole('link', { name: 'Build environment' }).first()).toHaveAttribute(
       'href',

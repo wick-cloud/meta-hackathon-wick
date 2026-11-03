@@ -1,11 +1,39 @@
 /* One table system for inventories, finance, and embedded detail records. */
+.inventory-page {
+  min-width: 0;
+  width: 100%;
+}
+.inventory-page > .page-heading {
+  align-items: flex-start;
+  gap: 20px;
+  margin-bottom: 24px;
+}
+.inventory-page > .page-heading h1 {
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: -0.7px;
+  line-height: 1.25;
+}
+.inventory-page > .page-heading p {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.65;
+  margin-top: 8px;
+}
+.inventory-page > .page-heading .button {
+  min-height: var(--control-height, 42px);
+}
+.inventory-page :is(button, a, select, input, summary):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
 .data-table-panel {
   min-width: 0;
   max-width: 100%;
   padding: 0;
   overflow: hidden;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--panel-radius, 10px);
   background: var(--card);
 }
 .data-table-panel + .data-table-panel {
@@ -52,6 +80,19 @@
   min-height: 36px;
   border-radius: 6px;
   font-size: 13px;
+}
+.data-table-tabs-actions > .icon-button {
+  width: 36px;
+  height: 36px;
+}
+.data-table-toolbar > h2 {
+  font-size: 13px;
+  font-weight: 500;
+}
+.data-table-toolbar > span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
 }
 .data-table-toolbar .field {
   margin: 0;
@@ -277,10 +318,13 @@
 }
 .data-table-state :is(h3, strong) {
   color: var(--ink);
+  font-size: 15px;
+  font-weight: 600;
 }
 .data-table-state p {
   max-width: 54ch;
   font-size: 13px;
+  line-height: 1.65;
 }
 .data-table-state .button {
   margin-top: 6px;
@@ -325,6 +369,33 @@
   opacity: 0.35;
 }
 @media (max-width: 600px) {
+  .inventory-page > .page-heading {
+    flex-direction: column;
+    gap: 18px;
+  }
+  .inventory-page > .page-heading h1 {
+    font-size: 25px;
+  }
+  .inventory-page > .page-heading .page-heading-actions {
+    width: 100%;
+  }
+  .inventory-page > .page-heading .page-heading-actions > .button {
+    flex: 1;
+    min-height: 44px;
+  }
+  .inventory-page .data-table-toolbar :is(input, select) {
+    min-height: 44px;
+    font-size: 16px;
+  }
+  .data-table-panel :is(.button, .icon-button, .table-open-link),
+  .data-table-frame table :is(.button.small, .button.secondary),
+  .data-table-navigation button {
+    min-height: 44px;
+  }
+  .data-table-tabs-actions > .icon-button,
+  .data-table-navigation button {
+    min-width: 44px;
+  }
   .data-table-toolbar {
     align-items: stretch;
     gap: 10px;
@@ -340,6 +411,34 @@
   }
   .data-table-footer {
     gap: 10px;
+  }
+  :is(.wallet-page, .agreement-history) .stats-grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+  }
+  :is(.wallet-page, .agreement-history) .stat-card {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 6px 16px;
+    align-items: center;
+    padding: 16px;
+  }
+  :is(.wallet-page, .agreement-history) .stat-top {
+    justify-content: flex-start;
+    gap: 8px;
+    font-size: 12px;
+  }
+  :is(.wallet-page, .agreement-history) .stat-card > strong {
+    grid-column: 2;
+    grid-row: 1 / 3;
+    margin: 0;
+    font-size: 22px;
+  }
+  :is(.wallet-page, .agreement-history) .stat-card > small {
+    grid-column: 1;
+    margin: 0;
+    font-size: 12px;
+    line-height: 1.5;
   }
 }
 @media (pointer: coarse) {

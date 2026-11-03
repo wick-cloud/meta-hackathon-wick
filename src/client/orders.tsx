@@ -34,6 +34,7 @@ import { dateTime, money } from './api';
 import {
   ErrorBox,
   Link,
+  PageHeader,
   StatusPill,
   remaining,
   useNavigate,
@@ -41,7 +42,6 @@ import {
   useResource,
 } from './components';
 import './market.css';
-import { PurchaseCards } from './purchases';
 import { ArchiveNote, RecordViews } from './record-views';
 
 const choices = <T extends string>(value: string | null, allowed: readonly T[], fallback: T): T =>
@@ -116,38 +116,21 @@ export function Orders({ search }: { search: string }) {
     navigate(`/orders?${next}`);
   }
   return (
-    <div className="orders-workspace">
-      <header className="orders-header">
-        <div>
-          <div className="orders-title-line">
-            <h1>Orders</h1>
-            {list.data && (
-              <span
-                className="orders-count"
-                aria-label={`${items.length} orders shown on this page`}
-              >
-                {items.length} shown
-              </span>
-            )}
-          </div>
-          <p>Your VMs and AI token packs, from first bid to completion.</p>
-        </div>
-        <div className="orders-header-actions">
-          <Link href="/credits" className="orders-wallet">
-            <Wallet size={15} />
-            Broker wallet
-          </Link>
-          <Link href="/new" className="button primary">
-            <Plus size={16} />
-            New purchase
-          </Link>
-        </div>
-      </header>
-      <PurchaseCards compact />
-      <div className="purchase-history-heading">
-        <h2>Order history</h2>
-        <p>Track VM auctions and AI token purchases.</p>
-      </div>
+    <div className="inventory-page orders-workspace">
+      <PageHeader
+        eyebrow="PURCHASES"
+        title="Orders"
+        description="Your VMs and AI token packs, from first bid to completion."
+      >
+        <Link href="/credits" className="button secondary">
+          <Wallet size={15} />
+          Broker wallet
+        </Link>
+        <Link href="/new" className="button primary">
+          <Plus size={16} />
+          New purchase
+        </Link>
+      </PageHeader>
       <TablePanel className="market-orders" label="Orders">
         <TableTabs
           actions={

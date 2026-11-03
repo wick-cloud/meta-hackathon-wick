@@ -4,7 +4,7 @@
 }
 .buying-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.5fr) minmax(260px, 1fr);
+  grid-template-columns: minmax(0, 1fr) var(--summary-width, 320px);
   gap: 20px;
   align-items: start;
 }
@@ -16,7 +16,7 @@
 .buying-workspace .card,
 .buying-receipt {
   min-width: 0;
-  padding: 22px;
+  padding: var(--panel-padding, 24px);
 }
 .buying-section-heading {
   display: flex;
@@ -49,8 +49,8 @@
   white-space: nowrap;
 }
 .buying-recommendation {
-  background: linear-gradient(120deg, var(--accent-soft), var(--card) 65%);
-  border-color: var(--nav-active-line);
+  background: var(--card);
+  border-color: var(--line);
 }
 .buying-recommendation > h2 {
   font-size: 21px;
@@ -82,8 +82,8 @@
   line-height: 1.7;
 }
 .buying-note {
-  font-size: 12px !important;
-  color: var(--muted) !important;
+  font-size: 12px;
+  color: var(--muted);
   line-height: 1.7;
   margin-top: 16px;
 }
@@ -513,4 +513,54 @@
   color: var(--muted);
   font-size: 12px;
   padding: 4px 0;
+}
+
+.buying-policy-page .buying-form {
+  padding: var(--form-padding);
+  min-width: 0;
+}
+.buying-policy-page .buying-form .form-section {
+  margin-top: 24px;
+  padding: 24px 0 0;
+  border-top: 1px solid var(--line);
+}
+.buying-policy-page .buying-form .form-section h2 {
+  font-size: 14px;
+}
+.buying-policy-page .buying-form-grid .field {
+  margin-bottom: 0;
+}
+.buying-workspace :is(a, button, input, select):focus-visible,
+.buying-tabs a:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+.buying-tabs a {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  padding-bottom: 0;
+}
+.buying-tabs a[aria-current='page'] {
+  color: var(--accent);
+}
+@media (max-width: 600px) {
+  .buying-workspace .card,
+  .buying-receipt {
+    padding: 20px;
+  }
+  .buying-choice,
+  .buying-check {
+    min-height: 44px;
+  }
+  .buying-choice input,
+  .buying-check input {
+    width: 18px;
+    height: 18px;
+    flex: none;
+  }
+  .buying-actions .button,
+  .buying-form-footer .button {
+    min-height: 44px;
+  }
 }

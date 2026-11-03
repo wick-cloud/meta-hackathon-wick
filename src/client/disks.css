@@ -127,16 +127,6 @@
   font-size: 13px;
   margin: 16px 0 24px;
 }
-.market-dialog:has(.disk-create-form) {
-  margin: 0 0 0 auto;
-  max-height: 100dvh;
-  height: 100dvh;
-  width: min(440px, 100vw);
-  max-width: 100vw;
-  border-radius: 0;
-  border-width: 0 0 0 1px;
-  padding: 28px;
-}
 .disk-workspace-detail {
   display: flex;
   align-items: center;
@@ -178,11 +168,5 @@
   }
   .disk-dialog-actions .button {
     flex: 1;
-  }
-  .market-dialog:has(.disk-create-form) {
-    padding: 22px;
-  }
-  .disk-inventory-head .button {
-    width: 100%;
   }
 }

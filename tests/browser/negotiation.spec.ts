@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { formatMoney } from '../../src/shared/money';
 
 const buyerEmail = process.env.E2E_BUYER_EMAIL ?? process.env.SEED_BUYER_EMAIL;
 const buyerPassword = process.env.SEED_BUYER_PASSWORD;
@@ -151,7 +152,11 @@ test('reviewed provider limits and explicit buyer counteroffer acceptance create
     await expect(providerPage.getByText('Policy saved', { exact: true })).toBeVisible();
     const paused = await page.request.post(`/api/intents/${intent.id}/propose`, { data: {} });
     expect(paused.ok()).toBe(true);
-    expect((await paused.json()).offers).toEqual([]);
+    expect(
+      (await paused.json()).offers.filter(
+        (offer: { providerName: string }) => offer.providerName === original.provider.name,
+      ),
+    ).toHaveLength(0);
     expect(
       (await (await providerPage.request.get('/api/provider/dashboard')).json()).capacity.held,
     ).toBe(0);
@@ -166,14 +171,27 @@ test('reviewed provider limits and explicit buyer counteroffer acceptance create
     );
     await page.getByRole('button', { name: 'Suggest reviewed alternatives', exact: true }).click();
     expect((await proposed).ok()).toBe(true);
-    await expect(
-      page.getByRole('button', { name: 'Review this exact offer' }).first(),
-    ).toBeVisible();
     const detail = await (await page.request.get(`/api/intents/${intent.id}`)).json();
     expect(detail.intent.desired.region).toBe('moon-1');
     expect(detail.intent.desired.cpu).toBe(999);
     expect(detail.intent.desired.durationMinutes).toBe(45);
     expect(detail.offers.length).toBeGreaterThan(0);
+    const selectedOffer = detail.offers.find(
+      (offer: { providerName: string }) => offer.providerName === original.provider.name,
+    );
+    expect(selectedOffer).toBeTruthy();
+    const selectedCard = page
+      .locator('.negotiation-cards > section')
+      .filter({
+        has: page.getByRole('heading', { name: selectedOffer.catalogName, exact: true }),
+      })
+      .filter({
+        has: page.getByText(
+          `${selectedOffer.providerName} · ${formatMoney(selectedOffer.totalPriceCents)} fixed total`,
+          { exact: true },
+        ),
+      });
+    await expect(selectedCard).toHaveCount(1);
     expect((await (await page.request.get('/api/vms')).json()).items.length).toBe(baselineVms);
     expect(
       (await (await providerPage.request.get('/api/provider/dashboard')).json()).capacity.held,
@@ -199,7 +217,9 @@ test('reviewed provider limits and explicit buyer counteroffer acceptance create
     await expect(
       decisions.getByText('Fixture · no model call', { exact: true }).first(),
     ).toBeVisible();
-    await page.getByRole('button', { name: 'Review this exact offer' }).first().click();
+    await selectedCard
+      .getByRole('button', { name: 'Review this exact offer', exact: true })
+      .click();
     const finalReview = page.getByRole('region', { name: 'Final counteroffer review' });
     await expect(finalReview.getByRole('cell', { name: 'moon-1', exact: true })).toBeVisible();
     await page.screenshot({
@@ -216,6 +236,9 @@ test('reviewed provider limits and explicit buyer counteroffer acceptance create
     await page.getByRole('button', { name: 'Accept reviewed offer', exact: true }).click();
     const acceptedResponse = await accepted;
     expect(acceptedResponse.ok()).toBe(true);
+    expect(new URL(acceptedResponse.url()).pathname).toBe(
+      `/api/intents/${intent.id}/offers/${selectedOffer.id}/accept`,
+    );
     const acceptance = await acceptedResponse.json();
     vmId = acceptance.vmId;
     const acceptedBody = acceptedResponse.request().postDataJSON();
@@ -238,7 +261,7 @@ test('reviewed provider limits and explicit buyer counteroffer acceptance create
     expect(invoices).toHaveLength(1);
     expect(invoices[0].feeCents).toBe(0);
     expect(invoices[0].revenueShare.commissionBps).toBe(1500);
-    expect(invoices[0].revenueShare.grossCents).toBe(detail.offers[0].totalPriceCents);
+    expect(invoices[0].revenueShare.grossCents).toBe(selectedOffer.totalPriceCents);
     const earnings = (await (await providerPage.request.get('/api/provider/earnings')).json())
       .items;
     const recorded = earnings.find((item: { vmId: string }) => item.vmId === vmId);
@@ -250,7 +273,7 @@ test('reviewed provider limits and explicit buyer counteroffer acceptance create
       providerPage.getByText('Demo earnings · no payouts', { exact: true }),
     ).toBeVisible();
     expect(invoices[0].amountCents ?? invoices[0].totalPriceCents ?? invoices[0].totalCents).toBe(
-      detail.offers[0].totalPriceCents,
+      selectedOffer.totalPriceCents,
     );
     const resolved = await (await page.request.get(`/api/intents/${intent.id}`)).json();
     expect(resolved.intent.status).toBe('accepted');

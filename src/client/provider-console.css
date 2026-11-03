@@ -1,3 +1,35 @@
+.provider-page > .form-panel,
+.provider-page > .form-layout,
+.provider-page > .data-table-panel,
+.provider-page > form {
+  margin-bottom: var(--form-gap);
+}
+.provider-page .form-aside > .form-summary + .form-summary {
+  margin-top: var(--form-gap);
+}
+.provider-page .form-section > .muted-text {
+  margin-bottom: 18px;
+}
+.provider-page .form-summary > .muted-text {
+  margin-top: 16px;
+  margin-bottom: 16px;
+}
+.provider-page .form-summary > .tiny-label {
+  display: block;
+  margin-top: 16px;
+}
+.provider-page .form-summary .detail-row > span,
+.provider-page .form-summary .detail-row > strong {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.provider-page .form-section .form-actions {
+  margin-top: var(--space-section, 24px);
+}
+.admin-credit-page {
+  margin-top: var(--space-section, 24px);
+}
 .provider-setup-guide {
   display: flex;
   align-items: center;
@@ -6,7 +38,7 @@
   padding: 14px 16px;
   margin-bottom: 24px;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--form-radius, 10px);
   background: var(--card);
   font-size: 12px;
 }
@@ -49,10 +81,10 @@
   display: flex;
   align-items: center;
   gap: 14px;
-  padding: 16px 18px;
+  padding: var(--form-padding, 24px);
   margin-bottom: 24px;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--form-radius, 10px);
   background: var(--card);
 }
 .provider-assist-bar > div {
@@ -139,5 +171,11 @@
   }
   .provider-setup-guide li {
     flex-basis: 100%;
+  }
+}
+@media (max-width: 560px) {
+  .provider-page .field-grid,
+  .provider-page .stats-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
 }

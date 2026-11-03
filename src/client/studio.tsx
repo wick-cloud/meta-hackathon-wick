@@ -42,6 +42,17 @@ import {
   TableState,
   TableStatus,
 } from './table';
+import {
+  FormLayout,
+  FormPanel,
+  FormSection,
+  FormSummary,
+  FormSummaryRows,
+  FormTotal,
+  FormNotice,
+  FormDisclosure,
+  FormActions,
+} from './form-layout';
 import './studio.css';
 
 const finished = (s: StudioStatus) => ['completed', 'failed', 'stopped'].includes(s);
@@ -213,14 +224,14 @@ export function Studio({ search = '' }: { search?: string }) {
     }
   }
   return (
-    <div className="studio-page">
+    <div className="form-page studio-page">
       <PageHeader
         eyebrow="MUSE STUDIO"
-        title="Give it a task. Set a budget."
-        description="Meta plans the work. Broker secures the resources. Wick provides the workspace."
+        title="Create a Studio task"
+        description="Set a goal, choose a repository, and review one budget for compute and model allowance."
       >
         <Meta />
-        {!compose && (
+        {!compose && list.data?.items.length !== 0 && (
           <button
             className="button primary"
             onClick={() => {
@@ -235,9 +246,9 @@ export function Studio({ search = '' }: { search?: string }) {
       </PageHeader>
       <ErrorBox error={error || (list.data ? list.error : '') || options.error} />
       {options.data?.mode === 'fixture' && (
-        <div className="studio-notice">
+        <FormNotice icon={<ShieldCheck size={16} />}>
           Fixture demo · purchases, model responses, and VMs are simulated.
-        </div>
+        </FormNotice>
       )}
       {options.data && !options.data.available && (
         <div className="studio-notice" role="status">
@@ -245,111 +256,199 @@ export function Studio({ search = '' }: { search?: string }) {
         </div>
       )}
       {(compose || list.data?.items.length === 0) && (
-        <div className="studio-compose">
-          <form className="studio-card studio-form" onSubmit={prepare}>
-            <div className="studio-section-head">
-              <h2>What should we accomplish?</h2>
-              <span className="studio-tag">Public repositories</span>
-            </div>
-            <DiskPicker
-              value={diskId}
-              options={disks.data}
-              onChange={(id) => {
-                setDiskId(id);
-                setWorkspaceId('');
-                setWorkspace(undefined);
-                change();
-              }}
-            />
-            {diskId && disks.data?.enabled && (
-              <WorkspacePicker
-                diskId={diskId}
-                value={workspaceId}
-                onChange={(id, next) => {
-                  setWorkspaceId(id);
-                  setWorkspace(next);
-                  if (next) setRepo(next.repositoryUrl);
-                  change();
-                }}
-              />
-            )}
-            <label className="field">
-              <span>Task</span>
-              <textarea
-                required
-                minLength={10}
-                maxLength={4000}
-                rows={4}
-                placeholder="Fix the failing authentication tests and verify the changes."
-                value={goal}
-                onChange={(e) => {
-                  setGoal(e.target.value);
-                  change();
-                }}
-              />
-            </label>
-            <label className="field">
-              <span>Public repository</span>
-              <input
-                required
-                type="url"
-                placeholder="https://github.com/company/project"
-                value={repo}
-                readOnly={!!workspaceId}
-                onChange={(e) => {
-                  setRepo(e.target.value);
-                  change();
-                }}
-              />
-            </label>
-            <div className="studio-form-row">
-              <label className="field">
-                <span>Maximum total spend · USD</span>
-                <input
-                  required
-                  inputMode="decimal"
-                  value={budget}
-                  onChange={(e) => {
-                    setBudget(e.target.value);
-                    change();
-                  }}
+        <form className="studio-compose-form" onSubmit={prepare}>
+          <FormLayout
+            className="studio-compose"
+            aside={
+              <FormSummary
+                title="Before you start"
+                description="Review the task before authorizing purchases."
+              >
+                <FormSummaryRows
+                  items={[
+                    { label: 'Time limit', value: `${duration} minutes` },
+                    {
+                      label: 'Model route',
+                      value:
+                        modelProvider === 'automatic'
+                          ? 'Lowest eligible price'
+                          : modelProvider === 'modal'
+                            ? 'Modal only'
+                            : 'Baseten only',
+                    },
+                    { label: 'Workspace', value: diskId ? 'Persistent disk' : 'Temporary VM' },
+                  ]}
                 />
-              </label>
-              <label className="field">
-                <span>Time limit</span>
-                <select
-                  value={duration}
-                  onChange={(e) => {
-                    setDuration(e.target.value);
-                    change();
-                  }}
+                <FormTotal
+                  label="Maximum total"
+                  value={money(amount ?? 0)}
+                  note="USD · compute and prepaid model allowance"
+                />
+                <FormActions className="studio-compose-actions">
+                  <button
+                    type="submit"
+                    className="button primary"
+                    disabled={
+                      busy ||
+                      !options.data?.available ||
+                      (!!workspaceId &&
+                        (!workspace ||
+                          workspace.status !== 'available' ||
+                          !workspace.initialized)) ||
+                      (!!diskId && !disks.data?.enabled)
+                    }
+                  >
+                    <Sparkles size={16} />
+                    {`Review task · ${money(amount ?? 0)} maximum`}
+                  </button>
+                  {compose && (
+                    <button
+                      type="button"
+                      className="button secondary"
+                      onClick={() => setCompose(false)}
+                    >
+                      Cancel
+                    </button>
+                  )}
+                </FormActions>
+
+                <FormNotice icon={<ShieldCheck size={16} />}>
+                  Starting authorizes Studio to buy compute and model allowance within your budget
+                  and prepare a disposable VM.
+                </FormNotice>
+                <FormNotice>
+                  Unused funding returns after cleanup. Purchased model allowance is prepaid and
+                  unused quota is non-refundable.
+                </FormNotice>
+              </FormSummary>
+            }
+          >
+            <FormPanel className="studio-form">
+              <FormSection
+                title="Task and repository"
+                description="Describe the result and the public codebase to work on."
+              >
+                <label className="field">
+                  <span>Task</span>
+                  <textarea
+                    aria-label="Task"
+                    required
+                    minLength={10}
+                    maxLength={4000}
+                    rows={4}
+                    placeholder="Fix the failing authentication tests and verify the changes."
+                    value={goal}
+                    onChange={(e) => {
+                      setGoal(e.target.value);
+                      change();
+                    }}
+                  />
+                </label>
+                <label className="field">
+                  <span>Public repository</span>
+                  <input
+                    aria-label="Public repository"
+                    required
+                    type="url"
+                    placeholder="https://github.com/company/project"
+                    value={repo}
+                    readOnly={!!workspaceId}
+                    onChange={(e) => {
+                      setRepo(e.target.value);
+                      change();
+                    }}
+                  />
+                </label>
+              </FormSection>
+              {(disks.data?.enabled || diskId) && (
+                <FormSection
+                  title="Workspace"
+                  description="Use temporary files or keep your work on a persistent disk."
                 >
-                  <option value="15">15 minutes</option>
-                  <option value="30">30 minutes</option>
-                  <option value="60">60 minutes</option>
-                </select>
-              </label>
-            </div>
-            <div className="studio-credit">
-              <span>{money(wallet.data?.availableCents ?? 0)} available credit</span>
-              <Link href="/credits">
-                View wallet
-                <ArrowRight size={13} />
-              </Link>
-            </div>
-            <label className="studio-checkbox">
-              <input
-                type="checkbox"
-                checked={instant}
-                onChange={(e) => {
-                  setInstant(e.target.checked);
-                  change();
-                }}
-              />
-              <span>Use instant model pricing if an auction has no offers</span>
-            </label>
-            <details className="studio-advanced">
-              <summary>Advanced · completion checks</summary>
+                  <DiskPicker
+                    value={diskId}
+                    options={disks.data}
+                    onChange={(id) => {
+                      setDiskId(id);
+                      setWorkspaceId('');
+                      setWorkspace(undefined);
+                      change();
+                    }}
+                  />
+                  {diskId && disks.data?.enabled && (
+                    <WorkspacePicker
+                      diskId={diskId}
+                      value={workspaceId}
+                      onChange={(id, next) => {
+                        setWorkspaceId(id);
+                        setWorkspace(next);
+                        if (next) setRepo(next.repositoryUrl);
+                        change();
+                      }}
+                    />
+                  )}
+                </FormSection>
+              )}
+              <FormSection
+                title="Budget and time"
+                description="Compute and model allowance share this maximum."
+                className="form-budget"
+              >
+                <div className="studio-form-row">
+                  <label className="field">
+                    <span id="studio-budget-label">Maximum total spend · USD</span>
+                    <div className="input-affix">
+                      <span aria-hidden="true">$</span>
+                      <input
+                        aria-labelledby="studio-budget-label"
+                        required
+                        inputMode="decimal"
+                        value={budget}
+                        onChange={(e) => {
+                          setBudget(e.target.value);
+                          change();
+                        }}
+                      />
+                      <span aria-hidden="true">USD</span>
+                    </div>
+                  </label>
+                  <label className="field">
+                    <span>Time limit</span>
+                    <select
+                      aria-label="Time limit"
+                      value={duration}
+                      onChange={(e) => {
+                        setDuration(e.target.value);
+                        change();
+                      }}
+                    >
+                      <option value="15">15 minutes</option>
+                      <option value="30">30 minutes</option>
+                      <option value="60">60 minutes</option>
+                    </select>
+                  </label>
+                </div>
+                <div className="studio-credit">
+                  <span>{money(wallet.data?.availableCents ?? 0)} available credit</span>
+                  <Link href="/credits">
+                    View wallet
+                    <ArrowRight size={13} />
+                  </Link>
+                </div>
+                <label className="studio-checkbox">
+                  <input
+                    type="checkbox"
+                    checked={instant}
+                    onChange={(e) => {
+                      setInstant(e.target.checked);
+                      change();
+                    }}
+                  />
+                  <span>Use instant model pricing if an auction has no offers</span>
+                </label>
+              </FormSection>
+            </FormPanel>
+            <FormDisclosure title="Advanced · completion checks" className="studio-completion">
               <label className="field">
                 <span>Model provider</span>
                 <select
@@ -380,86 +479,15 @@ export function Studio({ search = '' }: { search?: string }) {
                 Studio freezes the test command before execution. Tests run in an isolated workspace
                 without network access.
               </p>
-            </details>
-            <div className="studio-form-foot">
-              <p>
-                Starting authorizes Studio to buy compute and model allowance within your budget and
-                prepare a disposable VM.
-              </p>
-              <button
-                className="button primary"
-                disabled={
-                  busy ||
-                  !options.data?.available ||
-                  (!!workspaceId &&
-                    (!workspace || workspace.status !== 'available' || !workspace.initialized)) ||
-                  (!!diskId && !disks.data?.enabled)
-                }
-              >
-                <Sparkles size={16} />
-                {`Start task · ${money(amount ?? 0)} maximum`}
-              </button>
-              {compose && (
-                <button type="button" className="button ghost" onClick={() => setCompose(false)}>
-                  Cancel
-                </button>
-              )}
-            </div>
-          </form>
-          <aside className="studio-card studio-explainer">
-            <Meta />
-            <h2>From brief to verified result.</h2>
-            <ol>
-              <li>
-                <span>1</span>
-                <div>
-                  <strong>Plan the work</strong>
-                  <p>Meta reads the project context and chooses compute and tests.</p>
-                </div>
-              </li>
-              <li>
-                <span>2</span>
-                <div>
-                  <strong>Let providers compete</strong>
-                  <p>
-                    Broker runs the auctions and checks every purchase against your remaining
-                    budget.
-                  </p>
-                </div>
-              </li>
-              <li>
-                <span>3</span>
-                <div>
-                  <strong>Run in a Wick VM</strong>
-                  <p>Studio confirms setup, edits files, and tracks actual command receipts.</p>
-                </div>
-              </li>
-              <li>
-                <span>4</span>
-                <div>
-                  <strong>Verify and clean up</strong>
-                  <p>
-                    Get the patch, test output, and final cost. The VM is terminated
-                    {diskId ? ' and your disk workspace is kept for the next task.' : '.'}
-                  </p>
-                </div>
-              </li>
-            </ol>
-            <div className="studio-assurance">
-              <ShieldCheck size={17} />
-              <p>
-                Unused funding returns after cleanup. Purchased model allowance is prepaid and
-                unused quota is non-refundable.
-              </p>
-            </div>
-          </aside>
-        </div>
+            </FormDisclosure>
+          </FormLayout>
+        </form>
       )}
       <TablePanel className="studio-history" label="Studio tasks">
         <TableTabs
           actions={
             <Link className="table-open-link" href="/studio/legacy">
-              Previous coding jobs <ArrowRight size={14} />
+              Use existing resources (advanced) <ArrowRight size={14} />
             </Link>
           }
         >
@@ -773,8 +801,13 @@ export function StudioTaskPage({ id }: { id: string }) {
   }
   if (!task || !detail.data)
     return (
-      <div className="studio-page">
-        <ErrorBox error={detail.error} />
+      <div className="form-page studio-page">
+        <PageHeader
+          eyebrow="STUDIO TASK"
+          title="Your Studio task"
+          description="Task progress, purchases, and saved results."
+        />
+        <ErrorBox error={detail.error} retry={detail.reload} />
         {detail.loading && <Spinner label="Loading task" />}
       </div>
     );
@@ -782,7 +815,7 @@ export function StudioTaskPage({ id }: { id: string }) {
     auction = data.computeAuction,
     modelOpen = data.modelPurchases.find((p) => p.status === 'open');
   return (
-    <div className="studio-page">
+    <div className="form-page studio-page">
       <Link className="back-link" href="/studio">
         <ArrowLeft size={14} />
         Back to Studio
@@ -824,7 +857,9 @@ export function StudioTaskPage({ id }: { id: string }) {
         </div>
       )}
       {task.mode === 'fixture' && (
-        <div className="studio-notice">Fixture task · no live purchases or provider VMs.</div>
+        <FormNotice icon={<ShieldCheck size={16} />}>
+          Fixture task · no live purchases or provider VMs.
+        </FormNotice>
       )}
       <div className="studio-task-layout">
         <div className="studio-task-main">
@@ -1017,7 +1052,11 @@ export function StudioTaskPage({ id }: { id: string }) {
                   )}
                   {!data.events.length && (
                     <div className="studio-empty">
-                      <Spinner label="Preparing the task" />
+                      {finished(task.status) ? (
+                        <p>{task.summary || 'No activity events are retained for this task.'}</p>
+                      ) : (
+                        <Spinner label="Preparing the task" />
+                      )}
                     </div>
                   )}
                 </div>
@@ -1136,48 +1175,50 @@ export function StudioTaskPage({ id }: { id: string }) {
             </div>
           </section>
           {task.plan && (
-            <section className="studio-card studio-plan">
-              <Meta />
-              <h3>Why this setup?</h3>
+            <FormDisclosure
+              title="Why this setup?"
+              icon={<Sparkles size={16} />}
+              className="studio-plan"
+            >
               <p>{task.plan.explanation}</p>
-              <details>
-                <summary>Completion check</summary>
-                <code>{task.plan.testCommand}</code>
-              </details>
+              <h3>Completion check</h3>
+              <code>{task.plan.testCommand}</code>
+            </FormDisclosure>
+          )}
+          {(data.vm || task.codingJobId || !finished(task.status)) && (
+            <section className="studio-card studio-controls">
+              {data.vm && (
+                <Link href={'/vms/' + data.vm.id}>
+                  <Server size={16} />
+                  {data.vm.cleanupConfirmedAt ? 'VM cleanup confirmed' : 'Open VM and terminal'}
+                  <ArrowRight size={14} />
+                </Link>
+              )}
+              {task.codingJobId && (
+                <Link href={'/studio/jobs/' + task.codingJobId}>
+                  Execution receipts
+                  <ArrowRight size={14} />
+                </Link>
+              )}
+              {!finished(task.status) && (
+                <>
+                  {task.status === 'needs_attention' && !data.planning && (
+                    <button
+                      className="button secondary"
+                      disabled={busy}
+                      onClick={() => act('resume')}
+                    >
+                      Resume after review
+                    </button>
+                  )}
+                  <p>
+                    Stopping cancels pending purchases and requests VM cleanup. Existing commitments
+                    remain payable.
+                  </p>
+                </>
+              )}
             </section>
           )}
-          <section className="studio-card studio-controls">
-            {data.vm && (
-              <Link href={'/vms/' + data.vm.id}>
-                <Server size={16} />
-                {data.vm.cleanupConfirmedAt ? 'VM cleanup confirmed' : 'Open VM and terminal'}
-                <ArrowRight size={14} />
-              </Link>
-            )}
-            {task.codingJobId && (
-              <Link href={'/studio/jobs/' + task.codingJobId}>
-                Execution receipts
-                <ArrowRight size={14} />
-              </Link>
-            )}
-            {!finished(task.status) && (
-              <>
-                {task.status === 'needs_attention' && !data.planning && (
-                  <button
-                    className="button secondary"
-                    disabled={busy}
-                    onClick={() => act('resume')}
-                  >
-                    Resume after review
-                  </button>
-                )}
-                <p>
-                  Stopping cancels pending purchases and requests VM cleanup. Existing commitments
-                  remain payable.
-                </p>
-              </>
-            )}
-          </section>
         </aside>
       </div>
     </div>

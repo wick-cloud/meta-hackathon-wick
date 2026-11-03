@@ -12,7 +12,6 @@ import { parseExplicitBuyerDescription } from '../shared/muse-contracts';
 import { addCents, isMoneyCents, MIN_ORDER_PRICE_CENTS } from '../shared/money';
 import { seedAlternativeDraft } from './negotiation';
 import { AgreementCharges } from './agreement-charges';
-import { PurchaseContext } from './purchases';
 import {
   ArrowDownToLine,
   ArrowRight,
@@ -84,6 +83,19 @@ const TerminalPanel = lazy(() =>
   import('./terminal').then((module) => ({ default: module.TerminalPanel })),
 );
 import { DiskPicker, useDiskOptions } from './disks';
+import {
+  FormPage,
+  FormLayout,
+  FormPanel,
+  FormSection,
+  FormSummary,
+  FormSummaryRows,
+  FormTotal,
+  FormNotice,
+  FormActions,
+  FormDisclosure,
+} from './form-layout';
+import './compute-layout.css';
 
 export function NewEnvironment() {
   const { catalog, modes, user } = useSession(),
@@ -146,9 +158,11 @@ export function NewEnvironment() {
         ? 'Disk support is currently unavailable. Return to Disks to review this disk or try again.'
         : 'No approved configuration can mount this disk. Review the available disk-compatible configurations before continuing.')
     : 'No approved configurations are available. Your administrator can approve a catalog configuration.';
-  if (copying) return <Spinner label="Loading original request for a new review" />;
-  if (linkedDiskId && diskOptions.loading && !diskOptions.data)
-    return <Spinner label="Checking disk-compatible configurations" />;
+  const pending = copying
+    ? 'Loading original request for a new review'
+    : linkedDiskId && diskOptions.loading && !diskOptions.data
+      ? 'Checking disk-compatible configurations'
+      : '';
   function changeDescription(value: string) {
     setDescription(value);
     const explicit = parseExplicitBuyerDescription(value);
@@ -250,149 +264,166 @@ export function NewEnvironment() {
     }
   }
   return (
-    <>
-      <PurchaseContext kind="vm" />
-      <PageHeader
-        eyebrow="VIRTUAL MACHINES"
-        title="Launch a VM"
-        description="Choose your compute and rental time. Providers compete to host your environment."
-      />
-      <Steps active={0} />
-      <div className="new-environment-grid">
-        <section className="card request-composer">
-          <div className="card-heading">
-            <div className="icon-tile emerald">
-              <SquareTerminal size={21} />
-            </div>
-            <div>
-              <h2>Environment requirements</h2>
-              <p>Resources, region and rental duration.</p>
-            </div>
-          </div>
-          <label className="field prompt-field" htmlFor="environment-description">
-            <span>Describe your environment</span>
-            <textarea
-              id="environment-description"
-              maxLength={4000}
-              rows={4}
-              placeholder="I need a small Linux environment with 2 vCPUs and 4 GB of memory for 30 minutes…"
-              value={description}
-              onChange={(e) => changeDescription(e.target.value)}
+    <FormPage
+      className="describe-page"
+      eyebrow="AUCTION REQUEST"
+      title="Launch a VM"
+      description="Describe what you need. Review the details before providers start bidding."
+      back={{ href: '/new', label: 'All purchase options' }}
+      step="Step 1 of 3"
+    >
+      <FormLayout
+        aside={
+          <FormSummary
+            title="Before you launch"
+            description="Compatible providers compete for your requirements."
+          >
+            <FormSummaryRows
+              items={[
+                { label: 'Auction window', value: '30 seconds' },
+                { label: 'Buyer fee', value: '$0' },
+                ...(linkedDiskId ? [{ label: 'Workspace', value: 'Persistent disk' }] : []),
+              ]}
             />
-            <span className="field-hint">
-              Include the resources, region, and rental length you need. You’ll review everything
-              before the auction.
+            <FormTotal label="Maximum total" value={money(budget)} note="USD · entire rental" />
+            <ErrorBox
+              error={error || (!pending && !first ? configurationError : '')}
+              retry={linkedDiskId && diskOptions.error ? diskOptions.reload : undefined}
+            />
+            <FormActions className="describe-actions">
+              <button
+                type="button"
+                className="button primary full-width"
+                onClick={() => void translate()}
+                disabled={busy || !first || !!pending}
+              >
+                {busy ? (
+                  <Spinner label="Preparing review" />
+                ) : (
+                  <>
+                    <Sparkles size={16} />
+                    Prepare with Muse
+                    <ArrowRight size={16} />
+                  </>
+                )}
+              </button>
+              <button
+                type="button"
+                className="button secondary full-width"
+                onClick={manual}
+                disabled={busy || !first || !!pending}
+              >
+                Review manually
+              </button>
+            </FormActions>
+            <FormNotice icon={<ShieldCheck size={16} />}>
+              <p>
+                <strong>You review before anything launches.</strong> Preparing a draft starts no
+                auction and reserves no VM.
+              </p>
+            </FormNotice>
+            <span className="quiet-badge">
+              {modes.muse === 'fixture' ? 'Fixture mode · no model call' : museLabel}
             </span>
-          </label>
-          <div className="prompt-examples">
-            <span>Try a starting point</span>
-            <div>
-              {[
-                'A lightweight Linux workspace',
-                'A memory-rich environment',
-                'A short compute session',
-              ].map((text, i) => (
-                <button
-                  key={text}
-                  className="suggestion-chip"
-                  onClick={() =>
-                    changeDescription(
+          </FormSummary>
+        }
+      >
+        {pending ? (
+          <FormPanel>
+            <FormSection>
+              <Spinner label={pending} />
+            </FormSection>
+          </FormPanel>
+        ) : (
+          <>
+            <FormPanel aria-label="Environment description">
+              <FormSection
+                title="Environment requirements"
+                description="Tell us the CPU, memory, and rental time you need."
+              >
+                <label className="field" htmlFor="environment-description">
+                  <span>Describe your environment</span>
+                  <textarea
+                    id="environment-description"
+                    aria-label="Describe your environment"
+                    maxLength={4000}
+                    rows={4}
+                    placeholder="A Linux workspace with 2 vCPUs and 4 GiB of memory for 30 minutes…"
+                    value={description}
+                    onChange={(e) => changeDescription(e.target.value)}
+                    disabled={busy}
+                  />
+                </label>
+                <div className="describe-examples" aria-label="Example requirements">
+                  <span>Try a starting point</span>
+                  <div>
+                    {[
                       [
-                        `A lightweight Linux environment with 2 vCPUs and 4 GB memory for 30 minutes.`,
-                        `A Linux environment with at least 8 GB memory for a 30-minute session.`,
-                        `A Linux environment with 4 vCPUs for a 15-minute session.`,
-                      ][i]!,
-                    )
-                  }
-                >
-                  {text}
-                  <ArrowRight size={12} />
-                </button>
-              ))}
-            </div>
-          </div>
-          <MoneyInput
-            id="initial-budget"
-            label="Your maximum total (USD)"
-            value={budget}
-            min={1}
-            onChange={(value) => {
-              setBudget(value);
-              setBudgetEdited(true);
-            }}
-          />
-          <p className="field-hint">
-            Explicit budgets in your description fill this field. Your edits take precedence; review
-            the amount before continuing.
-          </p>
-          <ErrorBox
-            error={error || (linkedDiskId && !first ? configurationError : '')}
-            retry={linkedDiskId && diskOptions.error ? diskOptions.reload : undefined}
-          />
-          <div className="composer-actions">
-            <button className="button secondary" onClick={manual} disabled={busy || !first}>
-              Review manually
-            </button>
+                        'A lightweight Linux workspace',
+                        'A lightweight Linux environment with 2 vCPUs and 4 GB memory for 30 minutes.',
+                      ],
+                      [
+                        'A memory-rich environment',
+                        'A Linux environment with at least 8 GB memory for a 30-minute session.',
+                      ],
+                      [
+                        'A short compute session',
+                        'A Linux environment with 4 vCPUs for a 15-minute session.',
+                      ],
+                    ].map(([label, value]) => (
+                      <button
+                        key={label}
+                        type="button"
+                        disabled={busy}
+                        onClick={() => changeDescription(value!)}
+                      >
+                        {label}
+                        <ArrowRight size={12} />
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </FormSection>
+              <FormSection
+                className="form-budget"
+                title="Your budget"
+                description="Your ceiling for the entire rental. You can edit it during review."
+              >
+                <MoneyInput
+                  id="initial-budget"
+                  label="Your maximum total (USD)"
+                  value={budget}
+                  min={1}
+                  disabled={busy}
+                  onChange={(value) => {
+                    setBudget(value);
+                    setBudgetEdited(true);
+                  }}
+                />
+                <p className="field-hint">
+                  A budget in your description fills this in. Your edits take precedence.
+                </p>
+              </FormSection>
+            </FormPanel>
             <button
-              className="button primary"
-              onClick={() => void translate()}
-              disabled={busy || !first}
+              type="button"
+              className="form-text-action"
+              onClick={alternatives}
+              disabled={busy}
             >
-              {busy ? (
-                <Spinner label="Preparing review" />
-              ) : (
-                <>
-                  <Sparkles size={16} />
-                  Prepare with Muse
-                  <ArrowRight size={16} />
-                </>
-              )}
+              Review unsupported needs and alternatives
+              <ArrowRight size={14} />
             </button>
-          </div>
-          <button className="button secondary full-width" onClick={alternatives} disabled={busy}>
-            Review unsupported needs and alternatives
-            <ArrowRight size={16} />
-          </button>
-          <div className="composer-note">
-            <LockKeyhole size={13} />
-            Only your environment requirements go to Muse. Never credentials or terminal contents.
-          </div>
-        </section>
-        <aside className="card market-panel market-sticky">
-          <div className="section-heading">
-            <h2>Instant auction</h2>
-            <Clock3 size={17} />
-          </div>
-          <DetailRow label="Auction window">30 seconds</DetailRow>
-          <DetailRow label="Maximum total">{money(budget)}</DetailRow>
-          <DetailRow label="Buyer fee">$0</DetailRow>
-          <div className="market-divider" />
-          <h3>From review to terminal</h3>
-          <ol className="market-explain-list">
-            <li>Review your minimum resources, duration and maximum price.</li>
-            <li>Providers bid for 30 seconds. The lowest eligible offer wins.</li>
-            <li>Open your VM and run your own commands.</li>
-          </ol>
-          <p className="field-hint">
-            The rental clock starts when Wick admits provisioning, including setup time.
-          </p>
-          <div className="market-divider" />
-          <h3>
-            <Sparkles size={15} /> Muse drafts
-          </h3>
-          <p className="market-copy">
-            Muse turns your description into resource requirements. Review and edit them before
-            submitting.
-          </p>
-          <span className="quiet-badge">
-            {modes.muse === 'fixture' ? 'Fixture mode · no model call' : museLabel}
-          </span>
-        </aside>
-      </div>
-      {!first && !linkedDiskId && (
-        <ErrorBox error="No approved configurations are available. Ask an administrator to approve a supported configuration." />
-      )}
-    </>
+            <FormNotice icon={<LockKeyhole size={14} />}>
+              <p>
+                Only your environment requirements go to Muse. Never credentials or terminal
+                contents.
+              </p>
+            </FormNotice>
+          </>
+        )}
+      </FormLayout>
+    </FormPage>
   );
 }
 
@@ -426,8 +457,23 @@ export function AuctionPage({ id }: { id: string }) {
       setBusy('');
     }
   }
-  if (loading) return <Spinner label="Loading your auction" />;
-  if (!data) return <ErrorBox error={error || 'Request unavailable.'} retry={reload} />;
+  if (loading || !data)
+    return (
+      <div className="form-page compute-page">
+        <PageHeader
+          eyebrow="AUCTION REQUEST"
+          title="Your auction"
+          description="Review provider offers and your rental status."
+        />
+        <FormPanel className="compute-loading">
+          {loading ? (
+            <Spinner label="Loading your auction" />
+          ) : (
+            <ErrorBox error={error || 'Request unavailable.'} retry={reload} />
+          )}
+        </FormPanel>
+      </div>
+    );
   const { request, bids, vm } = data;
   const open = request.status === 'open';
   const sorted = [...bids].sort(
@@ -445,13 +491,13 @@ export function AuctionPage({ id }: { id: string }) {
   const awaitingCleanup = rentalEnded && (!vm?.cleanupConfirmedAt || vm.cleanupPending);
   const completedRental = request.status === 'ready' && rentalEnded;
   return (
-    <>
+    <div className="form-page compute-page">
       <Link href="/orders" className="back-link">
         <ChevronLeft size={16} />
         All orders
       </Link>
       <PageHeader
-        eyebrow="REQUEST MATCHING"
+        eyebrow="AUCTION REQUEST"
         title={
           open
             ? 'Live auction'
@@ -477,15 +523,17 @@ export function AuctionPage({ id }: { id: string }) {
               : 'Your specification and winning quote are locked in.'
         }
       >
+        <span className="form-step" aria-current="step">
+          Step 3 of 3
+        </span>
         <StatusPill
           status={completedRental ? (awaitingCleanup ? 'ending' : 'completed') : request.status}
         />
       </PageHeader>
-      <Steps active={2} />
       <ErrorBox error={error || actionError} retry={error ? reload : undefined} />
-      <div className="auction-grid">
+      <div className="form-layout compute-auction-layout">
         <div>
-          <section className={`card auction-card ${open ? 'is-live' : ''}`}>
+          <FormPanel className={`auction-card ${open ? 'is-live' : ''}`}>
             <div className="auction-top">
               <div className="auction-live-label">
                 <Radio size={17} />
@@ -598,7 +646,7 @@ export function AuctionPage({ id }: { id: string }) {
               <ShieldCheck size={15} />
               Prices are fixed for the full rental. Ties are resolved by accepted time, then bid ID.
             </div>
-          </section>
+          </FormPanel>
           {vm && (
             <div className="card auction-vm">
               <span className="icon-tile emerald">
@@ -641,27 +689,42 @@ export function AuctionPage({ id }: { id: string }) {
           )}
         </div>
         <aside>
-          <section className="card request-summary">
-            <h2>Your request</h2>
+          <FormSummary title="Your request" className="compute-request-summary">
             <p className="request-description">{request.description}</p>
-            <DetailRow label="Resources">
-              {request.requirements.cpu} vCPU · {request.requirements.memoryGb} GiB
-            </DetailRow>
-            <DetailRow label="Region">{regionName(request.region)}</DetailRow>
-            <DetailRow label="Rental">{request.durationMinutes} minutes</DetailRow>
-            {request.diskId && (
-              <DetailRow label="Persistent disk">
-                <Link href={'/disks/' + request.diskId}>
-                  View disk <ArrowRight size={13} />
-                </Link>
-              </DetailRow>
-            )}
-            <DetailRow label="Maximum total">{money(request.maxPriceCents)}</DetailRow>
-            <DetailRow label="Auction closes">{dateTime(request.closesAt)}</DetailRow>
-            <div className="immutable-note">
-              <LockKeyhole size={14} />
+            <FormSummaryRows
+              items={[
+                {
+                  label: 'Resources',
+                  value: `${request.requirements.cpu} vCPU · ${request.requirements.memoryGb} GiB`,
+                },
+                ...(request.requirements.gpu
+                  ? [{ label: 'GPU', value: request.requirements.gpu }]
+                  : []),
+                { label: 'Region', value: regionName(request.region) },
+                { label: 'Rental', value: `${request.durationMinutes} minutes` },
+                { label: 'Auction closes', value: dateTime(request.closesAt) },
+                ...(request.diskId
+                  ? [
+                      {
+                        label: 'Persistent disk',
+                        value: (
+                          <Link href={'/disks/' + request.diskId}>
+                            View disk <ArrowRight size={13} />
+                          </Link>
+                        ),
+                      },
+                    ]
+                  : []),
+              ]}
+            />
+            <FormTotal
+              label="Maximum total"
+              value={money(request.maxPriceCents)}
+              note="USD · entire rental"
+            />
+            <FormNotice icon={<LockKeyhole size={15} />}>
               This specification is now fixed.
-            </div>
+            </FormNotice>
             {open && (
               <button
                 className="button secondary full-width"
@@ -671,17 +734,14 @@ export function AuctionPage({ id }: { id: string }) {
                 {busy === 'cancel' ? <Spinner label="Cancelling" /> : 'Cancel auction'}
               </button>
             )}
-          </section>
-          <div className="info-note">
-            <Clock3 size={17} />
-            <p>
-              Your rental clock starts when Wick admits provisioning, including setup. Expiry is
-              never reset by a retry or terminal reconnect.
-            </p>
-          </div>
+          </FormSummary>
+          <FormNotice icon={<Clock3 size={17} />}>
+            Your rental clock starts when Wick admits provisioning, including setup. Expiry is never
+            reset by a retry or terminal reconnect.
+          </FormNotice>
         </aside>
       </div>
-    </>
+    </div>
   );
 }
 
@@ -709,14 +769,29 @@ export function VMDetail({ id }: { id: string }) {
       setBusy(false);
     }
   }
-  if (loading) return <Spinner label="Loading environment" />;
-  if (!vm) return <ErrorBox error={error || 'Environment unavailable.'} retry={reload} />;
+  if (loading || !vm)
+    return (
+      <div className="form-page compute-page">
+        <PageHeader
+          eyebrow="ENVIRONMENT"
+          title="Your environment"
+          description="Terminal access, rental details, and cleanup status."
+        />
+        <FormPanel className="compute-loading">
+          {loading ? (
+            <Spinner label="Loading environment" />
+          ) : (
+            <ErrorBox error={error || 'Environment unavailable.'} retry={reload} />
+          )}
+        </FormPanel>
+      </div>
+    );
   const active = vm.status === 'running' || vm.status === 'provisioning',
     isExpired = !!vm.expiresAt && new Date(vm.expiresAt).getTime() <= now,
     scheduled = vm.billingSource === 'scheduled_capacity',
     window = vm.scheduledWindow;
   return (
-    <>
+    <div className="form-page compute-page">
       <Link href="/vms" className="back-link">
         <ChevronLeft size={16} />
         My VMs
@@ -767,40 +842,60 @@ export function VMDetail({ id }: { id: string }) {
           </button>
         </div>
       )}
-      <div className="stats-grid vm-detail-stats">
-        <StatCard
-          label={scheduled ? 'Time to hard end' : 'Time remaining'}
-          value={active ? remaining(vm.expiresAt, now) : '—'}
-          note={
-            scheduled
-              ? 'Late starts do not extend the window'
-              : 'Clock starts at provisioning admission'
-          }
-          icon={<Timer size={18} />}
+      <FormPanel className="compute-strip" aria-label="Rental summary">
+        <FormSummaryRows
+          items={[
+            {
+              label: scheduled ? 'Time to hard end' : 'Time remaining',
+              value: active ? remaining(vm.expiresAt, now) : '—',
+            },
+            {
+              label: scheduled ? 'Immutable hard end' : 'Exact expiry',
+              value: dateTime(vm.expiresAt),
+            },
+            {
+              label: scheduled ? 'Booked slot-window total' : 'Fixed rental price',
+              value: money(vm.priceCents),
+            },
+          ]}
         />
-        <StatCard
-          label={scheduled ? 'Immutable hard end' : 'Exact expiry'}
-          value={<span className="date-value">{dateTime(vm.expiresAt)}</span>}
-          note={
-            scheduled
-              ? 'Termination · save files before this time'
-              : 'Setup included · reconnects do not reset expiry'
-          }
-          icon={<Clock3 size={18} />}
+      </FormPanel>
+      <FormNotice icon={<Clock3 size={16} />}>
+        {scheduled
+          ? 'Late starts do not extend the window. Save files before the hard end.'
+          : 'Setup is included. Reconnecting does not reset expiry.'}
+        <span className="compute-billing-note">
+          {scheduled
+            ? 'Part of your agreement · no additional VM charge'
+            : vm.readyAt
+              ? 'Ready confirmed · No payment due'
+              : 'Only charged after confirmed readiness'}
+        </span>
+      </FormNotice>
+      {vm.cleanupPending && (
+        <FormNotice className="compute-warning" icon={<Clock3 size={16} />}>
+          <span role="status">
+            Wick cleanup is pending. Provider capacity remains reserved until cleanup is confirmed.
+          </span>
+        </FormNotice>
+      )}
+      {vm.failureReason && (!vm.cleanupConfirmedAt || !vm.readyAt) && (
+        <ErrorBox error={vm.failureReason} />
+      )}
+      <Suspense
+        fallback={
+          <div className="card">
+            <Spinner label="Loading terminal" />
+          </div>
+        }
+      >
+        <TerminalPanel
+          vmId={vm.id}
+          enabled={vm.status === 'running' && !isExpired}
+          status={vm.status}
+          mode={vm.sourceMode ?? 'fixture'}
         />
-        <StatCard
-          label={scheduled ? 'Booked slot-window total' : 'Fixed rental price'}
-          value={money(vm.priceCents)}
-          note={
-            scheduled
-              ? 'Part of your agreement · no additional VM charge'
-              : vm.readyAt
-                ? 'Ready confirmed · No payment due'
-                : 'Only charged after confirmed readiness'
-          }
-          icon={<CircleDollarSign size={18} />}
-        />
-      </div>
+      </Suspense>
       {scheduled && (
         <section className="card market-panel">
           <div className="section-heading">
@@ -850,26 +945,12 @@ export function VMDetail({ id }: { id: string }) {
           </p>
         </section>
       )}
-      {vm.failureReason && (!vm.cleanupConfirmedAt || !vm.readyAt) && (
-        <ErrorBox error={vm.failureReason} />
-      )}
-      <Suspense
-        fallback={
-          <div className="card">
-            <Spinner label="Loading terminal" />
-          </div>
-        }
-      >
-        <TerminalPanel
-          vmId={vm.id}
-          enabled={vm.status === 'running' && !isExpired}
-          status={vm.status}
-          mode={vm.sourceMode ?? 'fixture'}
-        />
-      </Suspense>
       <div className="vm-detail-bottom">
-        <section className="card">
-          <h2>Rental details</h2>
+        <FormDisclosure
+          title="Rental details"
+          icon={<ReceiptText size={16} />}
+          className="compute-rental-details"
+        >
           <DetailRow label="Environment source">{rentalSourceLabel(vm.sourceMode)}</DetailRow>
           <DetailRow label="Created">{dateTime(vm.createdAt)}</DetailRow>
           <DetailRow label="Ready confirmed">
@@ -912,9 +993,12 @@ export function VMDetail({ id }: { id: string }) {
               <ArrowLink to={`/requests/${vm.requestId}`}>View auction & winning offer</ArrowLink>
             )}
           </div>
-        </section>
-        <section className="card rental-guide">
-          <h2>Your terminal, your commands.</h2>
+        </FormDisclosure>
+        <FormDisclosure
+          title="Using your terminal"
+          icon={<SquareTerminal size={16} />}
+          className="rental-guide"
+        >
           <div>
             <span className="icon-tile small neutral">
               <SquareTerminal size={16} />
@@ -939,18 +1023,9 @@ export function VMDetail({ id }: { id: string }) {
               audited.
             </p>
           </div>
-          {vm.cleanupPending && (
-            <div className="info-note">
-              <Clock3 size={16} />
-              <p>
-                Wick cleanup is pending. Provider capacity remains reserved until cleanup is
-                confirmed.
-              </p>
-            </div>
-          )}
-        </section>
+        </FormDisclosure>
       </div>
-    </>
+    </div>
   );
 }
 
@@ -983,7 +1058,7 @@ export function Invoices() {
     URL.revokeObjectURL(url);
   }
   return (
-    <>
+    <div className="form-page compute-page">
       <PageHeader
         eyebrow="BUYER BILLING"
         title="Billing"
@@ -996,40 +1071,27 @@ export function Invoices() {
           </button>
         )}
       </PageHeader>
-      <div className="invoice-banner">
-        <span className="icon-tile emerald">
-          <ReceiptText size={23} />
-        </span>
-        <div>
-          <h3>These are demo invoices. No payment due.</h3>
-          <p>
-            Customer fixed quotes are separate from Wick’s actual internal usage. Full-term compute
-            estimates are not settled usage. Broker’s 15% commission comes from provider revenue,
-            not an added buyer fee. No payments or payouts are collected.
-          </p>
-        </div>
-        <span className="quiet-badge">Added buyer fee: $0.00</span>
-      </div>
-      <div className="stats-grid">
-        <StatCard
-          label="Loaded instant charges"
-          value={money(items.reduce((total, invoice) => addCents(total, amount(invoice)), 0))}
-          note="Fixed rental totals in USD"
-          icon={<CircleDollarSign size={18} />}
+      <FormNotice className="compute-billing-notice" icon={<ReceiptText size={18} />}>
+        <strong>These are demo invoices. No payment due.</strong> Broker’s 15% commission comes from
+        provider revenue. No buyer fee, payments, or payouts are collected.
+      </FormNotice>
+      <FormPanel className="compute-strip" aria-label="Loaded invoice summary">
+        <FormSummaryRows
+          items={[
+            {
+              label: 'Loaded instant charges',
+              value: data
+                ? money(items.reduce((total, invoice) => addCents(total, amount(invoice)), 0))
+                : '—',
+            },
+            { label: 'Loaded instant invoices', value: data ? items.length : '—' },
+            { label: 'Payment due', value: '$0.00' },
+          ]}
         />
-        <StatCard
-          label="Loaded instant invoices"
-          value={items.length}
-          note="Exactly one invoice per ready environment"
-          icon={<CheckCircle2 size={18} />}
-        />
-        <StatCard
-          label="Payment due"
-          value="$0.00"
-          note="Pilot · no payment collection"
-          icon={<ShieldCheck size={18} />}
-        />
-      </div>
+        <p className="field-hint">
+          Totals cover loaded invoices only. Exactly one invoice per ready environment.
+        </p>
+      </FormPanel>
       <ErrorBox error={data ? error : ''} retry={reload} />
       <TablePanel label="Instant rental invoices">
         <TableTabs
@@ -1098,6 +1160,13 @@ export function Invoices() {
           />
         </TableFooter>
       </TablePanel>
+      <FormDisclosure title="How rental invoices are calculated" icon={<ReceiptText size={16} />}>
+        <p>
+          Customer fixed quotes are separate from Wick’s actual internal usage. Full-term compute
+          estimates are not settled usage. Rental prices are accepted provider bids; Broker’s 15%
+          commission comes from provider revenue.
+        </p>
+      </FormDisclosure>
       <AgreementCharges />
       <div className="info-note">
         <ShieldCheck size={17} />
@@ -1106,6 +1175,6 @@ export function Invoices() {
           Termination after readiness keeps the full fixed rental charge.
         </p>
       </div>
-    </>
+    </div>
   );
 }

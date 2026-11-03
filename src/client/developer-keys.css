@@ -19,7 +19,7 @@
   margin-top: 1px;
 }
 .key-boundary strong {
-  color: var(--text);
+  color: var(--ink);
   font-weight: 600;
 }
 .key-boundary p {
@@ -29,6 +29,61 @@
 }
 .key-list {
   margin-bottom: 20px;
+}
+.developer-keys > .key-fine {
+  margin: 0 0 20px;
+  padding: 0;
+  border: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.65;
+}
+.key-setup {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--card);
+}
+.key-setup > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 24px;
+  cursor: pointer;
+  list-style: none;
+}
+.key-setup > summary::-webkit-details-marker {
+  display: none;
+}
+.key-setup > summary strong {
+  font-size: 14px;
+  font-weight: 600;
+}
+.key-setup > summary span > span {
+  display: block;
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.key-setup > summary > svg {
+  flex-shrink: 0;
+  color: var(--muted);
+}
+.key-setup[open] > summary > svg {
+  transform: rotate(180deg);
+}
+.key-setup > summary:focus-visible,
+.key-list summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -3px;
+}
+.key-setup-content {
+  padding: 0 24px 24px;
+  border-top: 1px solid var(--line);
+}
+.key-setup-content > p:first-child {
+  margin-top: 20px;
 }
 .key-prefix {
   display: block;
@@ -154,15 +209,27 @@
   font-family: monospace;
   font-size: 12px;
 }
-.developer-keys .market-dialog {
-  max-width: 680px;
-}
 @media (max-width: 700px) {
   .key-setup-grid,
   .key-basic-fields,
   .key-scopes,
   .key-limit-fields {
     grid-template-columns: 1fr;
+  }
+  .key-setup > summary {
+    padding: 18px 20px;
+  }
+  .key-setup-content {
+    padding: 0 20px 20px;
+  }
+  .key-scope {
+    min-height: 44px;
+    align-items: center;
+  }
+  .key-scope input {
+    width: 18px;
+    height: 18px;
+    margin-top: 0;
   }
 }
 .key-setup-grid > div {

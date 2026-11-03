@@ -8,7 +8,8 @@ import {
   TerminalSquare,
   Wallet,
 } from 'lucide-react';
-import { Link, PageHeader } from './components';
+import { Link } from './components';
+import { FormPage } from './form-layout';
 import './purchases.css';
 
 export function PurchaseContext({ kind }: { kind: 'vm' | 'tokens' }) {
@@ -47,7 +48,7 @@ export function PurchaseCards({ compact = false }: { compact?: boolean }) {
         <p>
           {compact
             ? 'Set your resources and budget. Providers compete in a 30-second auction.'
-            : 'A private environment for your code. Choose the resources, region and rental time.'}
+            : 'A private environment for your code. Set the minimum resources, rental time and total budget.'}
         </p>
         {!compact && (
           <>
@@ -147,16 +148,17 @@ export function PurchaseCards({ compact = false }: { compact?: boolean }) {
 
 export function PurchaseChooser() {
   return (
-    <div className="purchase-workspace">
-      <PageHeader
-        eyebrow="NEW PURCHASE"
-        title="What do you need?"
-        description="Compute for your code, or model tokens for your app. Choose where to start."
-      >
+    <FormPage
+      className="purchase-workspace"
+      eyebrow="NEW PURCHASE"
+      title="What do you need?"
+      description="Compute for your code, or model tokens for your app. Choose where to start."
+      actions={
         <Link href="/orders" className="button secondary">
           View orders <ArrowRight size={15} />
         </Link>
-      </PageHeader>
+      }
+    >
       <PurchaseCards />
       <section className="purchase-wallet-guide" aria-labelledby="purchase-wallet-title">
         <span className="purchase-wallet-icon">
@@ -173,7 +175,7 @@ export function PurchaseChooser() {
           Open wallet <ArrowRight size={14} />
         </Link>
       </section>
-    </div>
+    </FormPage>
   );
 }
 

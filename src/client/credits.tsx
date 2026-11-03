@@ -17,7 +17,7 @@ export function Credits() {
   const history = usePagedResource<CreditHistory['items'][number]>('/api/credits/history', 5000);
   const wallet = useResource<CreditWallet>('/api/credits', 5000);
   return (
-    <>
+    <div className="inventory-page wallet-page">
       <PageHeader
         eyebrow="BROKER PILOT WALLET"
         title="Broker wallet"
@@ -136,6 +136,6 @@ export function Credits() {
           />
         </TableFooter>
       </TablePanel>
-    </>
+    </div>
   );
 }

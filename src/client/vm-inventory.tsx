@@ -38,6 +38,7 @@ import {
   ErrorBox,
   Link,
   MarketDialog,
+  PageHeader,
   Spinner,
   StatusPill,
   SuccessBox,
@@ -151,25 +152,20 @@ export function MyVMs({ search = '' }: { search?: string }) {
     }
   }
   return (
-    <div className="vm-workspace">
-      <header className="vm-page-header">
-        <div>
-          <div className="vm-title-line">
-            <h1>Virtual machines</h1>
-            {list.data && <span className="vm-page-count">{items.length} shown</span>}
-          </div>
-          <p>Manage your environments, terminals and rental deadlines.</p>
-        </div>
-        <div className="vm-header-actions">
-          <Link href="/orders" className="button secondary">
-            View orders
-          </Link>
-          <Link href="/new/vm" className="button primary">
-            <Plus size={16} />
-            Create VM
-          </Link>
-        </div>
-      </header>
+    <div className="inventory-page vm-workspace">
+      <PageHeader
+        eyebrow="COMPUTE"
+        title="Virtual machines"
+        description="Manage your environments, terminals and rental deadlines."
+      >
+        <Link href="/orders" className="button secondary">
+          View orders
+        </Link>
+        <Link href="/new/vm" className="button primary">
+          <Plus size={16} />
+          Create VM
+        </Link>
+      </PageHeader>
       {notice && <SuccessBox>{notice}</SuccessBox>}
       <span className="sr-only" role="status">
         {copied ? 'VM ID copied.' : ''}
@@ -387,7 +383,6 @@ export function MyVMs({ search = '' }: { search?: string }) {
                                 >
                                   {copied === vm.id ? <Check size={12} /> : <Copy size={12} />}
                                 </button>
-                                <span aria-hidden="true">·</span>
                                 <time
                                   dateTime={vm.createdAt}
                                   title={`Created ${dateTime(vm.createdAt)}`}

@@ -1,0 +1,14 @@
+:root {
+  --panel-radius: 10px;
+  --panel-padding: 24px;
+  --control-radius: 7px;
+  --control-height: 42px;
+  --font-input: 13px;
+  --font-page-title: 28px;
+  --font-section-title: 16px;
+  --font-caption: 12px;
+  --space-section: 24px;
+  --page-width-form: 1100px;
+  --page-width-workspace: 1240px;
+  --summary-width: 320px;
+}

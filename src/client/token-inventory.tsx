@@ -105,16 +105,12 @@ export function TokenInventory({ search }: { search: string }) {
     return `/tokens${q.size ? `?${q}` : ''}`;
   }
   return (
-    <div className="token-inventory">
+    <div className="inventory-page token-inventory">
       <PageHeader
         eyebrow="AI TOKEN INVENTORY"
         title="Purchased tokens"
         description="Every purchased batch, its remaining input and output quota, and the time left to use it."
       >
-        <button className="button secondary" disabled={list.refreshing} onClick={list.reload}>
-          <RefreshCw size={15} />
-          Refresh
-        </button>
         <Link href="/token-orders/new" className="button primary">
           <Sparkles size={15} />
           Buy token pack
@@ -132,7 +128,20 @@ export function TokenInventory({ search }: { search: string }) {
       ) : (
         list.data && (
           <TablePanel className="token-inventory-card" label="Purchased token batches">
-            <TableTabs>
+            <TableTabs
+              actions={
+                <button
+                  className="icon-button"
+                  aria-label="Refresh token batches"
+                  title="Refresh token batches"
+                  disabled={list.refreshing}
+                  aria-busy={list.refreshing}
+                  onClick={list.reload}
+                >
+                  <RefreshCw size={16} className={list.refreshing ? 'spin' : undefined} />
+                </button>
+              }
+            >
               <RecordViews
                 label="Token pack views"
                 value={view}

@@ -249,7 +249,7 @@ test('includes the disk and existing workspace in the reviewed Studio start', as
   await page
     .getByLabel('Task', { exact: true })
     .fill('Continue the existing onboarding flow and validate its tests.');
-  await page.getByRole('button', { name: /^Start task/ }).click();
+  await page.getByRole('button', { name: /^Review task/ }).click();
   await expect(page.getByRole('dialog')).toContainText('Continue prototype');
   await page
     .getByRole('dialog')
@@ -349,7 +349,8 @@ test('waits for disk routes and defaults a new disk-linked rental to a supported
   try {
     await page.goto('/new/vm?diskId=' + diskId);
     await expect(page.getByRole('status')).toHaveText('Checking disk-compatible configurations');
-    await expect(page.getByRole('button', { name: 'Review manually', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Review manually', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Review manually', exact: true })).toBeDisabled();
     releaseOptions();
     await page.getByRole('button', { name: 'Review manually', exact: true }).click();
     await expect(page).toHaveURL(/\/requests\/review$/);

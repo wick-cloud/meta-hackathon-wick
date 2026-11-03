@@ -9,7 +9,7 @@ import {
 } from './table';
 import { usdToCents } from '../shared/money';
 import { useState, type FormEvent } from 'react';
-import { Copy, KeyRound, Plus, RefreshCw, ShieldCheck, X } from 'lucide-react';
+import { ChevronDown, Copy, KeyRound, Plus, RefreshCw, ShieldCheck, X } from 'lucide-react';
 import { api, ApiError, dateTime, money, post } from './api';
 import {
   ErrorBox,
@@ -148,16 +148,12 @@ export function DeveloperKeys() {
     }
   }
   return (
-    <div className="developer-keys">
+    <div className="inventory-page developer-keys">
       <PageHeader
         eyebrow="DEVELOPER ACCESS"
         title="API keys"
         description="Connect your scripts and agents to Wick Broker with permissions you control."
       >
-        <button className="button secondary" onClick={list.reload}>
-          <RefreshCw size={15} />
-          Refresh
-        </button>
         <button className="button primary" onClick={openCreate}>
           <Plus size={16} />
           Create key
@@ -187,7 +183,23 @@ export function DeveloperKeys() {
         retry={list.error ? list.reload : undefined}
       />
       <TablePanel className="key-list" label="API keys">
-        <TableTabs actions={<span className="muted-text">Up to 20 active keys</span>}>
+        <TableTabs
+          actions={
+            <>
+              <span className="muted-text">Up to 20 active keys</span>
+              <button
+                className="icon-button"
+                aria-label="Refresh API keys"
+                title="Refresh API keys"
+                disabled={list.refreshing}
+                aria-busy={list.refreshing}
+                onClick={list.reload}
+              >
+                <RefreshCw size={16} className={list.refreshing ? 'spin' : undefined} />
+              </button>
+            </>
+          }
+        >
           <h2>Your keys</h2>
         </TableTabs>
         {list.loading ? (
@@ -291,48 +303,58 @@ export function DeveloperKeys() {
           />
         </TableFooter>
       </TablePanel>
-      <section className="card key-setup">
-        <div className="section-heading">
-          <h2>Use your key</h2>
-          <span>SDK · CLI · MCP</span>
-        </div>
-        <p>
-          Use <code>WICK_BROKER_API_KEY</code> for authentication and{' '}
-          <code>WICK_BROKER_API_URL</code> for your Broker URL. Never substitute a Wick
-          infrastructure key.
-        </p>
-        <h3>Install the clients</h3>
-        <pre>
-          {[
-            'npm install \\',
-            `  ${window.location.origin}/downloads/0.5.0/wick-cloud-broker-sdk-0.5.0.tgz \\`,
-            `  ${window.location.origin}/downloads/0.5.0/wick-cloud-broker-cli-0.5.0.tgz \\`,
-            `  ${window.location.origin}/downloads/0.5.0/wick-cloud-broker-mcp-0.5.0.tgz`,
-          ].join('\n')}
-        </pre>
-        <div className="key-setup-grid">
-          <div>
-            <h3>TypeScript SDK</h3>
-            <pre>{`import { BrokerClient } from '@wick-cloud/broker-sdk';\n\nconst broker = new BrokerClient({\n  apiKey: process.env.WICK_BROKER_API_KEY!,\n  baseUrl: '${window.location.origin}',\n});\nconst orders = await broker.orders.list();`}</pre>
+      <details className="key-setup">
+        <summary>
+          <span>
+            <strong>Use your key</strong>
+            <span>SDK, CLI and MCP setup instructions</span>
+          </span>
+          <ChevronDown size={17} aria-hidden="true" />
+        </summary>
+        <div className="key-setup-content">
+          <p>
+            Use <code>WICK_BROKER_API_KEY</code> for authentication and{' '}
+            <code>WICK_BROKER_API_URL</code> for your Broker URL. Never substitute a Wick
+            infrastructure key.
+          </p>
+          <h3>Install the clients</h3>
+          <pre>
+            {[
+              'npm install \\',
+              `  ${window.location.origin}/downloads/0.5.0/wick-cloud-broker-sdk-0.5.0.tgz \\`,
+              `  ${window.location.origin}/downloads/0.5.0/wick-cloud-broker-cli-0.5.0.tgz \\`,
+              `  ${window.location.origin}/downloads/0.5.0/wick-cloud-broker-mcp-0.5.0.tgz`,
+            ].join('\n')}
+          </pre>
+          <div className="key-setup-grid">
+            <div>
+              <h3>TypeScript SDK</h3>
+              <pre>{`import { BrokerClient } from '@wick-cloud/broker-sdk';\n\nconst broker = new BrokerClient({\n  apiKey: process.env.WICK_BROKER_API_KEY!,\n  baseUrl: '${window.location.origin}',\n});\nconst orders = await broker.orders.list();`}</pre>
+            </div>
+            <div>
+              <h3>CLI</h3>
+              <pre>{`npx --no-install wick-broker auth login --api-url ${window.location.origin}\nnpx --no-install wick-broker orders list --json`}</pre>
+              <h3>Local MCP</h3>
+              <pre>{`node /absolute/path/to/your/project/node_modules/@wick-cloud/broker-mcp/dist/index.js`}</pre>
+              <p>
+                Your MCP host supplies the Broker key through its private environment configuration.
+              </p>
+            </div>
           </div>
-          <div>
-            <h3>CLI</h3>
-            <pre>{`npx --no-install wick-broker auth login --api-url ${window.location.origin}\nnpx --no-install wick-broker orders list --json`}</pre>
-            <h3>Local MCP</h3>
-            <pre>{`node /absolute/path/to/your/project/node_modules/@wick-cloud/broker-mcp/dist/index.js`}</pre>
-            <p>
-              Your MCP host supplies the Broker key through its private environment configuration.
-            </p>
-          </div>
+          <p className="key-fine">
+            General account key limits apply per operation, not daily or lifetime. Agent keys use
+            their funded agent budget. Revoking a key stops access; admitted work may finish within
+            its existing reservations.
+          </p>
         </div>
-        <p className="key-fine">
-          General account key limits apply per operation, not daily or lifetime. Agent keys use
-          their funded agent budget. Revoking a key stops access; admitted work may finish within
-          its existing reservations.
-        </p>
-      </section>
+      </details>
       {creating && (
-        <MarketDialog titleId="create-key-heading" onClose={() => setCreating(false)} busy={busy}>
+        <MarketDialog
+          titleId="create-key-heading"
+          onClose={() => setCreating(false)}
+          busy={busy}
+          size="wide"
+        >
           <form onSubmit={create} className="key-create-form">
             <div className="key-dialog-heading">
               <h2 id="create-key-heading">Create Broker API key</h2>
