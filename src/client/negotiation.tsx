@@ -9,6 +9,7 @@ import {
   TableViewport,
 } from './table';
 import './negotiation.css';
+import { demoAwareDraftStorage } from './demo-store';
 import type { FixedQuote } from '../shared/types';
 import { ComputePromotionNotice } from './compute-promotion';
 import {
@@ -101,7 +102,7 @@ const definitelyRejected = (error: unknown) =>
   error instanceof ApiError && [400, 401, 403, 404, 409, 422, 429].includes(error.status);
 function readDraft(key: string): IntentDraft | undefined {
   try {
-    return JSON.parse(sessionStorage.getItem(key) || 'null') || undefined;
+    return JSON.parse(demoAwareDraftStorage.getItem(key) || 'null') || undefined;
   } catch {
     return undefined;
   }
@@ -121,7 +122,7 @@ export function seedAlternativeDraft(actorId: string, description: string, desir
       gpu: 'preserve',
     },
   };
-  sessionStorage.setItem(draftKey(actorId), JSON.stringify(draft));
+  demoAwareDraftStorage.setItem(draftKey(actorId), JSON.stringify(draft));
 }
 
 export function AlternativeComposer({ sourceRequestId }: { sourceRequestId?: string }) {
@@ -158,7 +159,7 @@ export function AlternativeComposer({ sourceRequestId }: { sourceRequestId?: str
     [error, setError] = useState(''),
     [sourceLoaded, setSourceLoaded] = useState(!sourceRequestId || !!readDraft(key));
   useEffect(() => {
-    if (sourceLoaded) sessionStorage.setItem(key, JSON.stringify(draft));
+    if (sourceLoaded) demoAwareDraftStorage.setItem(key, JSON.stringify(draft));
   }, [key, draft, sourceLoaded]);
   useEffect(() => {
     if (!sourceRequestId || sourceLoaded) return;
@@ -217,7 +218,7 @@ export function AlternativeComposer({ sourceRequestId }: { sourceRequestId?: str
     setBusy(true);
     setError('');
     const snapshot = { ...draft, attempted: true };
-    sessionStorage.setItem(key, JSON.stringify(snapshot));
+    demoAwareDraftStorage.setItem(key, JSON.stringify(snapshot));
     setDraft(snapshot);
     try {
       const result = await post<Intent>('/api/intents', {
@@ -230,12 +231,12 @@ export function AlternativeComposer({ sourceRequestId }: { sourceRequestId?: str
         ...(draft.flexible ? { flexibility: draft.flexibility } : {}),
         ...(sourceRequestId ? { sourceRequestId } : {}),
       });
-      sessionStorage.removeItem(key);
+      demoAwareDraftStorage.removeItem(key);
       navigate(`/alternatives/${result.id}`);
     } catch (err) {
       if (definitelyRejected(err)) {
         const editable = { ...snapshot, attempted: false, operationKey: crypto.randomUUID() };
-        sessionStorage.setItem(key, JSON.stringify(editable));
+        demoAwareDraftStorage.setItem(key, JSON.stringify(editable));
         setDraft(editable);
       }
       setError(err instanceof Error ? err.message : 'Unable to save your reviewed intent.');
@@ -716,7 +717,7 @@ export function AlternativeDetail({ id }: { id: string }) {
   const [attempt, setAttempt] = useState<{ operationKey: string; offerId: string } | undefined>(
     () => {
       try {
-        return JSON.parse(sessionStorage.getItem(acceptKey) || 'null') || undefined;
+        return JSON.parse(demoAwareDraftStorage.getItem(acceptKey) || 'null') || undefined;
       } catch {
         return undefined;
       }
@@ -763,7 +764,7 @@ export function AlternativeDetail({ id }: { id: string }) {
   async function accept() {
     if (!selected || !consent) return;
     const receipt = attempt || { operationKey: crypto.randomUUID(), offerId: selected.id };
-    sessionStorage.setItem(acceptKey, JSON.stringify(receipt));
+    demoAwareDraftStorage.setItem(acceptKey, JSON.stringify(receipt));
     setAttempt(receipt);
     setBusy('accept');
     setActionError('');
@@ -775,7 +776,7 @@ export function AlternativeDetail({ id }: { id: string }) {
       navigate(`/vms/${result.vmId}`);
     } catch (err) {
       if (definitelyRejected(err)) {
-        sessionStorage.removeItem(acceptKey);
+        demoAwareDraftStorage.removeItem(acceptKey);
         setAttempt(undefined);
         setConsent(false);
       }

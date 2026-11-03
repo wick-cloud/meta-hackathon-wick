@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { demoDownloadHref } from './demo-store';
 import {
   ArrowLeft,
   ArrowRight,
@@ -1068,7 +1069,7 @@ export function StudioTaskPage({ id }: { id: string }) {
                       <h3>{task.patchLabel || 'Verified patch'}</h3>
                       <a
                         className="button secondary"
-                        href={'/api/studio/tasks/' + id + '/patch'}
+                        href={demoDownloadHref('/api/studio/tasks/' + id + '/patch', data.patch)}
                         download
                       >
                         {task.diskId ? 'Download workspace changes' : 'Download patch'}
