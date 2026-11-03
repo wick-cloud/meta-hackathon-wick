@@ -24,6 +24,7 @@ import {
   terminateVm,
 } from '../src/server/marketplace/lifecycle.js';
 import type { WickAdapter, WickEnvironment } from '../src/server/integrations/types.js';
+import type { WickDrives } from '../src/server/integrations/drives.js';
 import { registerMarketplace, startMarketplaceWorkers } from '../src/server/marketplace/index.js';
 import { getCatalog, syncCatalog } from '../src/server/marketplace/data.js';
 
@@ -143,19 +144,21 @@ describe.skipIf(!databaseUrl)('PostgreSQL marketplace concurrency and invariants
     closed = false,
     buyerId: string = randomUUID(),
     closingInterval = '60 seconds',
+    diskId: string | null = null,
   ) {
     const id = randomUUID();
     await pool.query(
-      `INSERT INTO broker_requests(id,buyer_id,description,catalog_id,catalog_snapshot,region,duration_minutes,max_price_cents,requirements,closes_at)
-      VALUES($1,$2,'Test interactive environment',$3,$4,$5,30,1000,$6,clock_timestamp()+$7::interval)`,
+      `INSERT INTO broker_requests(id,buyer_id,description,catalog_id,catalog_snapshot,region,duration_minutes,max_price_cents,requirements,closes_at,disk_id)
+      VALUES($1,$2,'Test interactive environment',$3,$4,$5,30,1000,$6,clock_timestamp()+$7::interval,$8)`,
       [
         id,
         buyerId,
         catalog.id,
-        catalog,
+        diskId ? { ...catalog, capabilities: ['persistent-drives'] } : catalog,
         catalog.region,
         { cpu: 2, memoryGb: 4 },
         closed ? '-1 second' : closingInterval,
+        diskId,
       ],
     );
     return id;
@@ -191,12 +194,38 @@ describe.skipIf(!databaseUrl)('PostgreSQL marketplace concurrency and invariants
     return bidId;
   }
 
-  async function awardedVm() {
+  async function awardedVm(withDisk = false) {
     const supplier = await provider();
     const buyerId = randomUUID();
-    const requestId = await request(true, buyerId);
+    let diskId: string | null = null;
+    if (withDisk) {
+      await pool.query(
+        'INSERT INTO "user"(id,email,name,role,"emailVerified") VALUES($1,$2,\'Disk buyer\',\'buyer\',true)',
+        [buyerId, `${buyerId}@test.invalid`],
+      );
+      diskId = (
+        await pool.query(
+          "INSERT INTO broker_disks(buyer_id,name,source_mode,status,create_key,upstream_id) VALUES($1,'Guard test','fixture','ready',$2,$3) RETURNING id",
+          [buyerId, randomUUID(), `drive-${randomUUID()}`],
+        )
+      ).rows[0].id;
+      await pool.query('UPDATE broker_catalog SET item=$2 WHERE id=$1', [
+        catalog.id,
+        { ...catalog, capabilities: ['persistent-drives'] },
+      ]);
+    }
+    const requestId = await request(true, buyerId, '60 seconds', diskId);
     const bidId = await acceptedBid(requestId, supplier, 200);
-    await closeAuction(ctx, requestId);
+    await closeAuction(
+      withDisk
+        ? {
+            ...ctx,
+            config: { ...ctx.config, disksEnabled: true },
+            wick: { ...ctx.wick, drives: {} as WickDrives },
+          }
+        : ctx,
+      requestId,
+    );
     const vm = (await pool.query('SELECT * FROM broker_vms WHERE request_id=$1', [requestId]))
       .rows[0];
     return { vm, supplier, buyerId, bidId, requestId };
@@ -1066,6 +1095,10 @@ describe.skipIf(!databaseUrl)('PostgreSQL marketplace concurrency and invariants
     state.environment.status = 'terminated';
     await cleanupVm(lifecycle, vm.id);
     expect(
+      (await pool.query('SELECT failure_reason FROM broker_vms WHERE id=$1', [vm.id])).rows[0]
+        .failure_reason,
+    ).toBeNull();
+    expect(
       (await pool.query('SELECT cleanup_confirmed_at FROM broker_vms WHERE id=$1', [vm.id])).rows[0]
         .cleanup_confirmed_at,
     ).not.toBeNull();
@@ -1078,6 +1111,219 @@ describe.skipIf(!databaseUrl)('PostgreSQL marketplace concurrency and invariants
     ).rows;
     expect(invoices).toEqual([{ total_cents: 200 }]);
   });
+
+  it.each(['provision', 'cleanup', 'after-terminate'])(
+    'releases a proven failed launch during %s without charging or redundant termination',
+    async (stage) => {
+      const { vm, bidId, requestId } = await awardedVm();
+      const environment: WickEnvironment = {
+        ...vm.create_input,
+        id: 'failed-cleaned-environment',
+        status: stage === 'after-terminate' ? 'provisioning' : 'failed',
+        expiresAt: new Date(Date.now() + 900000).toISOString(),
+        createdAt: new Date().toISOString(),
+        terminatedAt: new Date().toISOString(),
+        launch: { state: 'failed', cleanup: 'complete' },
+      };
+      const { lifecycle, wick, state } = lifecycleContext(environment);
+      wick.mode = 'real';
+      await pool.query(
+        'UPDATE broker_vms SET catalog_snapshot=catalog_snapshot || \'{"sourceMode":"real"}\'::jsonb WHERE id=$1',
+        [vm.id],
+      );
+      if (stage === 'provision') await provisionVm(lifecycle, vm.id);
+      else {
+        await pool.query('UPDATE broker_vms SET environment_id=$2,poll_attempts=1 WHERE id=$1', [
+          vm.id,
+          environment.id,
+        ]);
+        vi.mocked(wick.terminate).mockImplementation(async () => {
+          state.environment.status = 'failed';
+        });
+        await cleanupVm(lifecycle, vm.id);
+      }
+      const stored = (
+        await pool.query(
+          'SELECT status,cleanup_confirmed_at,failure_reason FROM broker_vms WHERE id=$1',
+          [vm.id],
+        )
+      ).rows[0];
+      expect(stored.status).toBe('failed');
+      expect(stored.cleanup_confirmed_at).not.toBeNull();
+      expect(stored.failure_reason).toMatch(/provisioning failure/);
+      expect(
+        (await pool.query('SELECT released_at FROM broker_holds WHERE bid_id=$1', [bidId])).rows[0]
+          .released_at,
+      ).not.toBeNull();
+      expect(
+        (await pool.query('SELECT status FROM broker_requests WHERE id=$1', [requestId])).rows[0]
+          .status,
+      ).toBe('failed');
+      expect(
+        (await pool.query('SELECT count(*)::int AS n FROM broker_invoices WHERE vm_id=$1', [vm.id]))
+          .rows[0].n,
+      ).toBe(0);
+      expect(wick.terminate).toHaveBeenCalledTimes(stage === 'after-terminate' ? 1 : 0);
+    },
+  );
+
+  it.each([
+    'missing-launch',
+    'pending-cleanup',
+    'missing-timestamp',
+    'invalid-timestamp',
+    'future-timestamp',
+    'wrong-launch-state',
+    'wrong-owner',
+    'disk',
+  ])('retains the hold for a failed launch with %s', async (missing) => {
+    const { vm, bidId } = await awardedVm(missing === 'disk');
+    const environment: WickEnvironment = {
+      ...vm.create_input,
+      id: 'unproven-failed-environment',
+      status: 'failed',
+      expiresAt: new Date(Date.now() + 900000).toISOString(),
+      createdAt: new Date().toISOString(),
+      terminatedAt: new Date().toISOString(),
+      launch: { state: 'failed', cleanup: 'complete' },
+    };
+    if (missing === 'missing-launch') delete environment.launch;
+    if (missing === 'pending-cleanup') environment.launch!.cleanup = 'pending';
+    if (missing === 'missing-timestamp') delete environment.terminatedAt;
+    if (missing === 'invalid-timestamp') environment.terminatedAt = 'invalid';
+    if (missing === 'future-timestamp')
+      environment.terminatedAt = new Date(Date.now() + 3600000).toISOString();
+    if (missing === 'wrong-launch-state') environment.launch!.state = 'ready';
+    if (missing === 'wrong-owner') environment.groupId = 'other-group';
+    const { lifecycle, wick } = lifecycleContext(environment);
+    wick.mode = 'real';
+    await pool.query(
+      'UPDATE broker_vms SET catalog_snapshot=catalog_snapshot || \'{"sourceMode":"real"}\'::jsonb,environment_id=$2,poll_attempts=1 WHERE id=$1',
+      [vm.id, environment.id],
+    );
+    if (missing === 'disk') {
+      await pool.query("UPDATE broker_disks SET source_mode='real' WHERE id=$1", [vm.disk_id]);
+    }
+    await cleanupVm(lifecycle, vm.id);
+    expect(
+      (await pool.query('SELECT cleanup_confirmed_at FROM broker_vms WHERE id=$1', [vm.id])).rows[0]
+        .cleanup_confirmed_at,
+    ).toBeNull();
+    expect(
+      (await pool.query('SELECT released_at FROM broker_holds WHERE bid_id=$1', [bidId])).rows[0]
+        .released_at,
+    ).toBeNull();
+    expect((await pool.query('SELECT count(*)::int AS n FROM broker_invoices')).rows[0].n).toBe(0);
+    if (missing === 'wrong-owner' || missing === 'disk')
+      expect(wick.terminate).not.toHaveBeenCalled();
+  });
+
+  it('preserves the provisioning failure through owner cleanup and clears temporary polling text', async () => {
+    const { vm, buyerId, requestId } = await awardedVm();
+    const { lifecycle, state } = lifecycleContext({
+      id: 'failed-reason',
+      status: 'provisioning',
+      expiresAt: new Date(Date.now() + 900000).toISOString(),
+    });
+    await provisionVm(lifecycle, vm.id);
+    state.environment.status = 'failed';
+    await provisionVm(lifecycle, vm.id);
+    const reason = 'Wick confirmed provisioning failure; no charge.';
+    expect(
+      (await pool.query('SELECT failure_reason FROM broker_vms WHERE id=$1', [vm.id])).rows[0]
+        .failure_reason,
+    ).toBe(reason);
+    await terminateVm(lifecycle, buyerId, vm.id);
+    expect(
+      (
+        await pool.query('SELECT status,failure_reason FROM broker_requests WHERE id=$1', [
+          requestId,
+        ])
+      ).rows[0],
+    ).toEqual({ status: 'failed', failure_reason: reason });
+    await cleanupVm(lifecycle, vm.id);
+    state.environment.status = 'terminated';
+    await cleanupVm(lifecycle, vm.id);
+    expect(
+      (await pool.query('SELECT failure_reason FROM broker_vms WHERE id=$1', [vm.id])).rows[0]
+        .failure_reason,
+    ).toBe(reason);
+  });
+
+  it.each(['attached', 'cleanup-pending', 'detached'])(
+    'checks native disk detachment before releasing failed-cleaned VM capacity: %s',
+    async (diskState) => {
+      const { vm, bidId } = await awardedVm(true);
+      const environment: WickEnvironment = {
+        ...vm.create_input,
+        id: 'failed-disk-environment',
+        status: 'failed',
+        expiresAt: new Date(Date.now() + 900000).toISOString(),
+        createdAt: new Date().toISOString(),
+        terminatedAt: new Date().toISOString(),
+        launch: { state: 'failed', cleanup: 'complete' },
+      };
+      const { lifecycle, wick } = lifecycleContext(environment);
+      wick.mode = 'real';
+      const unsupported = async () => {
+        throw new Error('Only drive observation is allowed in this cleanup test.');
+      };
+      wick.drives = {
+        create: unsupported,
+        rename: unsupported,
+        delete: unsupported,
+        readFile: unsupported,
+        listFiles: unsupported,
+        get: vi.fn<WickDrives['get']>(async () => ({
+          drive: {
+            id: vm.create_input.workspaceDrive.driveId,
+            organizationId: 'test-org',
+            groupId: 'test-group',
+            name: 'Guard test',
+            visibility: 'private',
+            attachmentMode: 'shared',
+            status: 'ready',
+            initialized: false,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            cleanupPending: diskState === 'cleanup-pending',
+            attachments:
+              diskState === 'attached'
+                ? [{ environmentId: environment.id, generation: 'one', accessMode: 'mount' }]
+                : [],
+          },
+          operation: { id: 'disk-operation', status: 'succeeded' },
+        })),
+      };
+      await pool.query("UPDATE broker_disks SET source_mode='real' WHERE id=$1", [vm.disk_id]);
+      await pool.query(
+        'UPDATE broker_vms SET catalog_snapshot=catalog_snapshot || \'{"sourceMode":"real"}\'::jsonb,environment_id=$2,poll_attempts=1 WHERE id=$1',
+        [vm.id, environment.id],
+      );
+      await cleanupVm(lifecycle, vm.id);
+      const cleaned = diskState === 'detached';
+      expect(
+        Boolean(
+          (await pool.query('SELECT cleanup_confirmed_at FROM broker_vms WHERE id=$1', [vm.id]))
+            .rows[0].cleanup_confirmed_at,
+        ),
+      ).toBe(cleaned);
+      expect(
+        Boolean(
+          (await pool.query('SELECT released_at FROM broker_holds WHERE bid_id=$1', [bidId]))
+            .rows[0].released_at,
+        ),
+      ).toBe(cleaned);
+      expect(
+        (await pool.query('SELECT status FROM broker_disk_attachments WHERE vm_id=$1', [vm.id]))
+          .rows[0].status,
+      ).toBe(cleaned ? 'detached' : 'reserved');
+      expect((await pool.query('SELECT count(*)::int AS n FROM broker_invoices')).rows[0].n).toBe(
+        0,
+      );
+      expect(wick.terminate).not.toHaveBeenCalled();
+    },
+  );
 
   it('owner cancellation racing a create response prevents a charge and remains cancelled', async () => {
     const { vm, buyerId, bidId, requestId } = await awardedVm();

@@ -45,6 +45,11 @@ export interface InferenceRoute {
   qualified: boolean;
   reason: string;
   minimumInputReservation: number;
+  /** Smallest standalone pack that can reserve one nonempty user message. */
+  minimumPackInputTokens?: number;
+  minimumOutputTokens?: number;
+  inputAccounting?: 'utf8-bytes-v1';
+  maximumInputReservation?: number;
   maximumOutputTokens: number;
 }
 export interface InferenceCatalog {
@@ -174,6 +179,37 @@ export interface TokenOrderDetail {
 export interface InferenceMessage {
   role: 'system' | 'user' | 'assistant';
   content: string;
+}
+/** The reviewed text envelope, shared by admission and the purchase estimator.
+ * This is a reservation upper bound, not a tokenizer or a usage forecast. */
+export function utf8InputReservation(
+  messages: readonly InferenceMessage[],
+  maximumInputReservation: number,
+): number {
+  const encoder = new TextEncoder();
+  return Math.min(
+    maximumInputReservation,
+    4096 +
+      messages.reduce((n, message) => {
+        // Muse's system template expands these directive spellings. Bound the
+        // rendered text while dispatch continues to send the original content.
+        const rendered =
+          message.role === 'system'
+            ? message.content.replace(
+                /Reasoning effort|Reasoning Effort|reasoning effort|REASONING EFFORT/g,
+                (directive) => `${directive.slice(0, -6)}strength`,
+              )
+            : message.content;
+        // Compatibility decomposition can expand Unicode substantially.
+        const bytes = Math.max(
+          encoder.encode(rendered).length,
+          ...(['NFC', 'NFD', 'NFKC', 'NFKD'] as const).map(
+            (form) => encoder.encode(rendered.normalize(form)).length,
+          ),
+        );
+        return n + 32 + bytes;
+      }, 0),
+  );
 }
 export interface InferenceCompletionInput {
   model: string;

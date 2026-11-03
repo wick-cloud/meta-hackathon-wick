@@ -30,6 +30,9 @@ async function fixture(
     purchaseFailureOnce?: boolean;
     configured?: boolean;
     minimumInputReservation?: number;
+    minimumPackInputTokens?: number;
+    minimumOutputTokens?: number;
+    inputAccounting?: 'utf8-bytes-v1';
     walletCents?: number;
     walletFailure?: boolean;
     agentInstant?: boolean;
@@ -80,6 +83,10 @@ async function fixture(
           ? 'Exact tokenizer contract is not qualified.'
           : 'Fixture route; no real model calls.',
       minimumInputReservation: options.minimumInputReservation ?? 1000,
+      minimumPackInputTokens: options.minimumPackInputTokens,
+      minimumOutputTokens: options.minimumOutputTokens ?? 1,
+      inputAccounting: options.inputAccounting,
+      maximumInputReservation: options.inputAccounting ? 1048576 : undefined,
       maximumOutputTokens: 4096,
     })),
   };
@@ -645,6 +652,134 @@ test('packs default above the real input reserve and smaller quantities cannot s
   await input.fill('2000000');
   await page.getByRole('button', { name: 'Get instant prices' }).click();
   await expect(page.getByRole('radio', { name: /Modal/ })).toBeVisible();
+});
+
+test('qualified output minimum blocks auctions and quotes with a useful explanation', async ({
+  page,
+}) => {
+  const f = await fixture(page, { minimumOutputTokens: 256 });
+  await page.goto('/token-orders/new');
+  const output = page.getByLabel('Output tokens', { exact: true });
+  await expect(output).toHaveAttribute('min', '256');
+  await output.fill('1');
+  await page.getByRole('checkbox', { name: /I understand/ }).check();
+  await expect(page.getByRole('button', { name: 'Start 30-second auction' })).toBeDisabled();
+  await expect(page.getByRole('status')).toContainText('256 output tokens');
+  await page.getByRole('radio', { name: /Buy at an instant price/ }).check();
+  await expect(page.getByRole('button', { name: 'Get instant prices' })).toBeDisabled();
+  expect(f.writes).toHaveLength(0);
+  await output.fill('256');
+  await expect(page.getByRole('button', { name: 'Get instant prices' })).toBeEnabled();
+});
+
+test('wallet packs reject framing-only input and explain the one-byte minimum', async ({
+  page,
+}) => {
+  const f = await fixture(page, {
+    minimumInputReservation: 4128,
+    minimumPackInputTokens: 4129,
+    minimumOutputTokens: 256,
+    inputAccounting: 'utf8-bytes-v1',
+  });
+  await page.goto('/token-orders/new');
+  const input = page.getByLabel('Input tokens', { exact: true });
+  await expect(input).toHaveAttribute('min', '4129');
+  await input.fill('4128');
+  await page.getByLabel('Output tokens', { exact: true }).fill('256');
+  await page.getByRole('checkbox', { name: /I understand/ }).check();
+  await expect(page.getByRole('button', { name: 'Start 30-second auction' })).toBeDisabled();
+  await expect(
+    page.getByText(/smallest input pack only covers one message with one byte/),
+  ).toBeVisible();
+  await page.getByRole('radio', { name: /Buy at an instant price/ }).check();
+  await expect(page.getByRole('button', { name: 'Get instant prices' })).toBeDisabled();
+  expect(f.writes).toHaveLength(0);
+  await input.fill('4129');
+  await expect(page.getByRole('button', { name: 'Get instant prices' })).toBeEnabled();
+  await page.getByLabel('Sample prompt · optional single user message').fill('Reply with only OK.');
+  await expect(page.getByText(/An input allowance of 4,147 tokens/)).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Get instant prices' })).toBeDisabled();
+  await page.getByRole('button', { name: 'Use this input allowance' }).click();
+  await expect(input).toHaveValue('4147');
+  expect(f.writes).toHaveLength(0);
+  await page.getByRole('button', { name: 'Get instant prices' }).click();
+  expect(f.writes.find((write) => write.path === '/api/inference/quotes')!.body).toMatchObject({
+    inputTokens: 4147,
+  });
+  expect(JSON.stringify(f.writes)).not.toContain('Reply with only OK.');
+  await page.getByRole('checkbox', { name: /I understand/ }).check();
+  await page
+    .getByLabel('Sample prompt · optional single user message')
+    .fill('A longer sample message for sizing.');
+  await expect(page.getByRole('radio', { name: /Modal/ })).toHaveCount(0);
+  await expect(page.getByRole('checkbox', { name: /I understand/ })).not.toBeChecked();
+});
+
+test('fixture routes with a one-token output minimum still accept one output token', async ({
+  page,
+}) => {
+  await fixture(page);
+  await page.goto('/token-orders/new');
+  await page.getByLabel('Output tokens', { exact: true }).fill('1');
+  await page.getByRole('checkbox', { name: /I understand/ }).check();
+  await expect(page.getByRole('button', { name: 'Start 30-second auction' })).toBeEnabled();
+});
+
+test('agent top-ups can use available quota from the same provider', async ({ page }) => {
+  const f = await fixture(page, {
+    minimumInputReservation: 4128,
+    minimumPackInputTokens: 4129,
+    minimumOutputTokens: 256,
+  });
+  f.packs.push({
+    id: packId,
+    orderId,
+    grantId,
+    provider: 'modal',
+    mode: 'fixture',
+    modelId,
+    status: 'active',
+    inputTokens: 4128,
+    outputTokens: 256,
+    availableInputTokens: 4127,
+    availableOutputTokens: 255,
+    heldInputTokens: 0,
+    heldOutputTokens: 0,
+    consumedInputTokens: 1,
+    consumedOutputTokens: 1,
+    retiredInputTokens: 0,
+    retiredOutputTokens: 0,
+    priceCents: 1,
+    refundCents: 0,
+    expiresAt: future(),
+    createdAt: new Date().toISOString(),
+    retirementReason: null,
+    revenueShare: revenueShare(1),
+  });
+  await page.goto(`/token-orders/new?grantId=${grantId}`);
+  await expect(page.getByLabel('Input tokens', { exact: true })).toHaveAttribute('min', '1');
+  await page.getByLabel('Input tokens', { exact: true }).fill('1');
+  await page.getByLabel('Output tokens', { exact: true }).fill('1');
+  await page.getByRole('checkbox', { name: /I understand/ }).check();
+  await expect(page.getByRole('button', { name: 'Start 30-second auction' })).toBeEnabled();
+  await page.getByRole('radio', { name: /Buy at an instant price/ }).check();
+  await expect(page.getByRole('button', { name: 'Get instant prices' })).toBeEnabled();
+  await page.getByRole('combobox', { name: 'Pay with', exact: true }).selectOption('');
+  await expect(page.getByRole('button', { name: 'Get instant prices' })).toBeDisabled();
+  f.packs[0]!.availableOutputTokens = 0;
+  f.packs.push({
+    ...f.packs[0]!,
+    id: '77777777-7777-4777-8777-777777777777',
+    provider: 'baseten',
+    availableInputTokens: 0,
+    availableOutputTokens: 255,
+  });
+  await page.goto(`/token-orders/new?grantId=${grantId}`);
+  await page.getByLabel('Input tokens', { exact: true }).fill('1');
+  await page.getByLabel('Output tokens', { exact: true }).fill('1');
+  await page.getByRole('checkbox', { name: /I understand/ }).check();
+  await expect(page.getByRole('button', { name: 'Start 30-second auction' })).toBeDisabled();
+  await expect(page.getByRole('status')).toContainText('same available provider route');
 });
 
 test('instant quotes are invalidated on quantity edits and a purchase reveals separate prepaid quotas', async ({

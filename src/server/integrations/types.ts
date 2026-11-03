@@ -28,6 +28,11 @@ export interface WickEnvironment {
   expiresAt: string | null;
   hardEndAt?: string;
   createdAt?: string;
+  terminatedAt?: string;
+  launch?: {
+    state: 'failed' | 'ready' | 'routing' | 'starting' | 'checking' | 'cancelled';
+    cleanup: 'pending' | 'not_needed' | 'awaiting_provider' | 'complete';
+  };
   name?: string;
   organizationId?: string;
   groupId?: string;

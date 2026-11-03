@@ -20,6 +20,7 @@ import type { Row } from '../marketplace/data.js';
 import { operationFingerprint, withOperation } from '../operations.js';
 import {
   minimumInputReservation,
+  minimumPackInputTokens,
   MIN_TASK_OUTPUT_RESERVATION,
   type RuntimeRoute,
 } from './runtime.js';
@@ -194,6 +195,13 @@ function topupCompatible(
   requiredInput = minimumInputReservation(native),
   requiredOutput = native.minimumOutputTokens ?? 1,
 ) {
+  // A wallet key can spend only this purchase. Agent grants keep their existing
+  // compatible-pool top-up semantics, including historical framing-sized packs.
+  if (grant.funding_source === 'wallet')
+    return (
+      input >= Math.max(requiredInput, minimumPackInputTokens(native)) &&
+      output >= Math.max(requiredOutput, native.minimumOutputTokens ?? 1)
+    );
   const group = tokenAllowanceGroups(
     packs,
     [
