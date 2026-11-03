@@ -556,7 +556,11 @@ test('counteroffer comparison makes every changed resource visible before accept
   expect(writes).toHaveLength(0);
 });
 
-test('Orders mobile layout keeps overflow inside the table', async ({ page }) => {
+test('Orders mobile layout keeps overflow inside the table', async ({ page }, testInfo) => {
+  const tokenTitle =
+      'Production language-model token capacity for a long-running multilingual document indexing service',
+    tokenModel = 'provider/very-long-model-family-for-multilingual-document-indexing-2026-11',
+    tokenUrl = '/token-orders/22222222-2222-4222-8222-222222222222';
   await fixture(page, 'buyer', (path) =>
     path === '/api/orders'
       ? {
@@ -607,31 +611,115 @@ test('Orders mobile layout keeps overflow inside the table', async ({ page }) =>
               detailUrl: `/requests/${id}`,
               vmUrl: '/vms/mobile-fixture-vm',
             },
+            {
+              id: '22222222-2222-4222-8222-222222222222',
+              key: 'token:22222222-2222-4222-8222-222222222222',
+              kind: 'token',
+              tokenMode: 'instant',
+              reference: 'TOK-22222222',
+              title: tokenTitle,
+              modelId: tokenModel,
+              inputTokens: 23456789,
+              outputTokens: 1234567,
+              status: 'completed',
+              createdAt: iso(-180000),
+              closesAt: null,
+              expiresAt: iso(86400000),
+              bidCount: 0,
+              amount: { label: 'accepted', amountCents: 12345.67 },
+              detailUrl: tokenUrl,
+            },
           ],
         }
       : undefined,
   );
-  await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto('/orders');
-  await expect(page.getByRole('heading', { name: 'Orders' })).toBeVisible();
-  await expect(page.locator('.market-table tbody tr')).toHaveCount(2);
-  await expect(page.getByRole('columnheader', { name: 'Open', exact: true })).toHaveCount(1);
-  const wrapper = page.locator('.market-table-scroll');
-  const widths = await wrapper.evaluate((element) => ({
-    visible: element.clientWidth,
-    scroll: element.scrollWidth,
-    table: element.querySelector('table')!.getBoundingClientRect().width,
-  }));
-  expect(widths.table).toBeGreaterThan(widths.visible);
-  expect(widths.scroll).toBeGreaterThan(widths.visible);
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
-    true,
-  );
-  await wrapper.evaluate((element) => {
-    element.scrollLeft = element.scrollWidth;
-  });
-  expect(await wrapper.evaluate((element) => element.scrollLeft)).toBeGreaterThan(0);
-  expect(await page.evaluate(() => window.scrollX)).toBe(0);
+  for (const width of [1440, 1280, 390]) {
+    await test.step(`${width}px Orders layout`, async () => {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto('/orders');
+      await expect(page.getByRole('heading', { name: 'Orders' })).toBeVisible();
+      await expect(page.locator('.market-table tbody tr')).toHaveCount(3);
+      await expect(page.getByRole('columnheader', { name: 'Open', exact: true })).toHaveCount(1);
+      await page.evaluate(() => document.fonts.ready);
+
+      const title = page.getByRole('link', { name: tokenTitle, exact: true });
+      await expect(title).toHaveAttribute('href', tokenUrl);
+      await expect(title).toHaveAttribute('title', tokenTitle);
+      const tokenRow = page.getByRole('row').filter({ has: title });
+      await expect(tokenRow.locator('.orders-model')).toHaveAttribute('title', tokenModel);
+      const quantities = tokenRow.getByText('23,456,789 in / 1,234,567 out', { exact: true });
+      const price = tokenRow.locator('.orders-amount-cell > strong');
+      await expect(quantities).toBeVisible();
+      await expect(price).toHaveText('$123.4567');
+      for (const value of [quantities, price]) {
+        const geometry = await value.evaluate((element) => {
+          const text = document.createRange();
+          text.selectNodeContents(element);
+          const content = text.getBoundingClientRect();
+          const box = element.getBoundingClientRect();
+          const cell = element.closest('td')!;
+          const cellBox = cell.getBoundingClientRect();
+          const cellStyle = getComputedStyle(cell);
+          return {
+            textWidth: content.width,
+            availableWidth: box.width,
+            left: content.left,
+            right: content.right,
+            cellLeft: cellBox.left + parseFloat(cellStyle.paddingLeft),
+            cellRight: cellBox.right - parseFloat(cellStyle.paddingRight),
+          };
+        });
+        expect(
+          geometry.textWidth,
+          `${width}px: numerical text fits its element`,
+        ).toBeLessThanOrEqual(geometry.availableWidth + 1);
+        expect(
+          geometry.left,
+          `${width}px: numerical text stays inside its cell`,
+        ).toBeGreaterThanOrEqual(geometry.cellLeft - 1);
+        expect(
+          geometry.right,
+          `${width}px: numerical text is not clipped by the next column`,
+        ).toBeLessThanOrEqual(geometry.cellRight + 1);
+      }
+
+      const wrapper = page.locator('.market-table-scroll');
+      const widths = await wrapper.evaluate((element) => ({
+        visible: element.clientWidth,
+        scroll: element.scrollWidth,
+        table: element.querySelector('table')!.getBoundingClientRect().width,
+      }));
+      if (width === 390) {
+        expect(widths.table).toBeGreaterThan(widths.visible);
+        expect(widths.scroll).toBeGreaterThan(widths.visible);
+      }
+      expect(
+        await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+        `${width}px: horizontal overflow stays inside the table`,
+      ).toBe(true);
+      if (process.env.TABLE_REVIEW === '1') {
+        await page.locator('.market-orders').screenshot({
+          path: testInfo.outputPath(`orders-panel-${width}.png`),
+        });
+      }
+      await wrapper.scrollIntoViewIfNeeded();
+      await wrapper.evaluate((element) => {
+        element.scrollLeft = element.scrollWidth;
+      });
+      if (widths.scroll > widths.visible) {
+        expect(await wrapper.evaluate((element) => element.scrollLeft)).toBeGreaterThan(0);
+      }
+      for (const action of await page.locator('.orders-actions-cell a').all()) {
+        await expect(action).toBeInViewport({ ratio: 1 });
+        await action.focus();
+        await expect(action).toBeFocused();
+      }
+      expect(await page.evaluate(() => window.scrollX)).toBe(0);
+      expect(
+        await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+      ).toBe(true);
+    });
+  }
 });
 
 test('Orders distinguishes the maximum reservation ceiling from actual credit held', async ({

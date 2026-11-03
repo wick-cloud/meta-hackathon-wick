@@ -149,7 +149,20 @@ export function Orders({ search }: { search: string }) {
         <p>Track VM auctions and AI token purchases.</p>
       </div>
       <TablePanel className="market-orders" label="Orders">
-        <TableTabs>
+        <TableTabs
+          actions={
+            <button
+              className="icon-button"
+              aria-label="Refresh"
+              title="Refresh orders"
+              disabled={list.refreshing}
+              aria-busy={list.refreshing}
+              onClick={list.reload}
+            >
+              <RefreshCw size={16} className={list.refreshing ? 'spin' : undefined} />
+            </button>
+          }
+        >
           <RecordViews
             label="Order views"
             value={status === 'history' ? 'archive' : status === 'attention' ? null : status}
@@ -164,59 +177,41 @@ export function Orders({ search }: { search: string }) {
         )}
         <TableToolbar label="Filter orders">
           <div className="orders-filter-fields">
-            <label className="field">
-              <span>Type</span>
-              <select
-                aria-label="Order type"
-                value={kind}
-                onChange={(e) => filter('kind', e.target.value)}
-              >
-                <option value="all">All types</option>
-                <option value="auction">VM auctions</option>
-                <option value="token">AI token packs</option>
-              </select>
-            </label>
-            <label className="field">
-              <span>Status</span>
-              <select
-                aria-label="Order status"
-                value={status}
-                onChange={(e) => filter('status', e.target.value)}
-              >
-                <option value="all">All statuses</option>
-                <option value="active">Active</option>
-                <option value="attention">Needs attention</option>
-                <option value="history">Archive</option>
-              </select>
-            </label>
-            <label className="field">
-              <span>Created</span>
-              <select
-                aria-label="Order created"
-                value={created}
-                onChange={(e) => filter('created', e.target.value)}
-              >
-                <option value="all">Any time</option>
-                <option value="24h">Last 24 hours</option>
-                <option value="7d">Last 7 days</option>
-                <option value="30d">Last 30 days</option>
-              </select>
-            </label>
+            <select
+              aria-label="Order type"
+              value={kind}
+              onChange={(e) => filter('kind', e.target.value)}
+            >
+              <option value="all">All types</option>
+              <option value="auction">VM auctions</option>
+              <option value="token">AI token packs</option>
+            </select>
+            <select
+              aria-label="Order status"
+              value={status}
+              onChange={(e) => filter('status', e.target.value)}
+            >
+              <option value="all">All statuses</option>
+              <option value="active">Active</option>
+              <option value="attention">Needs attention</option>
+              <option value="history">Archive</option>
+            </select>
+            <select
+              aria-label="Order created"
+              value={created}
+              onChange={(e) => filter('created', e.target.value)}
+            >
+              <option value="all">Any time</option>
+              <option value="24h">Last 24 hours</option>
+              <option value="7d">Last 7 days</option>
+              <option value="30d">Last 30 days</option>
+            </select>
             {filtered && (
               <button className="text-button orders-clear" onClick={() => navigate('/orders')}>
                 Clear filters
               </button>
             )}
           </div>
-          <button
-            className="button secondary small orders-refresh"
-            disabled={list.refreshing}
-            aria-busy={list.refreshing}
-            onClick={list.reload}
-          >
-            <RefreshCw size={14} className={list.refreshing ? 'spin' : undefined} />
-            Refresh
-          </button>
         </TableToolbar>
         {list.error && list.data && (
           <div className="orders-error">
@@ -231,7 +226,7 @@ export function Orders({ search }: { search: string }) {
           <>
             <TableViewport
               label="Orders"
-              minWidth={1040}
+              minWidth={1120}
               className="market-table-scroll orders-table-scroll"
               tabIndex={0}
               role="region"
@@ -249,6 +244,7 @@ export function Orders({ search }: { search: string }) {
                       Price / credit · USD
                     </th>
                     <th scope="col">Timing</th>
+                    <th scope="col">Created</th>
                     <th className="actions-cell" scope="col">
                       <span className="sr-only">Open</span>
                     </th>
@@ -280,12 +276,12 @@ export function Orders({ search }: { search: string }) {
                           subtitle={
                             <>
                               <div className="orders-reference">
-                                <span>
+                                <span className="orders-kind">
                                   {item.kind === 'agreement'
                                     ? 'Historical capacity booking'
                                     : item.kind === 'token'
                                       ? `AI tokens · ${item.tokenMode === 'instant' ? 'Instant' : 'Auction'}`
-                                      : 'Instant auction'}
+                                      : 'VM auction'}
                                 </span>
                                 {item.source?.kind === 'api_key' && (
                                   <span
@@ -299,18 +295,16 @@ export function Orders({ search }: { search: string }) {
                                 </code>
                               </div>
                               {item.kind === 'token' && (
-                                <div className="orders-created">
-                                  {item.modelId} · {(item.inputTokens ?? 0).toLocaleString()} input
-                                  / {(item.outputTokens ?? 0).toLocaleString()} output
+                                <div className="orders-token-spec">
+                                  <span className="orders-model" title={item.modelId}>
+                                    {item.modelId}
+                                  </span>
+                                  <span>
+                                    {(item.inputTokens ?? 0).toLocaleString()} in /{' '}
+                                    {(item.outputTokens ?? 0).toLocaleString()} out
+                                  </span>
                                 </div>
                               )}
-                              <time
-                                className="orders-created"
-                                dateTime={item.createdAt}
-                                title={dateTime(item.createdAt)}
-                              >
-                                Created {shortDay(item.createdAt)}
-                              </time>
                             </>
                           }
                         />
@@ -379,15 +373,15 @@ export function Orders({ search }: { search: string }) {
                         {liveAuction(item) ? (
                           <>
                             <span className="orders-time-label">Auction closes in</span>
-                            <strong className="market-live orders-countdown">
+                            <strong
+                              className="market-live orders-countdown"
+                              title={item.closesAt ? dateTime(item.closesAt) : undefined}
+                            >
                               <Clock3 size={13} />
                               {item.closesAt
                                 ? remaining(item.closesAt, now + serverOffset)
                                 : 'Closing'}
                             </strong>
-                            {item.closesAt && (
-                              <time dateTime={item.closesAt}>{shortTime(item.closesAt)}</time>
-                            )}
                           </>
                         ) : item.nextWindow ? (
                           <>
@@ -402,7 +396,6 @@ export function Orders({ search }: { search: string }) {
                             >
                               {shortTime(item.nextWindow.startsAt, item.nextWindow.timeZone)}
                             </time>
-                            <span className="orders-time-note">{item.nextWindow.timeZone}</span>
                           </>
                         ) : (
                           <>
@@ -424,9 +417,14 @@ export function Orders({ search }: { search: string }) {
                           </>
                         )}
                       </td>
+                      <td>
+                        <time dateTime={item.createdAt} title={dateTime(item.createdAt)}>
+                          {shortDay(item.createdAt)}
+                        </time>
+                      </td>
                       <td className="orders-actions-cell actions-cell">
                         <TableActions>
-                          <Link href={item.detailUrl} className="button secondary small">
+                          <Link href={item.detailUrl} className="table-open-link">
                             View
                             <ArrowRight size={13} />
                           </Link>
