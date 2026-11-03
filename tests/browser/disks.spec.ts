@@ -149,6 +149,8 @@ async function fixture(
     }
     if (path === '/api/disks/' + diskId + '/workspaces')
       return route.fulfill({ json: { items: workspaces } });
+    if (path === '/api/disks/' + diskId + '/files')
+      return route.fulfill({ json: { prefix: '', entries: [] } });
     if (path === '/api/disks/' + diskId)
       return route.fulfill({
         json: {

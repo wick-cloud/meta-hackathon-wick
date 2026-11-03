@@ -42,3 +42,21 @@ export interface DiskOptions {
   mode: 'fixture' | 'real';
   eligibleCatalogIds: string[];
 }
+export interface DiskFileEntry {
+  key: string;
+  name: string;
+  kind: 'directory' | 'file';
+  size?: number;
+}
+export interface DiskFilePage {
+  prefix: string;
+  entries: DiskFileEntry[];
+  nextContinuationToken?: string;
+}
+export interface DiskFilePreview {
+  key: string;
+  size: number;
+  content: string | null;
+  truncated: boolean;
+  binary: boolean;
+}

@@ -83,4 +83,30 @@ describe('Broker public OpenAPI contract', () => {
       await app.close();
     }
   });
+  it('documents read-scoped disk browsing with folder cursors and a required relative file key', () => {
+    const document = brokerOpenApi();
+    const listing = document.paths['/api/disks/{id}/files'].get as Record<string, any>;
+    const preview = document.paths['/api/disks/{id}/file'].get as Record<string, any>;
+    expect(listing['x-broker-scope']).toBe('disks:read');
+    expect(preview['x-broker-scope']).toBe('disks:read');
+    expect(listing.parameters.map((p: any) => p.name)).toEqual([
+      'id',
+      'prefix',
+      'continuationToken',
+    ]);
+    expect(preview.parameters).toContainEqual(
+      expect.objectContaining({
+        name: 'key',
+        in: 'query',
+        required: true,
+      }),
+    );
+    expect(listing.responses['200'].content['application/json'].schema.$ref).toBe(
+      '#/components/schemas/DiskFilePage',
+    );
+    expect(preview.responses['200'].content['application/json'].schema.$ref).toBe(
+      '#/components/schemas/DiskFilePreview',
+    );
+    expect(preview.responses['413']).toBeDefined();
+  });
 });

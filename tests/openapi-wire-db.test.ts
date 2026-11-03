@@ -303,6 +303,37 @@ describe.skipIf(!databaseUrl)(
       await reconcileDisk(ctx, disk.id);
       expect((await buyer.disks.get(disk.id)).disk.status).toBe('ready');
       await buyer.disks.workspaces(disk.id, { limit: 10 });
+      const nativeDisk = (
+        await pool.query('SELECT upstream_id FROM broker_disks WHERE id=$1', [disk.id])
+      ).rows[0];
+      await pool.query(
+        'INSERT INTO broker_fixture_drive_files(drive_id,key,content_base64) VALUES($1,$2,$3)',
+        [
+          nativeDisk.upstream_id,
+          'notes/receipt.txt',
+          Buffer.from('Saved on disk\n').toString('base64'),
+        ],
+      );
+      expect(
+        await buyer.request('GET', `/api/disks/${disk.id}/files`, { query: { prefix: '' } }),
+      ).toEqual({
+        prefix: '',
+        entries: [{ key: 'notes/', name: 'notes', kind: 'directory' }],
+      });
+      expect(
+        await buyer.request('GET', `/api/disks/${disk.id}/files`, { query: { prefix: 'notes/' } }),
+      ).toMatchObject({ entries: [{ key: 'notes/receipt.txt', kind: 'file', size: 14 }] });
+      expect(
+        await buyer.request('GET', `/api/disks/${disk.id}/file`, {
+          query: { key: 'notes/receipt.txt' },
+        }),
+      ).toEqual({
+        key: 'notes/receipt.txt',
+        size: 14,
+        content: 'Saved on disk\n',
+        truncated: false,
+        binary: false,
+      });
       await buyer.disks.rename(
         disk.id,
         { name: 'Renamed persistent project' },

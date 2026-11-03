@@ -75,6 +75,13 @@ workspaces and attached provider VMs, rename it, or delete it after all uses hav
 resolved. All disk operations are scoped to the signed-in buyer, including file
 reads for planning. Sharing refers to that buyer's VMs, not cross-customer access.
 
+The disk detail page includes a read-only **Files** browser rooted at `/workspace`.
+Open folders, follow the breadcrumbs, refresh the current folder, and preview text
+files without starting a VM. Browsing remains available after attached VMs stop.
+Text previews show at most 64 KiB; binary files show metadata, and files larger
+than Wick's 1 MiB read limit cannot be previewed. A new disk becomes browsable after
+its first VM use initializes storage. File contents are displayed as plain text.
+
 Choose a disk while reviewing a new VM rental. Only qualified mount-capable
 configurations remain eligible. Broker requires the exact drive ID, shared
 attachment, generation and `/workspace` native mount before readiness and the

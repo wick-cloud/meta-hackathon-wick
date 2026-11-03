@@ -27,6 +27,29 @@ export function brokerOpenApi() {
         },
         { name: 'cursor', in: 'query', schema: { type: 'string' } },
       );
+    if (route.path === '/api/disks/:id/files')
+      parameters.push(
+        {
+          name: 'prefix',
+          in: 'query',
+          description: 'Relative folder ending in /; omit to browse the /workspace root.',
+          schema: { type: 'string', maxLength: 1024, default: '' },
+        },
+        {
+          name: 'continuationToken',
+          in: 'query',
+          description: 'Opaque token from the preceding page for the same folder.',
+          schema: { type: 'string', maxLength: 4096 },
+        },
+      );
+    if (route.path === '/api/disks/:id/file')
+      parameters.push({
+        name: 'key',
+        in: 'query',
+        required: true,
+        description: 'Exact relative file key from the disk listing, beneath /workspace.',
+        schema: { type: 'string', minLength: 1, maxLength: 1024 },
+      });
     if (route.path === '/api/orders')
       for (const [name, values] of Object.entries({
         kind: ['all', 'auction', 'token'],
@@ -57,7 +80,7 @@ export function brokerOpenApi() {
       });
     const terminal = route.path.endsWith('/terminal');
     const errors = Object.fromEntries(
-      [400, 401, 403, 404, 409, 422, 429, 500, 502, 503, 504].map((status) => [
+      [400, 401, 403, 404, 409, 413, 422, 429, 500, 502, 503, 504].map((status) => [
         status,
         {
           description:
