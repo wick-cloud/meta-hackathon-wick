@@ -18,6 +18,7 @@ import {
 import { markReady, confirmCleanup } from '../src/server/marketplace/lifecycle.js';
 import { observeVmDisk, reconcileVmDisk } from '../src/server/disks/service.js';
 import { QUEUES } from '../src/server/marketplace/db.js';
+import type { Row } from '../src/server/marketplace/data.js';
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const schema = `cross_cloud_${randomUUID().replaceAll('-', '')}`;
@@ -653,7 +654,7 @@ describe.skipIf(!databaseUrl)(
 
     it('shares one disk across providers and cleans only the terminated VM attachment', async () => {
       const diskId = await persistentDisk();
-      const vms = [];
+      const vms: { vm: Row; environment: WickEnvironment }[] = [];
       for (const provider of providers.slice(0, 2)) {
         const req = await request({ diskId });
         const bid = await submitBid(ctx, provider.actor, req.id, { totalPriceCents: 20 });
