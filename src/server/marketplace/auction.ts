@@ -5,7 +5,7 @@ import { MIN_ORDER_PRICE_CENTS } from '../../shared/money.js';
 import { randomUUID } from 'node:crypto';
 import { clientOperationKey, enforceKeyLimit, withOperation } from '../operations.js';
 import type { Pool, PoolClient } from 'pg';
-import { availableForBids } from './policy.js';
+import { automaticBidPrices, availableForBids } from './policy.js';
 import { availableForInterval, globalAvailableForInterval } from '../agreements/calendar.js';
 import {
   acceptedBidQuote,
@@ -480,8 +480,22 @@ export async function submitBid(
             )
           ).rows[0].n,
         );
-        if (availableForBids(p.total_capacity, held, policy) < 1)
+        const availableCapacity = availableForBids(p.total_capacity, held, policy);
+        if (availableCapacity < 1)
           throw new HttpError(409, 'All simulated supplier slots are already reserved.');
+        if (source === 'auto') {
+          const currentPrices = automaticBidPrices(
+            policy,
+            match.minimumPriceCents,
+            p.total_capacity,
+            availableCapacity,
+          );
+          if (![currentPrices.basePriceCents, currentPrices.discountPriceCents].includes(price))
+            throw new HttpError(
+              409,
+              'The automatic bid strategy changed before submission. Request a fresh proposal.',
+            );
+        }
         const interval = instantReservationInterval(request);
         if ((await availableForInterval(ctx, db, p.id, interval.startsAt, interval.endsAt)) < 1)
           throw new HttpError(409, 'This rental would overlap already booked capacity.');
@@ -824,6 +838,13 @@ export async function proposeBid(ctx: AppContext, actor: Actor, requestId: strin
   );
   const match = (await publishedMatches(ctx, ctx.pool, request, provider))[0]!;
   const minimumPriceCents = match.minimumPriceCents;
+  const availableCapacity = availableForBids(provider.total_capacity, held, provider.policy);
+  const prices = automaticBidPrices(
+    provider.policy,
+    minimumPriceCents,
+    provider.total_capacity,
+    availableCapacity,
+  );
   if (
     minimumPriceCents > request.max_price_cents ||
     (provider.policy.maxPriceCents !== undefined &&
@@ -848,7 +869,7 @@ export async function proposeBid(ctx: AppContext, actor: Actor, requestId: strin
   if (!Number.isFinite(remainingMs) || remainingMs < 1)
     throw new HttpError(
       409,
-      'Too little auction time remains for a Muse bid proposal. Manual bidding remains available while the auction is open.',
+      'Too little auction time remains for a safe bid proposal. Manual bidding remains available while the auction is open.',
     );
   const proposal = await ctx.muse.proposeBid({
     timeoutMs: Math.min(8000, remainingMs),
@@ -861,8 +882,11 @@ export async function proposeBid(ctx: AppContext, actor: Actor, requestId: strin
       region: match.catalog.region,
     },
     policy: { ...provider.policy, minimumPriceCents },
-    availableCapacity: availableForBids(provider.total_capacity, held, provider.policy),
-    suggestedTotalPriceCents: Math.max(minimumPriceCents, provider.policy.basePriceCents),
+    availableCapacity,
+    suggestedTotalPriceCents: prices.basePriceCents,
+    ...(prices.discountPriceCents !== undefined
+      ? { discountTotalPriceCents: prices.discountPriceCents }
+      : {}),
     catalog: [match.catalog],
   });
   if (proposal.decision === 'bid') {
@@ -872,6 +896,7 @@ export async function proposeBid(ctx: AppContext, actor: Actor, requestId: strin
     if (
       proposal.totalPriceCents! > request.max_price_cents ||
       proposal.totalPriceCents! < minimumPriceCents ||
+      ![prices.basePriceCents, prices.discountPriceCents].includes(proposal.totalPriceCents!) ||
       (provider.policy.maxPriceCents !== undefined &&
         proposal.totalPriceCents! > provider.policy.maxPriceCents)
     )

@@ -6,6 +6,7 @@ import WebSocket from 'ws';
 import { fixtureTerminal } from './terminal-fixture.js';
 import type { Pool } from 'pg';
 import type { CatalogItem } from '../../shared/types.js';
+import { PROVIDER_REGISTRY } from '../../shared/providers.js';
 import type {
   CreateEnvironmentInput,
   WickAdapter,
@@ -38,13 +39,13 @@ export class WickApiError extends Error {
 
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 const RENTAL_SECONDS = [900, 1800, 3600];
-const MANAGED_PROVIDERS = new Map([
-  ['e2b', 'E2B'],
-  ['daytona', 'Daytona'],
-  ['modal', 'Modal'],
-  ['provider-blaxel', 'Baseten (Blaxel)'],
-]);
-const MAX_MANAGED_ROUTES = 16;
+const MANAGED_PROVIDERS = new Map<string, string>(
+  PROVIDER_REGISTRY.map(({ id, name }) => [
+    id,
+    id === 'provider-blaxel' ? `${name} (Blaxel)` : name,
+  ]),
+);
+const MAX_MANAGED_ROUTES = 32;
 const ROUTE_PREVIEW_CONCURRENCY = 4;
 type JsonObject = Record<string, unknown>;
 function object(value: unknown, field: string): JsonObject {
@@ -472,11 +473,7 @@ function realAdapter(config: WickConfig): WickAdapter {
       throw new WickApiError('Wick create target is outside the configured scope', 400, true);
     if (body.providerKeyId) throw new WickApiError('BYOK pricing is unsupported', 400, true);
     if (!MANAGED_PROVIDERS.has(body.provider))
-      throw new WickApiError(
-        'Only E2B, Daytona, Modal, and Baseten (Blaxel) customer routes are supported',
-        400,
-        true,
-      );
+      throw new WickApiError('Only registered managed customer routes are supported', 400, true);
     if (body.maximumPriceMicrosPerSecond === undefined)
       throw new WickApiError('Real Wick creation requires a frozen maximum price', 400, true);
     return body;

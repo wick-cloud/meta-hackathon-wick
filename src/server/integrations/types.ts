@@ -154,6 +154,8 @@ export interface MuseAdapter {
     availableCapacity: number;
     catalog: CatalogItem[];
     suggestedTotalPriceCents?: number;
+    /** Optional server-computed discount; absent means bid the base without a model call. */
+    discountTotalPriceCents?: number;
     /** Internal remaining-auction budget; never included in the model prompt. */
     timeoutMs?: number;
   }): Promise<BidProposal>;

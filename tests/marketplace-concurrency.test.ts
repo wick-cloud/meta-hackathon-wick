@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises';
 import 'dotenv/config';
 import { randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
@@ -1386,18 +1387,86 @@ describe.skipIf(!databaseUrl)('PostgreSQL marketplace concurrency and invariants
     );
   });
 
-  it('excludes previously stored Boat real configurations without changing historical rows', async () => {
-    const oldBoat = { ...catalog, id: 'old-boat', provider: 'boat' };
+  it('quarantines old Boat approvals and offerings while preserving frozen history, then allows fresh qualification', async () => {
+    const { vm, bidId } = await awardedVm();
+    const historical = async () => ({
+      vm: (await pool.query('SELECT * FROM broker_vms WHERE id=$1', [vm.id])).rows[0],
+      bid: (await pool.query('SELECT * FROM broker_bids WHERE id=$1', [bidId])).rows[0],
+      holds: (await pool.query('SELECT * FROM broker_holds WHERE bid_id=$1', [bidId])).rows,
+    });
+    const before = await historical();
+    const oldBoat = { ...catalog, id: 'old-boat', provider: 'boat', pricingMode: 'managed' };
     await pool.query(
       "INSERT INTO broker_catalog(id,item,approved,source_mode) VALUES($1,$2,true,'real')",
       [oldBoat.id, oldBoat],
     );
-    const real = { ...ctx, wick: { ...ctx.wick, mode: 'real' as const } };
-    expect(await getCatalog(real)).toEqual([]);
+    const supplier = await provider();
+    await pool.query('UPDATE broker_offerings SET catalog_id=$2 WHERE id=$1', [
+      supplier.offeringId,
+      oldBoat.id,
+    ]);
+    await pool.query(
+      `INSERT INTO broker_scheduled_offerings(provider_id,operation_key,input_fingerprint,catalog_id,name,kind,time_zone,weekdays,window_start,window_end,available_until,capacity_quantity,discount_rate_cents_per_hour,normal_rate_cents_per_hour)
+      VALUES($1,'old-boat-schedule','offline-fingerprint',$2,'Old Boat schedule','capacity_window','UTC',ARRAY[1],'08:00','09:00','10:00',1,1,1)`,
+      [supplier.providerId, oldBoat.id],
+    );
+    await pool.query(
+      await readFile(new URL('../migrations/032_provider_expansion.sql', import.meta.url), 'utf8'),
+    );
+    expect(await historical()).toEqual(before);
     expect(
       (await pool.query('SELECT item,approved FROM broker_catalog WHERE id=$1', [oldBoat.id]))
         .rows[0],
-    ).toEqual({ item: oldBoat, approved: true });
+    ).toEqual({ item: oldBoat, approved: false });
+    expect(
+      (
+        await pool.query('SELECT active,revision FROM broker_offerings WHERE id=$1', [
+          supplier.offeringId,
+        ])
+      ).rows[0],
+    ).toEqual({ active: false, revision: 2 });
+    expect(
+      (
+        await pool.query(
+          'SELECT active,revision FROM broker_scheduled_offerings WHERE catalog_id=$1',
+          [oldBoat.id],
+        )
+      ).rows[0],
+    ).toEqual({ active: false, revision: 2 });
+    const real = { ...ctx, wick: { ...ctx.wick, mode: 'real' as const } };
+    expect(await getCatalog(real)).toEqual([{ ...oldBoat, approved: false }]);
+    await syncCatalog({
+      ...real,
+      wick: { ...real.wick, catalog: async () => [{ ...oldBoat, approved: false } as CatalogItem] },
+    });
+    expect((await getCatalog(real))[0]!.approved).toBe(false);
+    await pool.query('UPDATE broker_catalog SET approved=true WHERE id=$1', [oldBoat.id]);
+    expect((await getCatalog(real))[0]!.approved).toBe(true);
+    expect(
+      (await pool.query('SELECT active FROM broker_offerings WHERE id=$1', [supplier.offeringId]))
+        .rows[0].active,
+    ).toBe(false);
+    expect(await getCatalog(ctx)).toHaveLength(1);
+  });
+
+  it('hides unregistered and BYOK stored real catalog routes', async () => {
+    for (const item of [
+      { ...catalog, id: 'unknown-real', provider: 'provider-unknown', pricingMode: 'managed' },
+      {
+        ...catalog,
+        id: 'boat-byok',
+        provider: 'boat',
+        pricingMode: 'managed',
+        providerKeyId: 'unapproved-key',
+      },
+      { ...catalog, id: 'boat-unpriced', provider: 'boat' },
+    ])
+      await pool.query(
+        "INSERT INTO broker_catalog(id,item,approved,source_mode) VALUES($1,$2,true,'real')",
+        [item.id, item],
+      );
+    const real = { ...ctx, wick: { ...ctx.wick, mode: 'real' as const } };
+    expect(await getCatalog(real)).toEqual([]);
     expect(await getCatalog(ctx)).toHaveLength(1);
   });
 

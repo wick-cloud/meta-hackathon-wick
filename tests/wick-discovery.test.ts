@@ -95,12 +95,15 @@ describe('read-only Wick discovery and managed route verification', () => {
     ).toBeUndefined();
     expect(adapter.create).not.toHaveBeenCalled();
   });
-  it('rejects Boat create before any request regardless of a frozen rate', async () => {
+  it('rejects an unregistered provider create before any request regardless of a frozen rate', async () => {
     const fetcher = vi.fn();
     vi.stubGlobal('fetch', fetcher);
     await expect(
-      createWickAdapter(config).create({ ...input, provider: 'boat' }, 'never-boat-123'),
-    ).rejects.toThrow(/E2B/);
+      createWickAdapter(config).create(
+        { ...input, provider: 'provider-unknown' },
+        'never-unknown-123',
+      ),
+    ).rejects.toThrow(/registered managed/);
     expect(fetcher).not.toHaveBeenCalled();
   });
   it.each(['wick_managed', 'byok', 'unknown', 'foreign-organization', 'foreign-group'])(
@@ -143,7 +146,7 @@ describe('read-only Wick discovery and managed route verification', () => {
                   }
                 : {
                     profiles: [{ id: 'micro', name: 'Micro', cpu: 1, memoryMiB: 1024 }],
-                    offers: [offer, { ...offer, provider: 'boat' }],
+                    offers: [offer, { ...offer, provider: 'provider-unknown' }],
                   },
             ),
           ),
@@ -200,7 +203,7 @@ describe('read-only Wick discovery and managed route verification', () => {
         { ...offer, scope: 'organization' },
         { ...offer, byok: { enabled: true } },
         { ...offer, provider: 'other' },
-        { ...offer, provider: 'boat' },
+        { ...offer, provider: 'provider-unknown' },
         { ...offer, byok: undefined },
       ],
     };

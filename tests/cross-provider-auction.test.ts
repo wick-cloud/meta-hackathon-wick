@@ -213,6 +213,100 @@ describe.skipIf(!databaseUrl)(
       expect(ctx.wick.create).not.toHaveBeenCalled();
     });
 
+    it('accepts bids across eight native providers and freezes the winning Boat route', async () => {
+      const additions = [
+        ['sail', 'micro', 1, 2, 12],
+        ['provider-tenki', 'micro', 1, 1, 19],
+        ['provider-freestyle', 'small', 2, 4, 38],
+        ['boat', 'small', 2, 3814 / 1024, 5],
+      ] as const;
+      for (const [provider, profile, cpu, memoryGb, rate] of additions) {
+        const item: CatalogItem = {
+          ...catalogs[0]!,
+          id: `${provider}:${profile}:auto`,
+          name: `${provider} ${profile}`,
+          provider,
+          profile,
+          region: 'auto',
+          cpu,
+          memoryGb,
+          resources: { cpu, memoryGb, diskGb: 8 },
+          rateMicrosPerSecond: rate,
+        };
+        await storeCatalog(item);
+        const id = randomUUID();
+        const actor: Actor = {
+          id: randomUUID(),
+          email: `${id}@test.invalid`,
+          name: provider,
+          role: 'provider',
+          providerId: id,
+        };
+        await pool.query(
+          'INSERT INTO broker_providers(id,user_id,name,total_capacity,policy,simulated,cloud_provider) VALUES($1,$2,$3,1,$4,false,$5)',
+          [
+            id,
+            actor.id,
+            provider,
+            {
+              autoBid: true,
+              minimumPriceCents: 1,
+              basePriceCents: 1,
+              allowedCatalogIds: [item.id],
+            },
+            provider,
+          ],
+        );
+        providers.push({ actor, id, item, offeringId: await storeOffering(id, item) });
+      }
+      const req = await request({ requirements: { cpu: 1, memoryGb: 1 } });
+      const snapshot = (await storedRequest(req.id)).catalog_snapshot;
+      expect(snapshot.eligibleCatalogs).toHaveLength(8);
+      expect(
+        vi.mocked(ctx.boss.send).mock.calls.filter(([queue]) => queue === QUEUES.auto),
+      ).toHaveLength(8);
+      for (const provider of providers) {
+        const proposal = await proposeBid(ctx, provider.actor, req.id);
+        expect(proposal).toMatchObject({
+          decision: 'bid',
+          catalogId: provider.item.id,
+          offeringId: provider.offeringId,
+        });
+        if (proposal.decision !== 'bid') throw new Error('Expected eligible provider bid');
+        await submitBid(
+          ctx,
+          provider.actor,
+          req.id,
+          { totalPriceCents: proposal.totalPriceCents!, offeringId: proposal.offeringId },
+          'auto',
+        );
+      }
+      const lowest = (
+        await pool.query(
+          'SELECT id,provider_id FROM broker_bids WHERE request_id=$1 ORDER BY total_price_cents,created_at,id LIMIT 1',
+          [req.id],
+        )
+      ).rows[0];
+      expect(lowest.provider_id).toBe(
+        providers.find((provider) => provider.item.provider === 'boat')!.id,
+      );
+      await award(req.id, lowest.id);
+      const vm = (await pool.query('SELECT * FROM broker_vms WHERE request_id=$1', [req.id]))
+        .rows[0];
+      expect(vm.create_input).toMatchObject({
+        provider: 'boat',
+        profile: 'small',
+        region: 'auto',
+        maximumPriceMicrosPerSecond: 5,
+      });
+      expect(vm.catalog_snapshot.memoryGb).toBe(3814 / 1024);
+      expect(vm.quote_snapshot).toMatchObject({
+        totalPriceCents: 2,
+        revenueShare: revenueShare(2),
+      });
+      expect(ctx.wick.create).not.toHaveBeenCalled();
+    });
+
     it('preserves exact-route behavior unless matching and any-region choice are explicit', async () => {
       for (const matchAcrossProviders of [undefined, false]) {
         await expect(request({ matchAcrossProviders })).rejects.toThrow(/Any region/);
@@ -234,7 +328,7 @@ describe.skipIf(!databaseUrl)(
         ctx,
         providers[0]!.actor,
         req.id,
-        { totalPriceCents: 20 },
+        { totalPriceCents: 10 },
         'auto',
       );
       const manual = await submitBid(ctx, providers[1]!.actor, req.id, { totalPriceCents: 20 });
@@ -743,12 +837,15 @@ describe.skipIf(!databaseUrl)(
       ).toBe('ready');
     });
 
-    it('rejects more than sixteen matching native routes without silently truncating the market', async () => {
-      for (let i = 0; i < 13; i++)
+    it('accepts thirty-two matching routes and rejects a thirty-third without truncation', async () => {
+      for (let i = 0; i < 28; i++)
         await storeCatalog({ ...catalogs[0]!, id: `e2b:small:extra-${i}` });
+      const accepted = await request();
+      expect((await storedRequest(accepted.id)).catalog_snapshot.eligibleCatalogs).toHaveLength(32);
+      await storeCatalog({ ...catalogs[0]!, id: 'e2b:small:overflow' });
       await expect(request()).rejects.toThrow(/Too many matching configurations/);
       expect((await pool.query('SELECT count(*)::int AS n FROM broker_requests')).rows[0].n).toBe(
-        0,
+        1,
       );
       expect(ctx.wick.create).not.toHaveBeenCalled();
     });

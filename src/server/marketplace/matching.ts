@@ -1,9 +1,9 @@
 import type { CatalogItem } from '../../shared/types.js';
 import { HttpError } from '../context.js';
-import { CLOUD_PROVIDERS } from './provider-identity.js';
+import { isCloudProvider } from '../../shared/providers.js';
 import type { Row } from './data.js';
 
-export const MAX_MATCH_CATALOGS = 16;
+export const MAX_MATCH_CATALOGS = 32;
 
 /** A location-free request is explicit; it never turns a named region into a wildcard. */
 export function catalogSatisfiesRequest(item: CatalogItem, request: Row): boolean {
@@ -42,7 +42,7 @@ export function requestCatalogs(request: Row): CatalogItem[] {
 }
 
 export function assertManagedCustomerRoute(item: CatalogItem): void {
-  if (!(CLOUD_PROVIDERS as readonly string[]).includes(item.provider) || item.providerKeyId)
+  if (!isCloudProvider(item.provider) || item.providerKeyId)
     throw new HttpError(400, 'This route is unavailable for managed customer rentals.');
 }
 

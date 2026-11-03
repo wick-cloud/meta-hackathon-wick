@@ -1,3 +1,4 @@
+import { CLOUD_PROVIDERS } from '../../shared/providers.js';
 import type { Pool, PoolClient } from 'pg';
 import type { Actor, CatalogItem } from '../../shared/types.js';
 import { HttpError, type AppContext } from '../context.js';
@@ -105,8 +106,9 @@ export const vmView = (r: Row) => ({
 export async function getCatalog(ctx: Pick<AppContext, 'pool' | 'wick'>): Promise<CatalogItem[]> {
   const result = await ctx.pool.query(
     `SELECT id,item,approved FROM broker_catalog WHERE source_mode=$1
-      AND ($1 <> 'real' OR COALESCE(item->>'provider','') <> 'boat') ORDER BY id`,
-    [ctx.wick.mode],
+      AND ($1 <> 'real' OR (item->>'provider'=ANY($2::text[])
+        AND COALESCE(item->>'providerKeyId','')='' AND item->>'pricingMode'='managed')) ORDER BY id`,
+    [ctx.wick.mode, CLOUD_PROVIDERS],
   );
   return result.rows.map((r) => ({ ...r.item, id: r.id, approved: r.approved }));
 }

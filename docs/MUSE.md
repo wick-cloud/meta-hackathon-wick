@@ -1,6 +1,6 @@
 # Muse Spark Open on Baseten
 
-Real Muse mode uses **Muse Spark Open · Baseten**, with the exact hackathon model identifier **`meta-models/muse-spark-open-1026`**. `MUSE_MODE=fixture` remains an explicit deterministic mode: its receipts say no model call, and fixture behavior never substitutes for a failed real request. Selecting real mode does not imply every decision called a model; ineligible bids and other deterministic decisions retain `modelCalled: false`.
+Real Muse mode uses **Muse Spark Open · Baseten**, with the exact hackathon model identifier **`meta-models/muse-spark-open-1026`**. `MUSE_MODE=fixture` remains an explicit deterministic mode: its receipts say no model call, and fixture behavior never substitutes for a failed real request. Selecting real mode does not imply every decision called a model; ineligible bids, direct base-price bids, and other deterministic decisions retain `modelCalled: false`.
 
 Muse prepares editable proposals. It does not authorize spending, change policies, publish offerings, accept alternatives or start customer VMs by itself. Customers keep control of their terminal and commands.
 
@@ -10,7 +10,7 @@ Muse prepares editable proposals. It does not authorize spending, change policie
 | -------------------------- | ----------------------------------------- | ------------------------------------------------------------------ | ----------------------------------------------------------------------------- |
 | Buyer environment          | `POST /api/muse/translate`                | Approved configuration and supported resource requirements         | Buyer reviews before starting an auction                                      |
 | Provider capacity strategy | `POST /api/provider/policy/propose`       | Editable limits using that provider's policy, capacity and catalog | Provider applies reviewed limits with revision and operation key              |
-| Provider bid               | `POST /api/provider/requests/:id/propose` | Select the server-priced quote or decline                          | Saved policy, capacity and auction deadline are rechecked before any bid hold |
+| Provider bid               | `POST /api/provider/requests/:id/propose` | Select an optional server-priced discount or retain base           | Saved policy, capacity and auction deadline are rechecked before any bid hold |
 | Provider offerings         | `POST /api/provider/offerings/propose`    | Select approved candidates from bounded aggregate unmet demand     | Provider reviews and publishes                                                |
 | Buyer alternatives         | `POST /api/intents/:id/propose`           | Select concrete eligible candidate IDs                             | Buyer explicitly accepts a frozen offer                                       |
 
@@ -49,9 +49,13 @@ The accepted request freezes the lower approved hard budget, so later retries ca
 
 ## Deterministic pricing and reviewed offering suggestions
 
-New rentals use a fixed 15% commission deducted from provider gross revenue, with 85% retained by the provider before compute costs and no added customer fee. Managed suggestions and bid floors use `max(1, ceil(raw upstream micro-USD / 8500))` cents so the provider share covers the compute estimate. There is no additional target markup. Integer micro-USD snapshots preserve the exact split at binding acceptance and invoice readiness; historical accepted quotes and invoices retain their original terms. Provider limits and buyer budgets remain gross rental amounts.
+New rentals use a fixed 15% commission deducted from provider gross revenue, with 85% retained by the provider before compute costs and no added customer fee. Managed suggestions and bid floors use `max(1, ceil(raw upstream micro-USD / 8500))` cents so the provider share covers the compute estimate. The managed cost floor has no added target markup. Separately, new bound-account setup seeds a selling base/offer price 20% above the 30-minute cost-covered quote, rounded upward to $0.0001; existing custom policies remain unchanged. Integer micro-USD snapshots preserve the exact split at binding acceptance and invoice readiness; historical accepted quotes and invoices retain their original terms. Provider limits and buyer budgets remain gross rental amounts.
 
-Muse bid suggestions select or decline a server-computed gross price; model output never supplies the money or commission rate. Fixed customer quotes, demo provider earnings, upstream estimates and actual usage remain separate. Invoices say **No payment due** and no payments or payouts occur.
+Automatic bids use `max(saved base, policy minimum, current managed cost floor)`. The server proposes a discount only when more than one slot is free and at least half of unreserved capacity is available. The reduction is at most 10%, rounded upward to the supported money unit and clamped to the floor. The last free slot stays at base. One-slot staged accounts therefore begin with base-only bids after activation.
+
+Muse chooses the server discount or declines that discount. Declining retains the exact base when it meets the buyer budget and provider maximum; it does not veto an otherwise eligible base bid or trim the base down to the budget. With no discount candidate, the adapter proposes base without a model call. Eligibility failures, unaffordable totals, malformed responses and model transport errors remain distinct; errors do not create a bid. Automatic submission rechecks the current strategy under the provider lock before taking a hold. Manual bids retain their reviewed-price controls.
+
+Model output never supplies the money or commission rate. Fixed customer quotes, demo provider earnings, upstream estimates and actual usage remain separate. Invoices say **No payment due** and no payments or payouts occur.
 
 `POST /api/provider/offerings/propose` aggregates only recent unresolved demand in the current Wick mode and applicable provider catalog allowlist. It excludes resolved substitutes/retries and duplicate source-intent demand, considers at most 200 recent requests and 200 recent intents before a combined 200-row/40-group bound, and uses a seven-day window. Buyer identities and free text are not selected. Unsupported exact dimensions that no existing configuration satisfies do not become invented provider offerings.
 
@@ -81,7 +85,7 @@ Explicit prompt projections exclude credentials, Wick organization/group identif
 
 Offline tests exercise fixture behavior, exact model/transport envelopes, final-content parsing, reasoning exclusion, request bounds, sanitized failures, policy isolation and deterministic validation. Browser fixtures separately exercise reviewed UI behavior without any paid API calls.
 
-A controlled live smoke on 2026-10-29 passed all **seven** adapter flows with the exact Baseten model, JSON-schema requests and local validation of final content: translation, capacity policy, bid, offering suggestions, alternatives, buyer agreement draft and provider schedule draft. It used a synthetic approved catalog, made **zero database writes and zero Wick/VM allocations**, and did not deploy Railway. This confirms those inference/adapter paths for that run; it does not establish production deployment status or native VM enforcement.
+A controlled live smoke on 2026-10-29 passed all **seven** adapter flows with the exact Baseten model, JSON-schema requests and local validation of final content: translation, capacity policy, bid, offering suggestions, alternatives, buyer agreement draft and provider schedule draft. It used a synthetic approved catalog, made **zero database writes and zero Wick/VM allocations**, and did not deploy Railway. This confirms those inference/adapter paths for that run; it does not establish production deployment status, native VM enforcement, or the later optional-discount/base-fallback behavior.
 
 The two schedule draft flows were subsequently retired. To run the five remaining proposal checks deliberately, supply the private server key locally and run:
 
