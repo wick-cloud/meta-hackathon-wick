@@ -1,14 +1,10 @@
-import { useState } from 'react';
 import {
   ArrowDown,
   ArrowRight,
   Bot,
-  Check,
   Clock3,
   Code2,
   Cpu,
-  Layers3,
-  RotateCcw,
   Server,
   ShieldCheck,
   Sparkles,
@@ -17,150 +13,16 @@ import {
 import { Brand } from './brand';
 import { Link } from './components';
 import './homepage.css';
-
-const sampleBids = [
-  { name: 'Provider A', mark: 'A', price: '$0.1200', winner: false },
-  { name: 'Provider B', mark: 'B', price: '$0.0900', winner: true },
-  { name: 'Provider C', mark: 'C', price: '$0.1100', winner: false },
-];
-
-function ExampleAuction() {
-  const [perspective, setPerspective] = useState<'buyer' | 'seller'>('buyer');
-  const [awarded, setAwarded] = useState(false);
-  const seller = perspective === 'seller';
-  return (
-    <section className="home-auction" aria-labelledby="example-auction-title">
-      <div className="home-console-topline">
-        <span>
-          <span className="home-example-dot" /> Example auction
-        </span>
-        <span className="home-console-ref">REQ_0001</span>
-      </div>
-      <div className="home-perspective" role="group" aria-label="Auction perspective">
-        <button type="button" aria-pressed={!seller} onClick={() => setPerspective('buyer')}>
-          <TerminalSquare size={15} /> Buyer view
-        </button>
-        <button type="button" aria-pressed={seller} onClick={() => setPerspective('seller')}>
-          <Server size={15} /> Seller view
-        </button>
-      </div>
-      <div className="home-auction-heading">
-        <span className="home-resource-icon">
-          <Cpu size={22} />
-        </span>
-        <div>
-          <h2 id="example-auction-title">Linux development environment</h2>
-          <p>
-            2 vCPU <span>·</span> 4 GiB RAM <span>·</span> 30 min
-          </p>
-        </div>
-      </div>
-      <dl className="home-auction-metrics">
-        <div>
-          <dt>Buyer budget</dt>
-          <dd>$0.1500</dd>
-        </div>
-        <div>
-          <dt>Eligible bids</dt>
-          <dd>03</dd>
-        </div>
-        <div>
-          <dt>{awarded ? 'Auction closed' : 'Auction window'}</dt>
-          <dd className="home-auction-clock">
-            <Clock3 size={15} /> {awarded ? '00:00' : '00:30'}
-          </dd>
-        </div>
-      </dl>
-      {seller && (
-        <div className="home-example-policy">
-          <ShieldCheck size={15} />
-          <span>
-            Your floor <strong>$0.0800</strong>
-          </span>
-          <span>
-            Keep spare <strong>2 slots</strong>
-          </span>
-        </div>
-      )}
-      <div className="home-bid-list" role="table" aria-label="Example provider bids">
-        <div className="home-bid-row home-bid-header" role="row">
-          <span role="columnheader">Provider</span>
-          <span role="columnheader">Total bid</span>
-          <span role="columnheader">{seller ? 'Your position' : 'Status'}</span>
-        </div>
-        {sampleBids.map((bid) => (
-          <div
-            className={`home-bid-row ${bid.winner ? 'home-leading-bid' : ''}`}
-            role="row"
-            key={bid.mark}
-          >
-            <span role="cell" className="home-bid-provider">
-              <span className="home-provider-mark">{bid.mark}</span>
-              <span>
-                {bid.name}
-                {seller && bid.winner && <small>Your offering</small>}
-              </span>
-            </span>
-            <span role="cell" className="home-bid-price">
-              {bid.price}
-            </span>
-            <span role="cell" className={bid.winner ? 'home-bid-leading' : 'home-bid-muted'}>
-              {bid.winner ? (
-                <>
-                  {awarded ? <Check size={13} /> : <span className="home-status-dot" />}
-                  {awarded ? 'Awarded' : 'Lowest bid'}
-                </>
-              ) : awarded ? (
-                'Not selected'
-              ) : (
-                'Eligible'
-              )}
-            </span>
-          </div>
-        ))}
-      </div>
-      <div className="home-auction-outcome" aria-live="polite" aria-atomic="true">
-        <span className={`home-outcome-icon ${awarded ? 'is-awarded' : ''}`}>
-          {awarded ? <Check size={17} /> : <Layers3 size={17} />}
-        </span>
-        <div>
-          <strong>
-            {awarded
-              ? seller
-                ? 'Your bid wins. Capacity is committed.'
-                : 'Provider B wins at $0.0900.'
-              : seller
-                ? 'Your bid is within your approved limits.'
-                : 'The lowest eligible bid wins.'}
-          </strong>
-          <p>
-            {awarded
-              ? 'Provisioning follows the award. Terminal access follows readiness.'
-              : seller
-                ? 'One binding bid per provider. Existing reservations stay protected.'
-                : 'Providers compete within your requirements and maximum total.'}
-          </p>
-        </div>
-      </div>
-      <div className="home-auction-footer">
-        <span>Illustration only · no purchase</span>
-        <button type="button" onClick={() => setAwarded((value) => !value)}>
-          {awarded ? (
-            <>
-              <RotateCcw size={13} /> Replay example
-            </>
-          ) : (
-            <>
-              Show award <ArrowRight size={13} />
-            </>
-          )}
-        </button>
-      </div>
-    </section>
-  );
-}
+import {
+  DemoAction,
+  DemoError,
+  DemoOverview,
+  HomepageDemoSession,
+  useHomepageDemo,
+} from './homepage-demo';
 
 export function HomePage() {
+  const demo = useHomepageDemo();
   return (
     <div className="broker-home">
       <a className="skip-link" href="#marketplace-home">
@@ -171,6 +33,7 @@ export function HomePage() {
           <Brand />
         </Link>
         <nav aria-label="Marketplace navigation">
+          <a href={demo.data?.run ? '#live-demo' : '#demo-overview'}>Live demo</a>
           <a href="#marketplace">Marketplace</a>
           <a href="#how-it-works">How it works</a>
           <Link href="/login" className="button secondary">
@@ -179,7 +42,10 @@ export function HomePage() {
         </nav>
       </header>
       <main id="marketplace-home">
-        <section className="home-hero" aria-labelledby="home-headline">
+        <section
+          className={`home-hero ${demo.data?.run ? 'has-demo-session' : ''}`}
+          aria-labelledby="home-headline"
+        >
           <div className="home-hero-copy">
             <div className="home-eyebrow">
               <span /> THE CAPACITY MARKETPLACE
@@ -193,14 +59,16 @@ export function HomePage() {
               auction.
             </p>
             <div className="home-hero-actions">
-              <Link href="/login?intent=buy" className="button primary">
+              <DemoAction demo={demo} />
+              <Link href="/login?intent=buy" className="home-demo-market-link">
                 Buy resources <ArrowRight size={16} />
               </Link>
-              <Link href="/login?intent=sell" className="button secondary">
+              <Link href="/login?intent=sell" className="home-demo-market-link">
                 Sell capacity <ArrowRight size={16} />
               </Link>
             </div>
-            <p className="home-access-note">One marketplace. A workspace for each side.</p>
+            <p className="home-access-note">Free during the hackathon. No signup.</p>
+            {!demo.data?.run && <DemoError demo={demo} />}
             <div className="home-hero-facts">
               <span>
                 <Clock3 size={15} /> 30-second auctions
@@ -211,9 +79,11 @@ export function HomePage() {
             </div>
           </div>
           <div className="home-hero-console">
-            <ExampleAuction />
+            <DemoOverview demo={demo} />
           </div>
         </section>
+
+        <HomepageDemoSession demo={demo} />
 
         <section
           className="home-market-section"

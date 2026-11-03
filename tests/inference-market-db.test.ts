@@ -245,6 +245,7 @@ describe.skipIf(!url)(
       cookie = login.cookies.map((c) => `${c.name}=${c.value}`).join('; ');
     });
     beforeEach(async () => {
+      ctx.config.liveDemoEnabled = false;
       await pool.query(
         'TRUNCATE broker_inference_grants,broker_inference_routes,broker_credit_wallets,broker_operation_receipts CASCADE',
       );
@@ -269,6 +270,208 @@ describe.skipIf(!url)(
         await admin.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
         await admin.end();
       }
+    });
+
+    async function demoAllowance() {
+      ctx.config.liveDemoEnabled = true;
+      const g = await grant(5, { allowedProviders: ['baseten'] });
+      const pack = await buy(g.id, { inputTokens: 5000, outputTokens: 2048 }, 'baseten');
+      const issued = await issuePackKey(ctx, owner, pack.id, { operationKey: randomUUID() });
+      const actor: Actor = {
+        ...owner,
+        apiKey: {
+          id: issued.key.id,
+          grantId: g.id,
+          packId: pack.id,
+          scopes: issued.key.scopes,
+          limits: {},
+        },
+      };
+      await pool.query(
+        `INSERT INTO broker_catalog(id,item,approved,source_mode)
+         VALUES('demo-guard-fixture','{}',true,'fixture') ON CONFLICT DO NOTHING`,
+      );
+      const offering = (
+        await pool.query(
+          `INSERT INTO broker_offerings(provider_id,catalog_id,name,description,price_cents)
+         VALUES($1,'demo-guard-fixture','Demo guard','Synthetic test VM',1)
+         ON CONFLICT(provider_id,catalog_id,name) DO UPDATE SET description=EXCLUDED.description RETURNING id`,
+          [providers[0]!.providerId],
+        )
+      ).rows[0];
+      const request = (
+        await pool.query(
+          `INSERT INTO broker_requests(buyer_id,description,catalog_id,catalog_snapshot,region,duration_minutes,max_price_cents,requirements,status)
+         VALUES($1,'Synthetic demo','demo-guard-fixture','{}','auto',15,25,'{}','ready') RETURNING id`,
+          [owner.id],
+        )
+      ).rows[0];
+      const bid = (
+        await pool.query(
+          `INSERT INTO broker_bids(request_id,provider_id,offering_id,offering_snapshot,total_price_cents,status)
+         VALUES($1,$2,$3,'{}',1,'won') RETURNING id`,
+          [request.id, providers[0]!.providerId, offering.id],
+        )
+      ).rows[0];
+      const vm = (
+        await pool.query(
+          `INSERT INTO broker_vms(request_id,buyer_id,provider_id,bid_id,create_key,create_input,catalog_snapshot,quote_snapshot,status,environment_id,expires_at)
+         VALUES($1,$2,$3,$4,$5,'{}','{"sourceMode":"fixture"}','{}','running',$6,clock_timestamp()+interval '15 minutes') RETURNING id`,
+          [
+            request.id,
+            owner.id,
+            providers[0]!.providerId,
+            bid.id,
+            randomUUID(),
+            `fixture-${randomUUID()}`,
+          ],
+        )
+      ).rows[0];
+      const visitor = (
+        await pool.query(
+          `INSERT INTO broker_demo_visitors(id,secret_digest,buyer_id) VALUES($1,$2,$3)
+         ON CONFLICT(buyer_id) DO UPDATE SET secret_digest=EXCLUDED.secret_digest RETURNING id`,
+          [randomUUID(), randomUUID().replaceAll('-', '').repeat(2), owner.id],
+        )
+      ).rows[0];
+      await pool.query(
+        'INSERT INTO broker_demo_days(day) VALUES(CURRENT_DATE) ON CONFLICT DO NOTHING',
+      );
+      const run = (
+        await pool.query(
+          `INSERT INTO broker_demo_runs(id,visitor_id,buyer_id,ip_digest,operation_key,source_mode,budget_day,status,grant_id,pack_id,vm_id)
+         VALUES($1,$2,$3,$4,$5,'fixture',CURRENT_DATE,'ready',$6,$7,$8) RETURNING id`,
+          [randomUUID(), visitor.id, owner.id, 'a'.repeat(64), randomUUID(), g.id, pack.id, vm.id],
+        )
+      ).rows[0];
+      const dispatch = vi.fn(async () => smallUsage());
+      ctx.inference!.dispatch = dispatch;
+      return { actor, grant: g, pack, runId: run.id as string, vmId: vm.id as string, dispatch };
+    }
+
+    it('limits demo inference across replacement keys and operation replays', async () => {
+      const demo = await demoAllowance();
+      const operationKey = randomUUID();
+      await complete(ctx, demo.actor, { ...call, operationKey });
+      await expect(complete(ctx, demo.actor, { ...call, operationKey })).rejects.toMatchObject({
+        code: 'completed_without_result',
+      });
+      const replacement = await issuePackKey(ctx, owner, demo.pack.id, {
+        operationKey: randomUUID(),
+      });
+      const nextActor = {
+        ...demo.actor,
+        apiKey: { ...demo.actor.apiKey!, id: replacement.key.id },
+      };
+      await complete(ctx, nextActor, { ...call, operationKey: randomUUID() });
+      await expect(
+        complete(ctx, nextActor, { ...call, operationKey: randomUUID() }),
+      ).rejects.toMatchObject({ code: 'demo_request_limit' });
+      expect(demo.dispatch).toHaveBeenCalledTimes(2);
+      expect(
+        (
+          await pool.query(
+            'SELECT count(*)::int n FROM broker_inference_requests WHERE grant_id=$1',
+            [demo.grant.id],
+          )
+        ).rows[0].n,
+      ).toBe(2);
+    });
+
+    it('rejects excessive demo output and grant-wide keys before reserving any quota', async () => {
+      const demo = await demoAllowance();
+      await expect(
+        complete(ctx, demo.actor, { ...call, max_tokens: 1025, operationKey: randomUUID() }),
+      ).rejects.toMatchObject({ code: 'demo_output_limit' });
+      const broad = await agent(demo.grant.id);
+      await expect(
+        complete(ctx, broad.actor, { ...call, operationKey: randomUUID() }),
+      ).rejects.toMatchObject({ code: 'demo_session_ended' });
+      expect(demo.dispatch).not.toHaveBeenCalled();
+      expect(
+        (
+          await pool.query(
+            'SELECT count(*)::int n FROM broker_inference_requests WHERE grant_id=$1',
+            [demo.grant.id],
+          )
+        ).rows[0].n,
+      ).toBe(0);
+      const balance = (
+        await pool.query(
+          'SELECT available_input::int,available_output::int FROM broker_token_packs WHERE id=$1',
+          [demo.pack.id],
+        )
+      ).rows[0];
+      expect(balance).toEqual({ available_input: 5000, available_output: 2048 });
+    });
+
+    it('ends demo key access immediately on stop, VM expiry, and the kill switch', async () => {
+      const demo = await demoAllowance();
+      await pool.query('UPDATE broker_demo_runs SET stop_requested=true WHERE id=$1', [demo.runId]);
+      await expect(
+        complete(ctx, demo.actor, { ...call, operationKey: randomUUID() }),
+      ).rejects.toMatchObject({ code: 'demo_session_ended' });
+      await pool.query('UPDATE broker_demo_runs SET stop_requested=false WHERE id=$1', [
+        demo.runId,
+      ]);
+      await pool.query("UPDATE broker_vms SET status='terminating' WHERE id=$1", [demo.vmId]);
+      await expect(
+        complete(ctx, demo.actor, { ...call, operationKey: randomUUID() }),
+      ).rejects.toMatchObject({ code: 'demo_session_ended' });
+      await pool.query("UPDATE broker_vms SET status='running' WHERE id=$1", [demo.vmId]);
+      ctx.config.liveDemoEnabled = false;
+      await expect(
+        complete(ctx, demo.actor, { ...call, operationKey: randomUUID() }),
+      ).rejects.toMatchObject({ code: 'demo_session_ended' });
+      expect(demo.dispatch).not.toHaveBeenCalled();
+    });
+
+    it('does not replenish demo request attempts after unknown upstream usage', async () => {
+      const demo = await demoAllowance();
+      demo.dispatch.mockImplementation(async () => {
+        throw new InferenceUpstreamError('demo-unknown', false);
+      });
+      await expect(
+        complete(ctx, demo.actor, { ...call, operationKey: randomUUID() }),
+      ).rejects.toMatchObject({ code: 'inference_outcome_unknown' });
+      expect(
+        (
+          await pool.query(
+            'SELECT count(*)::int n FROM broker_inference_requests WHERE grant_id=$1',
+            [demo.grant.id],
+          )
+        ).rows[0].n,
+      ).toBe(1);
+      // The unresolved request still counts even if the operator restores the route.
+      await pool.query(
+        "UPDATE broker_inference_routes SET quarantined_at=NULL,qualified=true,blocked_reason='' WHERE provider='baseten'",
+      );
+      demo.dispatch.mockImplementation(async () => smallUsage());
+      await complete(ctx, demo.actor, { ...call, operationKey: randomUUID() });
+      await expect(
+        complete(ctx, demo.actor, { ...call, operationKey: randomUUID() }),
+      ).rejects.toMatchObject({ code: 'demo_request_limit' });
+      expect(demo.dispatch).toHaveBeenCalledTimes(2);
+    });
+
+    it('serializes concurrent demo calls so extra tabs cannot exceed two requests', async () => {
+      const demo = await demoAllowance();
+      demo.dispatch.mockImplementation(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 40));
+        return smallUsage();
+      });
+      const results = await Promise.allSettled(
+        Array.from({ length: 5 }, () =>
+          complete(ctx, demo.actor, { ...call, operationKey: randomUUID() }),
+        ),
+      );
+      expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(2);
+      expect(
+        results
+          .filter((result) => result.status === 'rejected')
+          .map((result) => (result as PromiseRejectedResult).reason.code),
+      ).toEqual(['demo_request_limit', 'demo_request_limit', 'demo_request_limit']);
+      expect(demo.dispatch).toHaveBeenCalledTimes(2);
     });
 
     async function buyingPolicy(grantId: string, extra: Record<string, unknown> = {}) {

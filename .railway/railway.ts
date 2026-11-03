@@ -26,6 +26,8 @@ export default defineRailway(() => {
       APP_URL: preserve(),
       BETTER_AUTH_SECRET: preserve(),
       AUTH_TRUST_RAILWAY_PROXY: preserve(),
+      LIVE_DEMO_ENABLED: preserve(),
+      LIVE_DEMO_ALLOW_FIXTURES: preserve(),
       WICK_MODE: preserve(),
       MUSE_MODE: preserve(),
       WICK_API_BASE: preserve(),
