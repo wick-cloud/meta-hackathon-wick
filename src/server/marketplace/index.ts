@@ -5,6 +5,7 @@ import { modalComputePromotionQuote, compareComputeBidPriority } from './compute
 import { moneyCents } from './data.js';
 import { registerComputePromotionAdmin } from './compute-promotion-admin.js';
 import { registerVmInventory } from './inventory.js';
+import { registerSales } from './sales.js';
 import { clientOperationKey, recordKeyAction, withOperation } from '../operations.js';
 import type { FastifyInstance } from 'fastify';
 import type { Pool } from 'pg';
@@ -52,6 +53,7 @@ export {
 export { markReady, confirmCleanup } from './lifecycle.js';
 
 export async function registerMarketplace(app: FastifyInstance, ctx: AppContext) {
+  registerSales(app, ctx);
   registerVmInventory(app, ctx);
   registerComputePromotionAdmin(app, ctx);
   const proposalCalls = new Map<string, { count: number; resetsAt: number }>();

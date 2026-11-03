@@ -51,6 +51,7 @@ import { PurchaseChooser } from './purchases';
 import { TokenInventory } from './token-inventory';
 import { CodingStudio, CodingJobPage } from './coding';
 import { Studio, StudioTaskPage } from './studio';
+import { ProviderSales } from './sales';
 import {
   ProviderCapacity,
   ProviderPolicy,
@@ -75,6 +76,7 @@ const buyerNavigation: NavigationItem[] = [
 ];
 const providerNavigation: NavigationItem[] = [
   { path: '/provider/capacity', label: 'Capacity', icon: Cpu },
+  { path: '/provider/sales', label: 'Improve my sales', icon: Sparkles },
   { path: '/provider/policy', label: 'Policy', icon: Settings2 },
   { path: '/provider/requests', label: 'Requests', icon: Box },
   { path: '/provider/offerings', label: 'Offerings', icon: LayoutGrid },
@@ -424,7 +426,8 @@ export default function App() {
       content = <NewEnvironment key={location} />;
     else content = <PurchaseChooser />;
   } else if (user.role === 'provider') {
-    if (path === '/provider/policy') content = <ProviderPolicy />;
+    if (path === '/provider/sales') content = <ProviderSales key={user.id} />;
+    else if (path === '/provider/policy') content = <ProviderPolicy />;
     else if (path === '/provider/requests') content = <ProviderRequests />;
     else if (path === '/provider/offerings') content = <ProviderOfferings />;
     else if (path === '/provider/scheduled') content = <RetiredScheduledVMs provider />;

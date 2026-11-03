@@ -102,6 +102,9 @@ export interface WickAdapter {
   terminate(id: string): Promise<void>;
 }
 export interface MuseAdapter {
+  recommendSales?(
+    input: import('../../shared/sales.js').SalesAdviceInput,
+  ): Promise<import('../../shared/sales.js').SalesAdviceSelection>;
   selectTokenPurchase?(
     input: import('../../shared/buying.js').MuseBuyingInput,
   ): Promise<import('../../shared/buying.js').MuseBuyingSelection>;
