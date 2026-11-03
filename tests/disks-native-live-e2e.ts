@@ -36,7 +36,7 @@ assert(
 const adapter = createWickAdapter(config),
   drives = adapter.drives!;
 const file = resolve(
-  process.env.DISK_NATIVE_E2E_REPORT_FILE ?? 'test-results/disks-native-live-e2e.json',
+  process.env.DISK_NATIVE_E2E_REPORT_FILE ?? 'verification-results/disks-native-live-e2e.json',
 );
 const journalFile = file.replace(/\.json$/, '') + '.journal.json';
 mkdirSync(dirname(file), { recursive: true });

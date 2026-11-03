@@ -41,7 +41,7 @@ const email = process.env.SEED_BUYER_EMAIL ?? 'buyer@demo.wick.local';
 const password = process.env.SEED_BUYER_PASSWORD;
 check(password, 'EXISTING_BUYER_PASSWORD_REQUIRED');
 const reportFile = resolve(
-  process.env.HOSTED_DISK_UI_E2E_REPORT_FILE ?? 'test-results/hosted-disk-ui-e2e.json',
+  process.env.HOSTED_DISK_UI_E2E_REPORT_FILE ?? 'verification-results/hosted-disk-ui-e2e.json',
 );
 const journalFile = reportFile.replace(/\.json$/, '') + '.journal.json';
 const screenshotDirectory = reportFile.replace(/\.json$/, '') + '.screenshots';

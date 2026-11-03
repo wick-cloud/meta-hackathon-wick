@@ -57,7 +57,8 @@ check(
   'TASK_BUDGET_MUST_BE_1_TO_50_CENTS',
 );
 const file = resolve(
-  process.env.HOSTED_STUDIO_DISK_E2E_REPORT_FILE ?? 'test-results/hosted-studio-disks-e2e.json',
+  process.env.HOSTED_STUDIO_DISK_E2E_REPORT_FILE ??
+    'verification-results/hosted-studio-disks-e2e.json',
 );
 const journalFile = file.replace(/\.json$/, '') + '.journal.json';
 mkdirSync(dirname(file), { recursive: true, mode: 0o700 });

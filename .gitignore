@@ -6,5 +6,6 @@ dist/
 !.env.example
 playwright-report/
 test-results/
+verification-results/
 coverage/
 *.log

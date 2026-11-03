@@ -16,7 +16,8 @@ export function diskCatalogEligible(ctx: AppContext, item: CatalogItem): boolean
     ctx.wick.drives &&
     item.approved &&
     item.capabilities?.includes('persistent-drives') &&
-    (ctx.wick.mode === 'fixture' || ctx.config.diskQualifiedCatalogIds?.includes(item.id)),
+    (ctx.wick.mode === 'fixture' ||
+      ctx.config.diskQualifiedCatalogIds?.some((id) => id === '*' || id === item.id)),
   );
 }
 export async function diskOptions(ctx: AppContext) {

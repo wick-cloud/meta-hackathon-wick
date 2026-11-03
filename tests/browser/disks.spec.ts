@@ -1,5 +1,6 @@
 import { expect, test, type Page } from './table-review';
 import type { Disk, DiskWorkspace } from '../../src/shared/disks';
+import type { CatalogItem } from '../../src/shared/types';
 
 // Every API call is intercepted; these cases cannot purchase compute or create upstream storage.
 const diskId = '11111111-1111-4111-8111-111111111111';
@@ -59,24 +60,44 @@ const workspaces: DiskWorkspace[] = [
   },
 ];
 
-async function fixture(page: Page, { failCreateOnce = false, enabled = true } = {}) {
+async function fixture(
+  page: Page,
+  {
+    failCreateOnce = false,
+    enabled = true,
+    catalog: catalogOverride,
+    eligibleCatalogIds = ['sku-native'],
+    diskOptionsReady,
+    translationCatalogId,
+  }: {
+    failCreateOnce?: boolean;
+    enabled?: boolean;
+    catalog?: CatalogItem[];
+    eligibleCatalogIds?: string[];
+    diskOptionsReady?: Promise<void>;
+    translationCatalogId?: string;
+  } = {},
+) {
   const writes: { path: string; method: string; body: any }[] = [];
   let createCalls = 0;
   await page.route('**/api/**', async (route) => {
     const request = route.request(),
       path = new URL(request.url()).pathname;
     const method = request.method();
-    const catalog = ['sku-native', 'sku-temporary'].map((id, index) => ({
-      id,
-      name: index ? 'Temporary Linux' : 'Persistent Linux',
-      provider: index ? 'modal' : 'e2b',
-      profile: 'small',
-      cpu: 2,
-      memoryGb: 4,
-      region: 'us-east',
-      durationMinutes: [15, 30, 60],
-      approved: true,
-    }));
+    const catalog =
+      catalogOverride ??
+      ['sku-native', 'sku-temporary'].map((id, index) => ({
+        id,
+        name: index ? 'Temporary Linux' : 'Persistent Linux',
+        description: 'Fixture Linux environment',
+        provider: index ? 'modal' : 'e2b',
+        profile: 'small',
+        cpu: 2,
+        memoryGb: 4,
+        region: 'us-east',
+        durationMinutes: [15, 30, 60],
+        approved: true,
+      }));
     if (path === '/api/me')
       return route.fulfill({
         json: {
@@ -90,10 +111,28 @@ async function fixture(page: Page, { failCreateOnce = false, enabled = true } = 
           catalog,
         },
       });
-    if (path === '/api/disks/options')
+    if (path === '/api/disks/options') {
+      await diskOptionsReady;
       return route.fulfill({
-        json: { enabled, mode: 'fixture', eligibleCatalogIds: ['sku-native'] },
+        json: { enabled, mode: 'fixture', eligibleCatalogIds },
       });
+    }
+    if (path === '/api/muse/translate' && translationCatalogId) {
+      writes.push({ path, method, body: request.postDataJSON() });
+      const selected = catalog.find((item) => item.id === translationCatalogId)!;
+      return route.fulfill({
+        json: {
+          proposal: {
+            catalogId: selected.id,
+            region: selected.region,
+            durationMinutes: 30,
+            requirements: { cpu: selected.cpu, memoryGb: selected.memoryGb },
+          },
+          receipt: { observed: [], constraints: [], decision: 'Fixture translation' },
+          mode: 'fixture',
+        },
+      });
+    }
     if (path === '/api/disks' && method === 'GET')
       return route.fulfill({ json: { items: [disk] } });
     if (path === '/api/disks' && method === 'POST') {
@@ -241,14 +280,178 @@ test('filters VM configurations to qualified routes and sends the selected disk'
   );
   await page.goto('/requests/review');
   await page.getByLabel('Workspace disk · optional').selectOption(diskId);
+  await expect(page.getByRole('combobox', { name: /^Configuration\b/ })).toHaveValue('sku-native');
   await expect(
     page
-      .getByLabel('Configuration', { exact: true })
+      .getByRole('combobox', { name: /^Configuration\b/ })
       .getByRole('option', { name: /Temporary Linux/ }),
   ).toHaveCount(0);
   await page.getByRole('button', { name: 'Start 30-second auction' }).click();
   await expect.poll(() => writes.length).toBe(1);
   expect(writes[0]!.body).toMatchObject({ diskId, catalogId: 'sku-native' });
+});
+
+const shapeCatalog: CatalogItem[] = [
+  {
+    id: 'daytona:small:us',
+    name: 'Small · Daytona',
+    description: 'Temporary filesystem',
+    provider: 'daytona',
+    profile: 'small',
+    cpu: 2,
+    memoryGb: 4,
+    region: 'us',
+    durationMinutes: [15, 30, 60],
+    approved: true,
+    capabilities: ['shared-files'],
+  },
+  {
+    id: 'e2b:small:us',
+    name: 'Small · E2B',
+    description: 'Native shared mount',
+    provider: 'e2b',
+    profile: 'small',
+    cpu: 2,
+    memoryGb: 4,
+    region: 'us',
+    durationMinutes: [15, 30, 60],
+    approved: true,
+    capabilities: ['persistent-drives'],
+  },
+  {
+    id: 'modal:large:auto',
+    name: 'Large · Modal',
+    description: 'Larger native shared mount',
+    provider: 'modal',
+    profile: 'large',
+    cpu: 8,
+    memoryGb: 16,
+    region: 'auto',
+    durationMinutes: [15, 30, 60],
+    approved: true,
+    capabilities: ['persistent-drives'],
+  },
+];
+const diskShapes = shapeCatalog.slice(1).map((item) => item.id);
+
+test('waits for disk routes and defaults a new disk-linked rental to a supported shape', async ({
+  page,
+}) => {
+  let releaseOptions!: () => void;
+  const diskOptionsReady = new Promise<void>((resolve) => {
+    releaseOptions = resolve;
+  });
+  const writes = await fixture(page, {
+    catalog: shapeCatalog,
+    eligibleCatalogIds: diskShapes,
+    diskOptionsReady,
+  });
+  try {
+    await page.goto('/new/vm?diskId=' + diskId);
+    await expect(page.getByRole('status')).toHaveText('Checking disk-compatible configurations');
+    await expect(page.getByRole('button', { name: 'Review manually', exact: true })).toHaveCount(0);
+    releaseOptions();
+    await page.getByRole('button', { name: 'Review manually', exact: true }).click();
+    await expect(page).toHaveURL(/\/requests\/review$/);
+    await expect(page.getByRole('combobox', { name: /^Configuration\b/ })).toHaveValue(
+      'e2b:small:us',
+    );
+    await expect(
+      page.getByRole('combobox', { name: /^Configuration\b/ }).getByRole('option'),
+    ).toHaveCount(2);
+    await expect(page.getByRole('combobox', { name: /^Configuration\b/ })).not.toContainText(
+      'Daytona',
+    );
+    await expect(page.getByRole('combobox', { name: /^Configuration\b/ })).toContainText(
+      'Large · Modal',
+    );
+    await expect(page.getByLabel('Workspace disk · optional')).toHaveValue(diskId);
+    await expect(page.getByLabel('Minimum vCPUs', { exact: true })).toHaveValue('2');
+    await expect(page.getByLabel('Minimum memory (GiB)', { exact: true })).toHaveValue('4');
+    await expect(page.getByRole('alert')).toHaveCount(0);
+    expect(writes).toEqual([]);
+  } finally {
+    releaseOptions();
+  }
+});
+
+test('adding a disk preserves an already reviewed configuration and resource requirements', async ({
+  page,
+}) => {
+  const previous = {
+    ...shapeCatalog[0]!,
+    id: 'daytona:large:us',
+    name: 'Large · Daytona',
+    profile: 'large',
+    cpu: 8,
+    memoryGb: 16,
+  };
+  const writes = await fixture(page, {
+    catalog: [...shapeCatalog, previous],
+    eligibleCatalogIds: diskShapes,
+  });
+  await page.addInitScript(() =>
+    sessionStorage.setItem(
+      'wick-draft',
+      JSON.stringify({
+        description: 'Previously reviewed larger environment',
+        catalogId: 'daytona:large:us',
+        region: 'us',
+        durationMinutes: 60,
+        maxPriceCents: 200,
+        requirements: { cpu: 4, memoryGb: 12 },
+      }),
+    ),
+  );
+  await page.goto('/new/vm?diskId=' + diskId);
+  await page.getByRole('button', { name: 'Review manually', exact: true }).click();
+  await expect(page.getByRole('combobox', { name: /^Configuration\b/ })).toHaveValue(
+    'daytona:large:us',
+  );
+  await expect(page.getByLabel('Minimum vCPUs', { exact: true })).toHaveValue('4');
+  await expect(page.getByLabel('Minimum memory (GiB)', { exact: true })).toHaveValue('12');
+  await expect(page.getByRole('alert')).toContainText(
+    'selected configuration cannot mount this disk',
+  );
+  await expect(page.getByRole('button', { name: 'Start 30-second auction' })).toBeDisabled();
+  const saved = await page.evaluate(() => JSON.parse(sessionStorage.getItem('wick-draft')!));
+  expect(saved).toMatchObject({
+    catalogId: 'daytona:large:us',
+    diskId,
+    durationMinutes: 60,
+    requirements: { cpu: 4, memoryGb: 12 },
+  });
+  expect(writes).toEqual([]);
+});
+
+test('rejects an unsupported Muse disk proposal without replacing reviewed requirements', async ({
+  page,
+}) => {
+  const writes = await fixture(page, {
+    catalog: shapeCatalog,
+    eligibleCatalogIds: diskShapes,
+    translationCatalogId: 'daytona:small:us',
+  });
+  await page.goto('/new/vm?diskId=' + diskId);
+  await page.getByLabel('Describe your environment').fill('A shared disk environment');
+  await page.getByRole('button', { name: 'Prepare with Muse' }).click();
+  await expect(page.getByRole('alert')).toContainText('cannot mount this disk');
+  await expect(page).toHaveURL(new RegExp('/new/vm\\?diskId=' + diskId));
+  expect(await page.evaluate(() => sessionStorage.getItem('wick-draft'))).toBeNull();
+  expect(writes.map((write) => write.path)).toEqual(['/api/muse/translate']);
+});
+
+test('shows disk unavailability before preparing a linked VM rental', async ({ page }) => {
+  const writes = await fixture(page, {
+    catalog: shapeCatalog,
+    enabled: false,
+    eligibleCatalogIds: diskShapes,
+  });
+  await page.goto('/new/vm?diskId=' + diskId);
+  await expect(page.getByRole('alert')).toContainText('Disk support is currently unavailable');
+  await expect(page.getByRole('button', { name: 'Review manually', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Prepare with Muse' })).toBeDisabled();
+  expect(writes).toEqual([]);
 });
 
 test('keeps the drawer within a narrow viewport and closes it with Escape', async ({ page }) => {

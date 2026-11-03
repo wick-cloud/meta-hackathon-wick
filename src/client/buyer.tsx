@@ -90,7 +90,10 @@ import { DiskPicker, useDiskOptions } from './disks';
 export function NewEnvironment() {
   const { catalog, modes, user } = useSession(),
     navigate = useNavigate();
-  const copyId = new URLSearchParams(window.location.search).get('copy');
+  const params = new URLSearchParams(window.location.search),
+    copyId = params.get('copy'),
+    linkedDiskId = params.get('diskId') || undefined,
+    diskOptions = useDiskOptions();
   const [description, setDescription] = useState(loadDraft()?.description || ''),
     [busy, setBusy] = useState(false),
     [error, setError] = useState(''),
@@ -132,9 +135,22 @@ export function NewEnvironment() {
       controller.abort();
     };
   }, [copyId]);
-  const approved = catalog.filter((item) => item.approved),
+  const approved = catalog.filter(
+      (item) =>
+        item.approved &&
+        (!linkedDiskId ||
+          (diskOptions.data?.enabled && diskOptions.data.eligibleCatalogIds.includes(item.id))),
+    ),
     first = approved.find((item) => item.profile === 'small') ?? approved[0];
+  const configurationError = linkedDiskId
+    ? diskOptions.error ||
+      (!diskOptions.data?.enabled
+        ? 'Disk support is currently unavailable. Return to Disks to review this disk or try again.'
+        : 'No approved configuration can mount this disk. Review the available disk-compatible configurations before continuing.')
+    : 'No approved configurations are available. Your administrator can approve a catalog configuration.';
   if (copying) return <Spinner label="Loading original request for a new review" />;
+  if (linkedDiskId && diskOptions.loading && !diskOptions.data)
+    return <Spinner label="Checking disk-compatible configurations" />;
   function changeDescription(value: string) {
     setDescription(value);
     const explicit = parseExplicitBuyerDescription(value);
@@ -158,18 +174,14 @@ export function NewEnvironment() {
       return;
     }
     if (!first) {
-      setError(
-        'No approved configurations are available. Your administrator can approve a catalog configuration.',
-      );
+      setError(configurationError);
       return;
     }
     const reviewed = loadDraft();
     if (reviewed) {
       saveDraft({
         description: description.trim(),
-        ...(new URLSearchParams(window.location.search).get('diskId') || reviewed.diskId
-          ? { diskId: new URLSearchParams(window.location.search).get('diskId') || reviewed.diskId }
-          : {}),
+        ...(linkedDiskId || reviewed.diskId ? { diskId: linkedDiskId || reviewed.diskId } : {}),
         catalogId: reviewed.catalogId,
         region: reviewed.region,
         matchAcrossProviders: reviewed.matchAcrossProviders,
@@ -188,9 +200,7 @@ export function NewEnvironment() {
         : undefined) ?? first;
     saveDraft({
       description: description.trim(),
-      ...(new URLSearchParams(window.location.search).get('diskId')
-        ? { diskId: new URLSearchParams(window.location.search).get('diskId')! }
-        : {}),
+      ...(linkedDiskId ? { diskId: linkedDiskId } : {}),
       catalogId: reference.id,
       region: modes.wick === 'real' ? (explicitRegion ?? 'any') : reference.region,
       matchAcrossProviders: modes.wick === 'real',
@@ -205,6 +215,10 @@ export function NewEnvironment() {
     navigate('/requests/review');
   }
   async function translate() {
+    if (!first) {
+      setError(configurationError);
+      return;
+    }
     if (!isMoneyCents(budget) || budget < MIN_ORDER_PRICE_CENTS) {
       setError('Enter a maximum total of at least $0.01.');
       return;
@@ -219,11 +233,13 @@ export function NewEnvironment() {
       const result = await post<Proposal>('/api/muse/translate', {
         description: description.trim(),
       });
+      if (linkedDiskId && !approved.some((item) => item.id === result.proposal.catalogId))
+        throw new Error(
+          'Muse selected a configuration that cannot mount this disk. Use manual review to choose a disk-compatible configuration.',
+        );
       saveDraft({
         ...result.proposal,
-        ...(new URLSearchParams(window.location.search).get('diskId')
-          ? { diskId: new URLSearchParams(window.location.search).get('diskId')! }
-          : {}),
+        ...(linkedDiskId ? { diskId: linkedDiskId } : {}),
         region:
           modes.wick === 'real'
             ? (parseExplicitBuyerDescription(description).region ?? 'any')
@@ -321,7 +337,10 @@ export function NewEnvironment() {
             Explicit budgets in your description fill this field. Your edits take precedence; review
             the amount before continuing.
           </p>
-          <ErrorBox error={error} />
+          <ErrorBox
+            error={error || (linkedDiskId && !first ? configurationError : '')}
+            retry={linkedDiskId && diskOptions.error ? diskOptions.reload : undefined}
+          />
           <div className="composer-actions">
             <button className="button secondary" onClick={manual} disabled={busy || !first}>
               Review manually
@@ -381,7 +400,7 @@ export function NewEnvironment() {
           </span>
         </aside>
       </div>
-      {!first && (
+      {!first && !linkedDiskId && (
         <ErrorBox error="No approved configurations are available. Ask an administrator to approve a supported configuration." />
       )}
     </>
@@ -457,8 +476,17 @@ export function RequestReview() {
         description="Review your environment before providers start bidding."
       />
       <Steps active={1} />
-      {!selected && (
-        <ErrorBox error="The original configuration is no longer approved. Choose an available configuration before starting a new auction." />
+      {!selected && (!draft.diskId || !diskOptions.loading) && (
+        <ErrorBox
+          error={
+            draft.diskId
+              ? diskOptions.error ||
+                (!diskOptions.data?.enabled
+                  ? 'Disk support is currently unavailable. Remove the disk or try again after support is restored.'
+                  : 'The selected configuration cannot mount this disk. Choose an available disk-compatible configuration before starting a new auction.')
+              : 'The original configuration is no longer approved. Choose an available configuration before starting a new auction.'
+          }
+        />
       )}
       <form onSubmit={submit}>
         <div className="review-grid">

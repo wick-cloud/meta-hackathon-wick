@@ -183,6 +183,39 @@ describe('persistent disk native contract', () => {
     ctx.config.disksEnabled = false;
     expect(diskCatalogEligible(ctx, item)).toBe(false);
   });
+  it('enables every approved native-mount shape with the wildcard, including future shapes', () => {
+    const ctx = {
+      config: { disksEnabled: true, diskQualifiedCatalogIds: ['*'] },
+      wick: { mode: 'real', drives: {} },
+    } as unknown as AppContext;
+    const native = { approved: true, capabilities: ['persistent-drives', 'shared-files'] };
+    for (const id of [
+      'e2b:micro:us',
+      'e2b:small:us',
+      'e2b:medium:us',
+      'modal:micro:auto',
+      'modal:small:auto',
+      'modal:medium:auto',
+      'modal:large:auto',
+      'future-provider:larger:new-region',
+    ])
+      expect(diskCatalogEligible(ctx, { ...native, id } as any)).toBe(true);
+    expect(
+      diskCatalogEligible(ctx, { ...native, id: 'e2b:small:us', approved: false } as any),
+    ).toBe(false);
+    expect(
+      diskCatalogEligible(ctx, {
+        ...native,
+        id: 'daytona:small:us',
+        capabilities: ['shared-files'],
+      } as any),
+    ).toBe(false);
+    ctx.config.disksEnabled = false;
+    expect(diskCatalogEligible(ctx, { ...native, id: 'e2b:small:us' } as any)).toBe(false);
+    ctx.config.disksEnabled = true;
+    ctx.wick.drives = undefined;
+    expect(diskCatalogEligible(ctx, { ...native, id: 'e2b:small:us' } as any)).toBe(false);
+  });
   it('accepts the documented native mount path default and rejects an explicit different path', async () => {
     const query = vi.fn(async (sql: string) =>
       sql.startsWith('SELECT')
