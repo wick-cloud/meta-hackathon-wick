@@ -2,6 +2,8 @@
 
 **Status: all eight advertised configurations are qualified and enabled in production.** Boat Large passed a separately bounded retry after its first terminal attempt failed; the cause of that first failure remains unconfirmed. Activation completed at **11:17:29 p.m. America/New_York on November 2, 2026** (`2026-11-03T04:17:29.906Z`). This expands the existing four accounts to every size then advertised by Wick for Sail, Tenki, Freestyle, and Boat.dev, without additional accounts or increased capacity.
 
+The later [capacity receipt](provider-capacity-10-2026-11-02.md) records the operator-requested increase to ten shared slots per account at 11:22:53 p.m. Eastern. Capacity values below describe the earlier qualification and activation operation.
+
 The four initial configurations already passed live qualification and were activated; see the [initial live receipt](provider-live-qualification-2026-11-02.md). This receipt covers the additional Sail Medium/Large and Boat Medium/Large configurations. It preserves the earlier result's original scope.
 
 ## Advertised configurations
@@ -36,7 +38,7 @@ The deployed `configureProviderMarketplace` implementation staged only the four 
 
 Sail and Boat were then explicitly paused for qualification with `autoBid=false` and their allowlists expanded to their three advertised configurations. Each retained capacity one, held slots zero at the pause check, and unchanged saved base/minimum/maximum prices and reserve slots. Tenki and Freestyle require no additional size offering.
 
-**Capacity remains one per provider account, shared across its profiles.** Adding Medium and Large does not give Sail or Boat three concurrent slots. Saved account bases remain Sail $0.0360, Tenki $0.0600, Freestyle $0.1080, and Boat $0.0240.
+**Capacity was one per provider account during this qualification, shared across its profiles.** Adding Medium and Large did not give Sail or Boat three concurrent slots. Saved account bases remain Sail $0.0360, Tenki $0.0600, Freestyle $0.1080, and Boat $0.0240.
 
 The deployed automatic auction formula remains the greater of saved account base, policy minimum, and the requested duration's current compute floor after the 15% commission. A one-slot account bids that effective base without a discount decision. The listing prices are 30-minute display baselines; they do not override that formula. Existing real counteroffer pricing also retains its duration-specific floor and policy minimum. No saved price limits or production pricing code changed in this size expansion.
 
