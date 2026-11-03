@@ -81,6 +81,11 @@ import {
 import { AgentBuying, BuyingReceipt } from './buying';
 import { ProviderSupply, SupplyWindow } from './supply';
 import type { AgentListItem } from '../shared/buying';
+import {
+  buildInferenceJavaScriptExample,
+  exampleOutputBudget,
+  OUTPUT_LIMIT_GUIDANCE,
+} from './inference-examples';
 
 const count = (n: number) => n.toLocaleString('en-US');
 const providerName = (provider: string) =>
@@ -711,7 +716,25 @@ export function AgentDetail({ id, search = '' }: { id: string; search?: string }
     grant = detail?.grant;
   const active = grant?.status === 'active' && Date.parse(grant.expiresAt) > Date.now();
   const baseURL = `${window.location.origin}/api/v1`;
-  const setup = `import OpenAI from 'openai';\n\nconst client = new OpenAI({\n  apiKey: process.env.BROKER_API_KEY,\n  baseURL: '${baseURL}',\n  maxRetries: 0,\n});\n\n// Keep this ID unchanged when recovering this request.\nconst requestId = crypto.randomUUID();\nconst response = await client.chat.completions.create({\n  model: '${INFERENCE_MODEL_ID}',\n  messages: [{ role: 'user', content: 'Hello!' }],\n  max_tokens: 256,\n  stream: false,\n}, { headers: { 'Idempotency-Key': requestId } });\nconsole.log(response.choices[0].message.content);`;
+  const exampleRoutes =
+    detail?.catalog.routes.filter(
+      (route) => route.qualified && grant?.allowedProviders.includes(route.provider),
+    ) ?? [];
+  const exampleMaxTokens = exampleRoutes.reduce<number | null>((best, route) => {
+    const limit = exampleOutputBudget({
+      minimumOutputTokens: route.minimumOutputTokens,
+      maximumOutputTokens: route.maximumOutputTokens,
+    });
+    return limit === null ? best : Math.max(best ?? 0, limit);
+  }, null);
+  const setup =
+    exampleMaxTokens === null
+      ? null
+      : buildInferenceJavaScriptExample({
+          baseURL,
+          model: INFERENCE_MODEL_ID,
+          maxOutputTokens: exampleMaxTokens,
+        });
   function open(next: 'fund' | 'close' | 'key') {
     setError('');
     setNotice('');
@@ -877,14 +900,29 @@ export function AgentDetail({ id, search = '' }: { id: string; search?: string }
                     <summary>JavaScript setup example</summary>
                     <p>
                       Install <code>openai</code> and supply <code>BROKER_API_KEY</code> through
-                      your secret manager. Purchase a pack first.
+                      your secret manager. Save the example as <code>example.mjs</code> and run{' '}
+                      <code>node example.mjs</code>. Purchase a pack first.
                     </p>
-                    <pre tabIndex={0}>{setup}</pre>
-                    <CopyButton text={setup} label="Copy example" />
+                    <p>{OUTPUT_LIMIT_GUIDANCE}</p>
+                    {setup ? (
+                      <>
+                        <p>
+                          Purchase compatible quota with at least {count(exampleMaxTokens!)} output
+                          tokens for this example.
+                        </p>
+                        <pre tabIndex={0}>{setup}</pre>
+                        <CopyButton text={setup} label="Copy example" />
+                      </>
+                    ) : (
+                      <p role="status">
+                        No qualified provider route supports this example. Check provider
+                        availability before calling.
+                      </p>
+                    )}
                   </details>
                   <p className="inference-muted">
-                    Text chat · buffered responses · explicit output limit. Keep request IDs stable
-                    across retries.{' '}
+                    Text chat · buffered responses · explicit output limit. Save the operation ID to
+                    investigate a timeout. Examples never retry automatically.{' '}
                     {detail.catalog.mode === 'fixture'
                       ? 'This agent returns fixture responses.'
                       : 'Calls require a qualified route and sufficient token quota.'}

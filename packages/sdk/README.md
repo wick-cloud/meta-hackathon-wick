@@ -114,16 +114,28 @@ if (outcome.state === 'complete' && outcome.resource?.order.status === 'awarded'
     {
       model: 'meta/muse-spark-open',
       messages: [{ role: 'user', content: 'Summarize this text.' }],
-      max_tokens: 512,
+      max_tokens: 2048,
       stream: false,
     },
     { operationKey: 'task-completion-001' },
   );
-  console.log(result.choices[0]?.message.content);
+  const choice = result.choices[0];
+  const text = choice?.message.content?.trim() ?? '';
+  if (!text || choice?.finish_reason === 'length') {
+    console.warn(text ? 'Partial answer: output limit reached.' : 'No visible answer returned.');
+    console.warn('Reported usage still consumes prepaid quota. No automatic retry was made.');
+    if (text) console.log(text);
+  } else {
+    console.log(text);
+  }
 }
 ```
 
-An awarded pack charges its displayed price once. Completions consume that pack’s independent input/output quota without another wallet charge. The output cap includes reasoning. Both token reservations must fit one eligible pack; quotas cannot be combined across providers. Ordinary unused quota is non-refundable. Exhaustion requires an explicit new purchase, within the same grant budget. The client never buys automatically.
+An awarded pack charges its displayed price once. Completions consume that pack’s independent input/output quota without another wallet charge.
+
+The output cap includes both reasoning and visible answer tokens. Start with `max_tokens: 2048` when the qualified route and available prepaid quota support it; a larger cap improves answer headroom but does not guarantee a final answer. Check the route’s minimum/maximum output limits and available quota before calling. A smaller cap can be consumed entirely by reasoning, returning HTTP 200 with empty content and `finish_reason: "length"`; reported usage still settles and consumes quota. Inspect both `finish_reason` and nonempty text before treating the response as a usable answer.
+
+Both token reservations must fit compatible prepaid quota; quotas cannot be combined across providers. Ordinary unused quota is non-refundable. Exhaustion requires an explicit new purchase, within the same grant budget. The client never buys automatically. It also never automatically repeats a completion to obtain a visible answer. After a settled empty or partial response, the caller may explicitly choose a new call with a larger supported cap and a new operation key; that call consumes additional quota. This differs from recovering a timeout or unknown outcome, which retains the original operation key.
 
 `inference.quote({inputTokens, outputTokens})` returns expiring instant quotes without a financial commitment. An instant order additionally requires `mode: 'instant'` and the reviewed `quoteId`. Use `inference.packs({limit, cursor})` to inspect held and available quota, and `inference.receipt(requestId)` to inspect settlement. Provider methods are `provider.inference.offering()`, `updateOffering(input, {operationKey})` and `packs({limit, cursor})`.
 

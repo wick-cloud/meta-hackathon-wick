@@ -43,10 +43,25 @@ function pack(id: string, changes: Partial<TokenPack> = {}): TokenPack {
 }
 async function fixture(
   page: Page,
-  options: { failOnce?: boolean; expiresIn?: number; paged?: boolean; wallet?: boolean } = {},
+  options: {
+    failOnce?: boolean;
+    expiresIn?: number;
+    paged?: boolean;
+    wallet?: boolean;
+    availableOutputTokens?: number;
+    availableInputTokens?: number;
+    minimumOutputTokens?: number;
+    maximumOutputTokens?: number;
+  } = {},
 ) {
   const first = pack(a, {
       ...(options.wallet ? ({ fundingSource: 'wallet' } as const) : {}),
+      ...(options.availableInputTokens === undefined
+        ? {}
+        : { availableInputTokens: options.availableInputTokens }),
+      ...(options.availableOutputTokens === undefined
+        ? {}
+        : { availableOutputTokens: options.availableOutputTokens }),
       ...(options.expiresIn ? { expiresAt: new Date(+now + options.expiresIn).toISOString() } : {}),
     }),
     second = pack(b, { provider: 'baseten', createdAt: new Date(+now - 1000).toISOString() });
@@ -71,6 +86,23 @@ async function fixture(
           },
           modes: { wick: 'fixture', muse: 'fixture' },
           catalog: [],
+        },
+      });
+    if (path === '/api/inference/models')
+      return route.fulfill({
+        json: {
+          enabled: true,
+          mode: 'fixture',
+          models: [{ id: first.modelId, name: 'Meta Muse Spark Open' }],
+          routes: ['modal', 'baseten'].map((provider) => ({
+            provider,
+            modelId: first.modelId,
+            mode: 'fixture',
+            qualified: true,
+            minimumInputReservation: 1000,
+            minimumOutputTokens: options.minimumOutputTokens ?? 1,
+            maximumOutputTokens: options.maximumOutputTokens ?? 4096,
+          })),
         },
       });
     if (path === '/api/inference/packs') {
@@ -179,8 +211,8 @@ test('a batch connection reveals its key once without placing that secret into s
   );
   await expect(dialog.getByRole('link', { name: 'Open your VMs' })).toHaveAttribute('href', '/vms');
   const code = await dialog.locator('pre').innerText();
-  expect(code).toContain('OPENAI_API_KEY="<your batch key>"');
-  expect(code).toContain('Idempotency-Key: $BROKER_OPERATION_KEY');
+  expect(code).toContain('apiKey: process.env.BROKER_API_KEY');
+  expect(code).toContain("'Idempotency-Key': requestId");
   expect(code).not.toContain(secret);
   expect(page.url()).not.toContain(secret);
   expect(await page.evaluate(() => JSON.stringify([localStorage, sessionStorage]))).not.toContain(
@@ -192,6 +224,57 @@ test('a batch connection reveals its key once without placing that secret into s
   await expect(page.getByRole('dialog')).toHaveCount(0);
   await expect(page.getByLabel('New batch API key')).toHaveCount(0);
   await expect(page).toHaveURL(/\/tokens$/);
+});
+
+test('batch connection explains output limits and copies a runnable quota-bounded example', async ({
+  page,
+}) => {
+  const f = await fixture(page, { availableOutputTokens: 1200, maximumOutputTokens: 1024 });
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+  await page.goto(`/tokens?connect=${a}`);
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toContainText('Output tokens include reasoning and the visible answer');
+  await expect(dialog).toContainText('Reaching the limit can leave an empty or partial answer');
+  await expect(dialog).toContainText('generated tokens still consume quota');
+  await dialog.getByRole('button', { name: 'Create or replace batch key' }).click();
+  const code = await dialog.locator('pre').innerText();
+  expect(code).toContain('max_tokens: 1024');
+  expect(code).toContain('maxRetries: 0');
+  expect(code).toContain('No automatic retry was made');
+  expect(code).not.toContain(secret);
+  await dialog.getByRole('button', { name: 'Copy setup example' }).click();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(code);
+  expect(f.writes.map((write) => write.path)).toEqual([`/api/inference/packs/${a}/keys`]);
+});
+
+test('remaining batch output below the route minimum withholds an invalid example', async ({
+  page,
+}) => {
+  const f = await fixture(page, { availableOutputTokens: 255, minimumOutputTokens: 256 });
+  await page.goto(`/tokens?connect=${a}`);
+  const dialog = page.getByRole('dialog');
+  await expect(
+    dialog.getByRole('status').filter({ hasText: 'Insufficient output allowance' }),
+  ).toContainText('Insufficient output allowance for a valid call');
+  await dialog.getByRole('button', { name: 'Create or replace batch key' }).click();
+  await expect(dialog.getByLabel('New batch API key')).toHaveValue(secret);
+  await expect(dialog.locator('pre')).toHaveCount(0);
+  await expect(dialog.getByRole('button', { name: 'Copy setup example' })).toHaveCount(0);
+  expect(f.writes.map((write) => write.path)).toEqual([`/api/inference/packs/${a}/keys`]);
+});
+
+test('batch input below the starter reservation withholds a call even with enough output', async ({
+  page,
+}) => {
+  const f = await fixture(page, { availableInputTokens: 999, availableOutputTokens: 4096 });
+  await page.goto(`/tokens?connect=${a}`);
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toContainText('Insufficient input allowance');
+  await dialog.getByRole('button', { name: 'Create or replace batch key' }).click();
+  await expect(dialog.getByLabel('New batch API key')).toHaveValue(secret);
+  await expect(dialog.locator('pre')).toHaveCount(0);
+  await expect(dialog.getByRole('button', { name: 'Copy setup example' })).toHaveCount(0);
+  expect(f.writes.map((write) => write.path)).toEqual([`/api/inference/packs/${a}/keys`]);
 });
 
 test('a wallet purchase connects without an agent and keeps its batch-only key boundaries', async ({
@@ -210,7 +293,7 @@ test('a wallet purchase connects without an agent and keeps its batch-only key b
   await dialog.getByRole('button', { name: 'Create or replace batch key' }).click();
   await expect(dialog.getByLabel('New batch API key')).toHaveValue(secret);
   await expect(dialog).toContainText('It cannot buy tokens, add funding or access VM controls.');
-  await expect(dialog.locator('pre')).toContainText('OPENAI_API_KEY="<your batch key>"');
+  await expect(dialog.locator('pre')).toContainText('apiKey: process.env.BROKER_API_KEY');
   await expect(dialog.locator('pre')).not.toContainText(secret);
   expect(f.writes.map((write) => write.path)).toEqual([`/api/inference/packs/${a}/keys`]);
   expect(f.reads.some((path) => path.includes('/inference/grants'))).toBe(false);

@@ -1085,6 +1085,16 @@ test('agent setup and purchase form fit a narrow viewport and preserve back navi
   await page.getByRole('link', { name: 'Connection', exact: true }).click();
   await page.getByText('JavaScript setup example', { exact: true }).click();
   await expect(page.locator('.inference-code-details pre')).toContainText('/api/v1');
+  await expect(page.locator('.inference-code-details')).toContainText(
+    'Output tokens include reasoning and the visible answer',
+  );
+  await expect(page.locator('.inference-code-details pre')).toContainText('max_tokens: 2048');
+  await expect(page.locator('.inference-code-details pre')).toContainText('maxRetries: 0');
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+  await page.getByRole('button', { name: 'Copy example', exact: true }).click();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
+    await page.locator('.inference-code-details pre').innerText(),
+  );
   await expect(page.locator('.inference-code-details pre')).toContainText(
     "'Idempotency-Key': requestId",
   );
