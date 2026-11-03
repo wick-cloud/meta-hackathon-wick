@@ -161,6 +161,7 @@ async function fixture(page: Page, initial = state()) {
         return route.fulfill({ status: 503, json: { error: 'Start could not be confirmed.' } });
       current = state(receipt('auction'));
       current.run!.kind = request.postDataJSON().kind ?? 'terminal';
+      current.run!.demoName = request.postDataJSON().demoName ?? '';
       if (current.run!.kind === 'studio') current.run!.studio = studioReceipt('waiting').studio;
       if (startHold) {
         const started = current;
@@ -859,3 +860,27 @@ for (const width of [1440, 390, 320]) {
     expect(f.writes.map((w) => w.path)).toEqual(['/api/demo/start']);
   });
 }
+
+test('Studio offers Hello World and an optional name while the task stays read-only', async ({
+  page,
+}) => {
+  const f = await fixture(page);
+  await page.goto('/demos');
+  await expect(page.getByLabel('Choose a task')).toHaveValue('hello-world');
+  await page.getByLabel('Your name (optional)').fill('Alex');
+  await expect(page.getByRole('textbox', { name: 'Your Muse task', exact: true })).toHaveValue(
+    'Create hello_world.py that prints Hello, Alex! Run it and verify the output.',
+  );
+  await expect(page.getByRole('textbox', { name: 'Your Muse task', exact: true })).toHaveAttribute(
+    'readonly',
+    '',
+  );
+  await page.screenshot({ path: 'verification-results/demo-pool/name-task.png', fullPage: true });
+  await page.getByRole('button', { name: 'Start Muse Studio demo', exact: true }).click();
+  await expect(
+    page.locator('#live-demo').getByRole('textbox', { name: 'Your Muse task', exact: true }),
+  ).toHaveValue('Create hello_world.py that prints Hello, Alex! Run it and verify the output.');
+  expect(f.writes).toHaveLength(1);
+  expect(f.writes[0]!.body.demoName).toBe('Alex');
+  await expect(page.getByLabel('Your name (optional)')).toBeDisabled();
+});

@@ -175,7 +175,18 @@ export async function startDemo(
   identity: DemoIdentity,
   operationKey: string,
   kind: 'terminal' | 'studio' = 'terminal',
+  demoName = '',
 ): Promise<Row> {
+  demoName = demoName.trim();
+  if (
+    demoName.length > 40 ||
+    !/^[\p{L}\p{N} .'-]*$/u.test(demoName) ||
+    (kind !== 'studio' && demoName)
+  )
+    throw new HttpError(
+      400,
+      'Enter a name of up to 40 letters, numbers, spaces, periods, apostrophes or hyphens.',
+    );
   clientOperationKey(operationKey, true);
   if (!demoModeAllowed(ctx)) throw new HttpError(409, 'The live demo is unavailable.');
   // An accepted retry is read-only even if a provider subsequently becomes unavailable.
@@ -187,7 +198,7 @@ export async function startDemo(
     )
   ).rows[0];
   if (prior) {
-    if (prior.kind !== kind)
+    if (prior.kind !== kind || prior.demo_name !== demoName)
       throw new HttpError(409, 'This operation key belongs to a different demo kind.');
     return prior;
   }
@@ -203,7 +214,7 @@ export async function startDemo(
       )
     ).rows[0];
     if (existing) {
-      if (existing.kind !== kind)
+      if (existing.kind !== kind || existing.demo_name !== demoName)
         throw new HttpError(409, 'This operation key belongs to a different demo kind.');
       return existing;
     }
@@ -256,8 +267,8 @@ export async function startDemo(
     });
     const run = (
       await db.query(
-        `INSERT INTO broker_demo_runs(id,visitor_id,buyer_id,ip_digest,operation_key,source_mode,budget_day,grant_id,expires_at,kind)
-      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+        `INSERT INTO broker_demo_runs(id,visitor_id,buyer_id,ip_digest,operation_key,source_mode,budget_day,grant_id,expires_at,kind,demo_name)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
         [
           id,
           visitor.id,
@@ -269,6 +280,7 @@ export async function startDemo(
           grant.id,
           expiresAt,
           kind,
+          demoName,
         ],
       )
     ).rows[0];
@@ -476,6 +488,7 @@ export async function demoState(
     run = {
       id: row.id,
       kind: row.kind,
+      demoName: row.demo_name,
       studio: studio
         ? {
             status: studio.status,

@@ -10,6 +10,12 @@ const startMutation = z
   .object({
     operationKey: operationSchema,
     kind: z.enum(['terminal', 'studio']).default('terminal'),
+    demoName: z
+      .string()
+      .trim()
+      .max(40)
+      .regex(/^[\p{L}\p{N} .'-]*$/u)
+      .default(''),
   })
   .strict();
 const mutation = z.object({ operationKey: operationSchema }).strict();
@@ -57,7 +63,7 @@ export async function registerDemo(app: FastifyInstance, ctx: AppContext) {
     const input = startMutation.parse(request.body);
     const identity = createDemoIdentity(ctx, request, reply);
     try {
-      await startDemo(ctx, identity, input.operationKey, input.kind);
+      await startDemo(ctx, identity, input.operationKey, input.kind, input.demoName);
     } catch (error) {
       // A losing parallel first-start must not overwrite the winning browser cookie.
       reply.removeHeader('Set-Cookie');

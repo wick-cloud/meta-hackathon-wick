@@ -14,6 +14,7 @@ export interface DemoRun {
   id: string;
   /** Older saved receipts without a kind are terminal demos. */
   kind?: DemoKind;
+  demoName?: string;
   status: 'starting' | 'auction' | 'provisioning' | 'ready' | 'ending' | 'ended' | 'failed';
   message: string;
   createdAt: string;
