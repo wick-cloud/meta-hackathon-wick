@@ -82,7 +82,7 @@ WITH eligible_auction_ids AS MATERIALIZED (
  COALESCE(b.total_price_cents,r.max_price_cents) AS amount_cents,
  NULL::int AS committed_cents,NULL::int AS reserved_cents,v.id AS vm_id,
  (r.status IN ('no_offers','failed','cancelled') AND (v.id IS NULL OR v.cleanup_confirmed_at IS NOT NULL)) AS can_retry,
- NULL::uuid AS grant_id,NULL::int AS input_tokens,NULL::int AS output_tokens,NULL::text AS token_mode
+ NULL::uuid AS grant_id,NULL::int AS input_tokens,NULL::int AS output_tokens,NULL::text AS token_mode,NULL::text AS funding_source
  FROM auction_ids ids
  JOIN LATERAL (SELECT id,buyer_id,description,status,created_at,closes_at,winning_bid_id,max_price_cents,source_api_key_id
    FROM broker_requests WHERE id=ids.id OFFSET 0) r ON true
@@ -99,7 +99,7 @@ WITH eligible_auction_ids AS MATERIALIZED (
  NULL::text AS auction_status,NULL::text AS vm_status,false AS cleanup_pending,NULL::timestamptz AS closes_at,a.expires_at,
  a.target_quantity,0::int AS approved_quantity,0::int AS running_quantity,
  a.max_amount_cents AS amount_cents,a.committed_cents,a.reserved_cents,NULL::uuid AS vm_id,false AS can_retry,
- NULL::uuid AS grant_id,NULL::int AS input_tokens,NULL::int AS output_tokens,NULL::text AS token_mode
+ NULL::uuid AS grant_id,NULL::int AS input_tokens,NULL::int AS output_tokens,NULL::text AS token_mode,NULL::text AS funding_source
  FROM broker_agreements a WHERE a.buyer_id=$1 AND $7::text IN ('all','agreement')
  AND ($2::timestamptz IS NULL OR (a.created_at,'agreement'::text,a.id)<($2::timestamptz,$3::text,$4::uuid))
  AND ($6::timestamptz IS NULL OR a.created_at>=$6::timestamptz)
@@ -113,7 +113,7 @@ WITH eligible_auction_ids AS MATERIALIZED (
  false AS cleanup_pending,t.closes_at,t.expires_at,1::int AS target_quantity,
  CASE WHEN t.status='awarded' THEN 1 ELSE 0 END AS approved_quantity,0::int AS running_quantity,
  COALESCE(t.price_cents,t.max_total_cents) AS amount_cents,NULL::int AS committed_cents,NULL::int AS reserved_cents,
- NULL::uuid AS vm_id,false AS can_retry,t.grant_id,t.input_tokens,t.output_tokens,t.mode AS token_mode
+ NULL::uuid AS vm_id,false AS can_retry,t.grant_id,t.input_tokens,t.output_tokens,t.mode AS token_mode,t.funding_source
  FROM broker_token_orders t WHERE t.buyer_id=$1 AND $7::text IN ('all','token')
  AND ($2::timestamptz IS NULL OR(t.created_at,'token'::text,t.id)<($2::timestamptz,$3::text,$4::uuid))
  AND ($6::timestamptz IS NULL OR t.created_at>=$6::timestamptz)
@@ -209,6 +209,7 @@ export async function listOrders(
             outputTokens: r.output_tokens,
             tokenMode: r.token_mode,
             grantId: r.grant_id,
+            fundingSource: r.funding_source,
           }
         : {}),
       ...(r.source_api_key_id

@@ -16,6 +16,7 @@ import {
   receiptView,
 } from '../inference/data.js';
 import { completeCodingJob } from '../inference/gateway.js';
+import { requireAgentFunding } from '../inference/grants.js';
 import { iso, pagination, encodeCursor, type Row } from '../marketplace/data.js';
 import { operationFingerprint } from '../operations.js';
 import {
@@ -109,7 +110,7 @@ export async function createCodingJob(
     await ctx.pool.query(
       `SELECT 1 FROM broker_vms v JOIN broker_inference_grants g ON g.id=$3 AND g.buyer_id=$1
     WHERE v.id=$2 AND v.buyer_id=$1 AND v.status='running' AND v.expires_at>clock_timestamp()+interval '30 seconds'
-    AND g.status='active' AND g.expires_at>clock_timestamp()+interval '30 seconds'`,
+    AND g.funding_source='agent' AND g.status='active' AND g.expires_at>clock_timestamp()+interval '30 seconds'`,
       [actor.id, input.vmId, input.grantId],
     )
   ).rowCount;
@@ -122,6 +123,7 @@ export async function createCodingJob(
   const job = await transaction(ctx.pool, async (db) => {
     await authority(db, actor);
     const grant = await lockedGrant(db, actor, input.grantId, true);
+    requireAgentFunding(grant);
     activeMode(ctx, grant);
     const studioTask = studio ? await studioAuthority(db, studio, actor) : null;
     if (

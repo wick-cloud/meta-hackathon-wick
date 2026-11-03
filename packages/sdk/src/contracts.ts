@@ -102,11 +102,33 @@ const desiredProperties = {
 };
 const inferenceProvider: JsonSchema = { type: 'string', enum: ['modal', 'baseten'] };
 const inferenceMode: JsonSchema = { type: 'string', enum: ['fixture', 'real'] };
+const inferenceRecord = (
+  properties: Record<string, JsonSchema>,
+  optional: Record<string, JsonSchema> = {},
+): JsonSchema =>
+  object(
+    {
+      ...properties,
+      fundingSource: {
+        type: 'string',
+        enum: ['agent', 'wallet'],
+        description:
+          'Wallet purchases do not require an agent. Missing on older responses means agent funding.',
+      },
+      ...optional,
+    },
+    Object.keys(properties),
+  );
+
 const tokens: JsonSchema = { type: 'integer', minimum: 0, maximum: Number.MAX_SAFE_INTEGER };
 const positiveTokens: JsonSchema = { ...tokens, minimum: 1 };
 const tokenQuoteId: JsonSchema = { type: 'string', minLength: 1, maxLength: 4000 };
 const tokenQuoteProperties = {
-  grantId: id,
+  grantId: {
+    ...id,
+    description:
+      'For owner sessions, omit to purchase directly from the Broker wallet. Agent keys always use their bound grant.',
+  },
   modelId: { const: 'meta/muse-spark-open' },
   inputTokens: { ...positiveTokens, maximum: 10_000_000 },
   outputTokens: { ...positiveTokens, maximum: 1_000_000 },
@@ -153,7 +175,7 @@ export const BROKER_API_SCHEMAS: Record<string, JsonSchema> = {
     minimumInputReservation: tokens,
     maximumOutputTokens: positiveTokens,
   }),
-  InferenceGrant: object({
+  InferenceGrant: inferenceRecord({
     id,
     name: string,
     status: { type: 'string', enum: ['active', 'closing', 'closed'] },
@@ -211,18 +233,21 @@ export const BROKER_API_SCHEMAS: Record<string, JsonSchema> = {
     catalog: ref('InferenceCatalog'),
   }),
   TokenQuoteInput: object(tokenQuoteProperties, ['inputTokens', 'outputTokens']),
-  TokenQuote: object({
-    quoteId: tokenQuoteId,
-    grantId: id,
-    provider: inferenceProvider,
-    modelId: id,
-    inputTokens: positiveTokens,
-    outputTokens: positiveTokens,
-    priceCents: cents,
-    costFloorCents: cents,
-    expiresAt: date,
-    mode: inferenceMode,
-  }),
+  TokenQuote: inferenceRecord(
+    {
+      quoteId: tokenQuoteId,
+      grantId: { type: ['string', 'null'] },
+      provider: inferenceProvider,
+      modelId: id,
+      inputTokens: positiveTokens,
+      outputTokens: positiveTokens,
+      priceCents: cents,
+      costFloorCents: cents,
+      expiresAt: date,
+      mode: inferenceMode,
+    },
+    { packExpiresAt: date },
+  ),
   TokenQuotes: object({ items: arr(ref('TokenQuote')) }),
   TokenOrderInput: object(
     {
@@ -234,7 +259,7 @@ export const BROKER_API_SCHEMAS: Record<string, JsonSchema> = {
     },
     ['operationKey', 'inputTokens', 'outputTokens', 'mode', 'maxTotalCents'],
   ),
-  TokenOrder: object({
+  TokenOrder: inferenceRecord({
     id,
     grantId: id,
     mode: { type: 'string', enum: ['auction', 'instant'] },
@@ -259,7 +284,7 @@ export const BROKER_API_SCHEMAS: Record<string, JsonSchema> = {
     mode: inferenceMode,
     createdAt: date,
   }),
-  TokenPack: object({
+  TokenPack: inferenceRecord({
     id,
     orderId: id,
     grantId: id,
@@ -652,6 +677,7 @@ export const BROKER_API_SCHEMAS: Record<string, JsonSchema> = {
       outputTokens: tokens,
       modelId: id,
       tokenMode: { type: 'string', enum: ['auction', 'instant'] },
+      fundingSource: { type: 'string', enum: ['agent', 'wallet'] },
       reference: string,
       title: string,
       status: string,
@@ -1273,8 +1299,7 @@ export const BROKER_OPERATION_SCHEMAS: Record<string, OperationSchema> = {
   },
   'POST /api/token-orders': {
     operationId: 'createTokenOrder',
-    summary:
-      'Buy a prepaid pack through an auction or an exact instant quote within the bound grant',
+    summary: 'Buy a prepaid pack using the owner wallet or a funded agent grant',
     input: 'TokenOrderInput',
     output: 'TokenOrder',
   },

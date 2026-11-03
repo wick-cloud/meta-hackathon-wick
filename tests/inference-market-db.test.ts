@@ -44,6 +44,7 @@ import {
 import {
   createTokenOrder,
   closeTokenAuction,
+  closeGrantLocked,
   initializeInference,
   quotes,
   tokenOrderDetail,
@@ -284,6 +285,500 @@ describe.skipIf(!url)(
         ...extra,
       });
     }
+    const walletQuantities = { inputTokens: 10000, outputTokens: 1000 };
+    async function buyWithWallet() {
+      const quote = (await quotes(ctx, owner, walletQuantities)).items[0]!;
+      expect(quote).toBeDefined();
+      const order = await createTokenOrder(ctx, owner, {
+        ...walletQuantities,
+        operationKey: randomUUID(),
+        mode: 'instant',
+        quoteId: quote.quoteId,
+        maxTotalCents: quote.priceCents,
+      });
+      return { quote, ...(await tokenOrderDetail(ctx, owner, order.id)) };
+    }
+    async function walletScopeCount() {
+      return (
+        await pool.query(
+          "SELECT count(*)::int n FROM broker_inference_grants WHERE funding_source='wallet'",
+        )
+      ).rows[0].n;
+    }
+    it('quotes wallet purchases for an owner with no agents without reserving credit or creating records', async () => {
+      const before = await creditWalletView(pool, owner.id);
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/inference/quotes',
+        headers: { cookie, origin },
+        payload: walletQuantities,
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json().items.length).toBeGreaterThan(0);
+      for (const quote of response.json().items) {
+        expect(quote).toMatchObject({ grantId: null, fundingSource: 'wallet' });
+        expect(Date.parse(quote.packExpiresAt)).toBeGreaterThan(Date.now() + 7190_000);
+        expect(Date.parse(quote.packExpiresAt)).toBeLessThanOrEqual(Date.now() + 7200_000);
+      }
+      expect(await walletScopeCount()).toBe(0);
+      expect((await pool.query('SELECT count(*)::int n FROM broker_token_orders')).rows[0].n).toBe(
+        0,
+      );
+      expect(await creditWalletView(pool, owner.id)).toEqual(before);
+      expect(
+        (
+          await app.inject({
+            method: 'POST',
+            url: '/api/inference/quotes',
+            headers: { cookie },
+            payload: walletQuantities,
+          })
+        ).statusCode,
+      ).toBe(403);
+    });
+    it('atomically purchases one wallet pack across concurrent retries and preserves exact prices', async () => {
+      await pool.query('UPDATE broker_token_offerings SET minimum_price_cents=123.45');
+      const quote = (await quotes(ctx, owner, walletQuantities)).items[0]!;
+      const input = {
+        ...walletQuantities,
+        mode: 'instant',
+        maxTotalCents: quote.priceCents,
+        quoteId: quote.quoteId,
+        operationKey: randomUUID(),
+      };
+      const [a, b] = await Promise.all([
+        createTokenOrder(ctx, owner, input),
+        createTokenOrder(ctx, owner, input),
+      ]);
+      expect(a.id).toBe(b.id);
+      expect(a).toMatchObject({
+        status: 'awarded',
+        fundingSource: 'wallet',
+        priceCents: 123.45,
+        expiresAt: quote.packExpiresAt,
+      });
+      expect(await walletScopeCount()).toBe(1);
+      expect((await pool.query('SELECT count(*)::int n FROM broker_token_orders')).rows[0].n).toBe(
+        1,
+      );
+      expect((await pool.query('SELECT count(*)::int n FROM broker_token_packs')).rows[0].n).toBe(
+        1,
+      );
+      expect(await creditWalletView(pool, owner.id)).toMatchObject({
+        balanceCents: 4876.55,
+        reservedCents: 0,
+        availableCents: 4876.55,
+      });
+      const detail = await tokenOrderDetail(ctx, owner, a.id);
+      expect(detail.pack).toMatchObject({
+        fundingSource: 'wallet',
+        expiresAt: quote.packExpiresAt,
+      });
+      expect(detail.grant).toMatchObject({
+        fundingSource: 'wallet',
+        status: 'active',
+        heldCents: 0,
+        availableCents: 0,
+        spentCents: 123.45,
+      });
+      expect((await listGrants(ctx, owner, {})).items).toHaveLength(0);
+      expect((await listAgents(ctx, owner, {})).items).toHaveLength(0);
+      expect((await scopedPacks(ctx, owner, {})).items[0]).toMatchObject({
+        id: detail.pack!.id,
+        fundingSource: 'wallet',
+      });
+      expect((await listOrders(ctx, owner.id, {})).items[0]).toMatchObject({
+        fundingSource: 'wallet',
+      });
+      await expect(
+        createTokenOrder(ctx, owner, { ...input, outputTokens: input.outputTokens + 1 }),
+      ).rejects.toMatchObject({ statusCode: 409, code: 'operation_conflict' });
+      expect(await walletScopeCount()).toBe(1);
+    });
+    it('rolls back wallet scopes and reservations for insufficient credit, stale quotes and foreign quotes', async () => {
+      const quote = (await quotes(ctx, owner, walletQuantities)).items[0]!;
+      const input = {
+        ...walletQuantities,
+        mode: 'instant',
+        maxTotalCents: quote.priceCents,
+        quoteId: quote.quoteId,
+        operationKey: randomUUID(),
+      };
+      await expect(createTokenOrder(ctx, other, input)).rejects.toMatchObject({ statusCode: 409 });
+      await expect(
+        createTokenOrder(ctx, owner, {
+          ...walletQuantities,
+          mode: 'auction',
+          maxTotalCents: 5001,
+          operationKey: randomUUID(),
+        }),
+      ).rejects.toMatchObject({ statusCode: 409 });
+      await pool.query('UPDATE broker_token_offerings SET revision=revision+1');
+      await expect(createTokenOrder(ctx, owner, input)).rejects.toMatchObject({ statusCode: 409 });
+      expect(await walletScopeCount()).toBe(0);
+      expect((await pool.query('SELECT count(*)::int n FROM broker_token_orders')).rows[0].n).toBe(
+        0,
+      );
+      expect(await creditWalletView(pool, owner.id)).toMatchObject({
+        balanceCents: 5000,
+        availableCents: 5000,
+        reservedCents: 0,
+      });
+      expect(await creditWalletView(pool, other.id)).toMatchObject({
+        balanceCents: 5000,
+        availableCents: 5000,
+        reservedCents: 0,
+      });
+    });
+    it('returns the unused wallet auction ceiling immediately and keeps purchased quota usable', async () => {
+      const input = {
+        ...walletQuantities,
+        mode: 'auction',
+        maxTotalCents: 100,
+        operationKey: randomUUID(),
+      };
+      const order = await createTokenOrder(ctx, owner, input);
+      expect(await creditWalletView(pool, owner.id)).toMatchObject({
+        balanceCents: 5000,
+        reservedCents: 100,
+        availableCents: 4900,
+      });
+      await pool.query(
+        "UPDATE broker_token_orders SET closes_at=clock_timestamp()-interval '1 second' WHERE id=$1",
+        [order.id],
+      );
+      await closeTokenAuction(ctx, order.id);
+      await closeTokenAuction(ctx, order.id);
+      const detail = await tokenOrderDetail(ctx, owner, order.id);
+      expect(detail.order.status).toBe('awarded');
+      expect(detail.pack!.priceCents).toBeLessThan(100);
+      expect(await creditWalletView(pool, owner.id)).toMatchObject({
+        balanceCents: Number((5000 - detail.pack!.priceCents).toFixed(2)),
+        reservedCents: 0,
+      });
+      expect(detail.grant).toMatchObject({
+        status: 'active',
+        availableCents: 0,
+        heldCents: 0,
+        returnedCents: Number((100 - detail.pack!.priceCents).toFixed(2)),
+      });
+      const recovered = await createTokenOrder(ctx, owner, input);
+      expect(recovered).toMatchObject({ id: order.id, status: 'awarded', packId: detail.pack!.id });
+      expect(await walletScopeCount()).toBe(1);
+      await expect(
+        issuePackKey(ctx, owner, detail.pack!.id, { operationKey: randomUUID() }),
+      ).resolves.toHaveProperty('token');
+    });
+    it.each(['cancelled', 'no_offers'] as const)(
+      'returns all wallet credit after an auction is %s, including retries and maintenance',
+      async (outcome) => {
+        if (outcome === 'no_offers')
+          await pool.query('UPDATE broker_token_offerings SET auto_bid=false');
+        const input = {
+          ...walletQuantities,
+          mode: 'auction',
+          maxTotalCents: 123.45,
+          operationKey: randomUUID(),
+        };
+        const order = await createTokenOrder(ctx, owner, input);
+        if (outcome === 'cancelled') {
+          const cancel = { operationKey: randomUUID() };
+          await cancelTokenOrder(ctx, owner, order.id, cancel);
+          await cancelTokenOrder(ctx, owner, order.id, cancel);
+        } else {
+          await pool.query(
+            "UPDATE broker_token_orders SET closes_at=clock_timestamp()-interval '1 second' WHERE id=$1",
+            [order.id],
+          );
+          await closeTokenAuction(ctx, order.id);
+          await closeTokenAuction(ctx, order.id);
+        }
+        await maintainInference(ctx);
+        expect((await createTokenOrder(ctx, owner, input)).status).toBe(outcome);
+        expect(await creditWalletView(pool, owner.id)).toMatchObject({
+          balanceCents: 5000,
+          reservedCents: 0,
+          availableCents: 5000,
+        });
+        const detail = await tokenOrderDetail(ctx, owner, order.id);
+        expect(detail.pack).toBeNull();
+        expect(detail.grant).toMatchObject({
+          availableCents: 0,
+          heldCents: 0,
+          returnedCents: 123.45,
+        });
+      },
+    );
+    it('uses a standalone batch key without an agent while blocking purchases and internal budget management', async () => {
+      const { order, pack } = await buyWithWallet();
+      const issued = await issuePackKey(ctx, owner, pack!.id, { operationKey: randomUUID() });
+      const wallet = await creditWalletView(pool, owner.id);
+      const headers = { authorization: `Bearer ${issued.token}` };
+      const completed = await app.inject({
+        method: 'POST',
+        url: '/api/v1/chat/completions',
+        headers,
+        payload: { ...call, operationKey: randomUUID() },
+      });
+      expect(completed.statusCode).toBe(200);
+      expect(completed.json().broker.packId).toBe(pack!.id);
+      expect(await creditWalletView(pool, owner.id)).toEqual(wallet);
+      expect(
+        (
+          await app.inject({
+            method: 'POST',
+            url: '/api/token-orders',
+            headers,
+            payload: {
+              ...walletQuantities,
+              mode: 'auction',
+              maxTotalCents: 100,
+              operationKey: randomUUID(),
+            },
+          })
+        ).statusCode,
+      ).toBe(403);
+      await expect(issueGrantKey(ctx, owner, order.grantId, {})).rejects.toMatchObject({
+        statusCode: 409,
+        code: 'agent_grant_required',
+      });
+      await expect(
+        fundGrant(ctx, owner, order.grantId, { amountCents: 100, operationKey: randomUUID() }),
+      ).rejects.toMatchObject({ statusCode: 409, code: 'agent_grant_required' });
+      await expect(
+        closeGrant(ctx, owner, order.grantId, { operationKey: randomUUID() }),
+      ).rejects.toMatchObject({ statusCode: 409, code: 'agent_grant_required' });
+      await expect(buyingPolicy(order.grantId)).rejects.toMatchObject({
+        statusCode: 409,
+        code: 'agent_grant_required',
+      });
+      await expect(
+        quotes(ctx, owner, { ...walletQuantities, grantId: order.grantId }),
+      ).rejects.toMatchObject({ statusCode: 403, code: 'wallet_purchase_scope' });
+      await expect(
+        createTokenOrder(ctx, owner, {
+          ...walletQuantities,
+          grantId: order.grantId,
+          mode: 'auction',
+          maxTotalCents: 1,
+          operationKey: randomUUID(),
+        }),
+      ).rejects.toMatchObject({ statusCode: 403, code: 'wallet_purchase_scope' });
+      expect(await creditWalletView(pool, owner.id)).toEqual(wallet);
+      expect((await listAgents(ctx, owner, {})).items).toHaveLength(0);
+    });
+    it('refunds a wallet pack directly to available credit without reserving an agent balance', async () => {
+      const { pack, order } = await buyWithWallet();
+      await transaction(pool, async (db) => {
+        await db.query('SELECT id FROM broker_inference_grants WHERE id=$1 FOR UPDATE', [
+          order.grantId,
+        ]);
+        await db.query('SELECT provider FROM broker_inference_routes ORDER BY provider FOR UPDATE');
+        const current = (
+          await db.query('SELECT * FROM broker_token_packs WHERE id=$1 FOR UPDATE', [pack!.id])
+        ).rows[0];
+        await retirePackLocked(
+          db,
+          current,
+          'provider_failure',
+          'Verified fixture provider outage for wallet purchase.',
+        );
+      });
+      await maintainInference(ctx);
+      await maintainInference(ctx);
+      expect(await creditWalletView(pool, owner.id)).toMatchObject({
+        balanceCents: 5000,
+        reservedCents: 0,
+        availableCents: 5000,
+      });
+      const detail = await tokenOrderDetail(ctx, owner, order.id);
+      expect(detail.pack).toMatchObject({ status: 'settled', refundCents: pack!.priceCents });
+      expect(detail.grant).toMatchObject({
+        availableCents: 0,
+        heldCents: 0,
+        spentCents: 0,
+        returnedCents: pack!.priceCents,
+      });
+      expect(
+        (
+          await pool.query(
+            "SELECT count(*)::int n FROM broker_credit_ledger WHERE kind='token_refund'",
+          )
+        ).rows[0].n,
+      ).toBe(1);
+    });
+    it('enforces wallet purchase limits per buyer rather than per hidden accounting scope', async () => {
+      const results = await Promise.allSettled(
+        Array.from({ length: 6 }, () =>
+          createTokenOrder(ctx, owner, {
+            ...walletQuantities,
+            mode: 'auction',
+            maxTotalCents: 100,
+            operationKey: randomUUID(),
+          }),
+        ),
+      );
+      expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(5);
+      expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1);
+      expect(
+        (results.find((result) => result.status === 'rejected') as PromiseRejectedResult).reason,
+      ).toMatchObject({ statusCode: 429, code: 'purchase_limit' });
+      expect(await walletScopeCount()).toBe(5);
+      expect(await creditWalletView(pool, owner.id)).toMatchObject({
+        balanceCents: 5000,
+        reservedCents: 500,
+        availableCents: 4500,
+      });
+    });
+    it('keeps omitted grantId on an agent key scoped to the existing funded grant', async () => {
+      const g = await grant(100);
+      const key = await agent(g.id);
+      const quote = (await quotes(ctx, key.actor, walletQuantities)).items[0]!;
+      expect(quote).toMatchObject({ grantId: g.id, fundingSource: 'agent' });
+      const order = await createTokenOrder(ctx, key.actor, {
+        ...walletQuantities,
+        mode: 'instant',
+        maxTotalCents: quote.priceCents,
+        quoteId: quote.quoteId,
+        operationKey: randomUUID(),
+      });
+      expect(order).toMatchObject({ grantId: g.id, fundingSource: 'agent' });
+      expect(await walletScopeCount()).toBe(0);
+      expect((await listAgents(ctx, owner, {})).items).toHaveLength(1);
+      expect((await creditWalletView(pool, owner.id)).reservedCents).toBe(
+        Number((100 - quote.priceCents).toFixed(2)),
+      );
+    });
+    it('keeps the buyer-wide wallet pack cap when several queued auctions award concurrently', async () => {
+      for (let i = 0; i < 9; i++) {
+        const { order } = await buyWithWallet();
+        // Move only the rate-limit fixture clock; all nine purchased packs stay active.
+        await pool.query(
+          "UPDATE broker_token_orders SET created_at=created_at-interval '2 minutes' WHERE id=$1",
+          [order.id],
+        );
+      }
+      const pending = await Promise.all(
+        [0, 1].map(() =>
+          createTokenOrder(ctx, owner, {
+            ...walletQuantities,
+            mode: 'auction',
+            maxTotalCents: 100,
+            operationKey: randomUUID(),
+          }),
+        ),
+      );
+      await pool.query(
+        "UPDATE broker_token_orders SET closes_at=clock_timestamp()-interval '1 second' WHERE id=ANY($1::uuid[])",
+        [pending.map((order) => order.id)],
+      );
+      await Promise.all(pending.map((order) => closeTokenAuction(ctx, order.id)));
+      const outcomes = await Promise.all(
+        pending.map((order) => tokenOrderDetail(ctx, owner, order.id)),
+      );
+      expect(outcomes.map(({ order }) => order.status).sort()).toEqual(['awarded', 'no_offers']);
+      const packs = (
+        await pool.query(
+          "SELECT count(*)::int n,sum(price_cents) price FROM broker_token_packs WHERE buyer_id=$1 AND funding_source='wallet' AND status='active'",
+          [owner.id],
+        )
+      ).rows[0];
+      expect(packs.n).toBe(10);
+      expect(await creditWalletView(pool, owner.id)).toMatchObject({
+        balanceCents: Number((5000 - Number(packs.price)).toFixed(2)),
+        reservedCents: 0,
+      });
+      expect(outcomes.find(({ order }) => order.status === 'no_offers')!.grant).toMatchObject({
+        availableCents: 0,
+        heldCents: 0,
+        returnedCents: 100,
+      });
+    });
+    it('closes an expired wallet auction while another purchase waits without reversing wallet and route locks', async () => {
+      const expiring = await createTokenOrder(ctx, owner, {
+        ...walletQuantities,
+        mode: 'auction',
+        maxTotalCents: 100,
+        operationKey: randomUUID(),
+      });
+      await pool.query(
+        "UPDATE broker_inference_grants SET created_at=clock_timestamp()-interval '1 day',expires_at=clock_timestamp()-interval '1 second' WHERE id=$1",
+        [expiring.grantId],
+      );
+      const quote = (await quotes(ctx, owner, walletQuantities)).items[0]!;
+      const blocker = await pool.connect();
+      const operations: Promise<unknown>[] = [];
+      try {
+        await blocker.query('BEGIN');
+        const routeLock =
+          'SELECT provider FROM broker_inference_routes ORDER BY provider FOR UPDATE';
+        await blocker.query(routeLock);
+        const waitingOnRoutes = async () =>
+          Number(
+            (
+              await pool.query(
+                `SELECT count(*)::int n FROM pg_stat_activity a WHERE datname=current_database()
+                 AND wait_event_type='Lock' AND query=$1
+                 AND EXISTS(SELECT 1 FROM pg_locks l WHERE l.pid=a.pid AND l.relation='broker_inference_routes'::regclass)`,
+                [routeLock],
+              )
+            ).rows[0].n,
+          );
+        // Queue the purchase first. It must obtain routes before expiry is allowed
+        // to release the older auction's wallet reservation.
+        const next = createTokenOrder(ctx, owner, {
+          ...walletQuantities,
+          mode: 'instant',
+          quoteId: quote.quoteId,
+          maxTotalCents: quote.priceCents,
+          operationKey: randomUUID(),
+        });
+        operations.push(
+          next.then(
+            (value) => value,
+            (error: unknown) => error,
+          ),
+        );
+        await expect.poll(waitingOnRoutes, { timeout: 3000 }).toBe(1);
+        const closing = transaction(pool, async (db) => {
+          const grant = (
+            await db.query('SELECT * FROM broker_inference_grants WHERE id=$1 FOR UPDATE', [
+              expiring.grantId,
+            ])
+          ).rows[0];
+          await closeGrantLocked(db, grant, 'expired');
+          return 'closed';
+        });
+        operations.push(
+          closing.then(
+            (value) => value,
+            (error: unknown) => error,
+          ),
+        );
+        await expect.poll(waitingOnRoutes, { timeout: 3000 }).toBe(2);
+        await blocker.query('COMMIT');
+        const [purchased, closed] = await Promise.all(operations);
+        expect(purchased).toMatchObject({ status: 'awarded', fundingSource: 'wallet' });
+        expect(closed).toBe('closed');
+      } finally {
+        await blocker.query('ROLLBACK');
+        blocker.release();
+        await Promise.all(operations);
+      }
+      const detail = await tokenOrderDetail(ctx, owner, expiring.id);
+      expect(detail.order.status).toBe('expired');
+      expect(detail.grant).toMatchObject({
+        status: 'closed',
+        availableCents: 0,
+        heldCents: 0,
+        returnedCents: 100,
+      });
+      expect(await creditWalletView(pool, owner.id)).toMatchObject({
+        balanceCents: Number((5000 - quote.priceCents).toFixed(2)),
+        reservedCents: 0,
+      });
+    });
+
     it('pools compatible fragmented quota without buying or charging another pack', async () => {
       const { g, key, a, b } = await fragmentedAllowance(),
         wallet = await creditWalletView(pool, owner.id);
@@ -1866,15 +2361,23 @@ describe.skipIf(!url)(
         clock_timestamp()-interval '1 day',clock_timestamp()-interval '2 days'-n*interval '1 second' FROM generate_series(1,14000)n`,
         [owner.id, other.id],
       );
+      await pool.query(
+        `INSERT INTO broker_inference_grants(buyer_id,name,status,source_mode,funding_source,funded_cents,available_cents,returned_cents,max_purchase_cents,allowed_providers,expires_at,created_at)
+        SELECT $1,'Wallet purchase '||n,'closed','fixture','wallet',1,0,1,1,'["modal","baseten"]',
+        clock_timestamp()+interval '1 day',clock_timestamp()-n*interval '1 second' FROM generate_series(1,4000)n`,
+        [owner.id],
+      );
       await pool.query(`INSERT INTO broker_inference_buying_policies(grant_id,mode,paused,max_purchase_cents,output_per_call,target_calls,refill_at_calls)
-        SELECT id,'automatic',true,1,512,1,0 FROM broker_inference_grants WHERE status='closed'`);
+        SELECT id,'automatic',true,1,512,1,0 FROM broker_inference_grants WHERE funding_source='agent' AND status='closed'`);
       await pool.query('ANALYZE broker_inference_grants');
       await pool.query('ANALYZE broker_inference_buying_policies');
       const spy = vi.spyOn(pool, 'query');
       let pageCalls: unknown[][] = [],
         dueCalls: unknown[][] = [];
       try {
-        expect((await listAgents(ctx, owner, { limit: '5' })).items).toHaveLength(5);
+        const listed = (await listAgents(ctx, owner, { limit: '5' })).items;
+        expect(listed).toHaveLength(5);
+        expect(listed.every((item) => item.fundingSource === 'agent')).toBe(true);
         pageCalls = spy.mock.calls.map((args) => [...args]);
         spy.mockClear();
         await maintainBuying(ctx);
@@ -1883,11 +2386,13 @@ describe.skipIf(!url)(
         spy.mockRestore();
       }
       expect(pageCalls).toHaveLength(2);
+      expect(String(pageCalls[0][0])).toContain("g.funding_source='agent'");
       expect((pageCalls[1][1] as string[][])[0]).toHaveLength(5);
       const due = dueCalls.find((args) =>
         String(args[0]).includes('SELECT p.grant_id,g.buyer_id'),
       )!;
       expect(due).toBeDefined();
+      expect(String(due[0])).toContain("g.funding_source='agent'");
       await pool.query(
         "UPDATE broker_inference_buying_policies SET next_evaluation_at=clock_timestamp()-interval '1 second' WHERE grant_id=$1",
         [g.id],
@@ -1907,8 +2412,12 @@ describe.skipIf(!url)(
           label === 'agents' ? 6 : label === 'worker' ? 4 : 5,
         );
         expect(nodes.some((n) => String(n['Sort Method']).includes('external'))).toBe(false);
-        if (label === 'agents')
-          expect(nodes.some((n) => n['Index Name'] === 'broker_inference_grants_owner')).toBe(true);
+        if (label === 'agents') {
+          const pageScan = nodes.find((n) => n['Index Name'] === 'broker_agent_grants_owner_page');
+          expect(pageScan).toBeDefined();
+          expect(pageScan['Actual Rows']).toBeLessThanOrEqual(6);
+          expect(pageScan['Rows Removed by Filter'] ?? 0).toBe(0);
+        }
         if (label === 'worker')
           expect(nodes.some((n) => n['Index Name'] === 'broker_inference_buying_due')).toBe(true);
         evidence.push({
@@ -1921,7 +2430,9 @@ describe.skipIf(!url)(
       }
       if (process.env.BUYING_QUERY_EVIDENCE)
         process.stdout.write(
-          'Local buying query evidence: 14,000 closed grants ' + JSON.stringify(evidence) + '\n',
+          'Local buying query evidence: 14,000 agent and 4,000 wallet grants ' +
+            JSON.stringify(evidence) +
+            '\n',
         );
     });
 

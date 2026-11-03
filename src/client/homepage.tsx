@@ -225,7 +225,7 @@ export function HomePage() {
               <span className="home-eyebrow">01 / THE MARKET</span>
               <h2 id="home-market-title">Two resources. One way to buy.</h2>
             </div>
-            <p>From a place to run your code to the model usage behind your agents.</p>
+            <p>From a place to run your code to the model usage behind your apps and agents.</p>
           </div>
           <div className="home-products">
             <article className="home-product">
@@ -265,8 +265,8 @@ export function HomePage() {
               </div>
               <h3>AI token packs</h3>
               <p>
-                Give your agent a budget. Buy prepaid input and output tokens through an auction or
-                an instant quote.
+                Buy prepaid input and output tokens from your wallet through an auction or an
+                instant quote. Connect your app with a batch API key; no agent setup required.
               </p>
               <dl className="home-product-specs">
                 <div>
@@ -326,7 +326,7 @@ export function HomePage() {
                   <div>
                     <h4>Put the purchase to work</h4>
                     <p>
-                      Open your VM terminal when ready, or connect your agent to its prepaid tokens.
+                      Open your VM terminal when ready, or connect your app to its prepaid tokens.
                     </p>
                   </div>
                 </li>

@@ -36,6 +36,15 @@ function ownerOnly(actor: Actor) {
     failure(403, 'owner_required', 'Only the signed-in owner can change agent funding or keys.');
 }
 
+export function requireAgentFunding(grant: Row) {
+  if (grant.funding_source === 'wallet')
+    failure(
+      409,
+      'agent_grant_required',
+      'Wallet-funded token purchases cannot be managed as agent budgets.',
+    );
+}
+
 const createSchema = z
   .object({
     operationKey: operationSchema,
@@ -85,7 +94,7 @@ export async function createGrantInTransaction(
           );
         const count = (
           await db.query(
-            `SELECT count(*)::int n FROM (SELECT 1 FROM broker_inference_grants WHERE buyer_id=$1 AND status<>'closed' LIMIT 20) g`,
+            `SELECT count(*)::int n FROM (SELECT 1 FROM broker_inference_grants WHERE buyer_id=$1 AND funding_source='agent' AND status<>'closed' LIMIT 20) g`,
             [actor.id],
           )
         ).rows[0].n;
@@ -138,6 +147,7 @@ export async function fundGrant(
   return transaction(ctx.pool, async (db) => {
     await authority(db, actor);
     const grant = await lockedGrant(db, actor, id);
+    requireAgentFunding(grant);
     if (
       studioTaskId &&
       !(
@@ -195,6 +205,7 @@ export async function closeGrant(ctx: AppContext, actor: Actor, id: string, raw:
   return transaction(ctx.pool, async (db) => {
     await authority(db, actor);
     const grant = await lockedGrant(db, actor, id);
+    requireAgentFunding(grant);
     return withOperation(
       db,
       actor,
@@ -228,6 +239,7 @@ export async function issueGrantKey(ctx: AppContext, actor: Actor, grantId: stri
       [actor.id, grantId],
     );
     const grant = await lockedGrant(db, actor, grantId, true);
+    requireAgentFunding(grant);
     activeMode(ctx, grant);
     const active = (
       await db.query(
@@ -268,7 +280,7 @@ export async function listGrants(ctx: AppContext, actor: Actor, query: unknown) 
   const p = pagination(query);
   const rows = (
     await ctx.pool.query(
-      `SELECT *,created_at::text cursor_created_at FROM broker_inference_grants WHERE buyer_id=$1
+      `SELECT *,created_at::text cursor_created_at FROM broker_inference_grants WHERE buyer_id=$1 AND funding_source='agent'
     AND ($2::timestamptz IS NULL OR(created_at,id)<($2,$3::uuid)) ORDER BY created_at DESC,id DESC LIMIT $4`,
       [actor.id, p.cursor, p.cursorId, p.limit + 1],
     )
@@ -283,6 +295,7 @@ export async function grantDetail(ctx: AppContext, actor: Actor, id: string) {
     await db.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
     await authority(db, actor, 'inference:read');
     const grant = await lockedGrant(db, actor, id);
+    requireAgentFunding(grant);
     const packs = (
       await db.query(
         'SELECT * FROM broker_token_packs WHERE grant_id=$1 ORDER BY created_at DESC,id DESC LIMIT 25',

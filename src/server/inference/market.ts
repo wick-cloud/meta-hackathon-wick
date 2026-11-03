@@ -9,6 +9,7 @@ import type { Actor } from '../../shared/types.js';
 import {
   INFERENCE_MODEL_ID,
   INFERENCE_PROVIDERS,
+  WALLET_TOKEN_PACK_TTL_SECONDS,
   type InferenceProvider,
   type TokenQuote,
 } from '../../shared/inference.js';
@@ -149,14 +150,17 @@ export async function initializeInference(ctx: AppContext) {
     }
   });
 }
-function grantIdFor(actor: Actor, requested?: string): string {
+function grantIdFor(actor: Actor, requested?: string): string | undefined {
   if (actor.apiKey) {
     if (!actor.apiKey.grantId || (requested && requested !== actor.apiKey.grantId))
       failure(403, 'grant_scope', 'Use the grant bound to this agent key.');
     return actor.apiKey.grantId;
   }
-  if (!requested) failure(400, 'grant_required', 'Select a funded agent grant.');
   return requested;
+}
+function agentPurchaseGrant(grant: Row) {
+  if (grant.funding_source === 'wallet')
+    failure(403, 'wallet_purchase_scope', 'This budget belongs to one wallet token purchase.');
 }
 export function offeringOpen(row: Row, at: Date) {
   return (
@@ -341,10 +345,21 @@ export async function quotes(
     grantId = grantIdFor(actor, input.grantId);
   return transaction(ctx.pool, async (db) => {
     await authority(db, actor, 'inference:read');
-    const grant = await lockedGrant(db, actor, grantId, true);
+    const at = await clock(db);
+    const grant = grantId
+      ? await lockedGrant(db, actor, grantId, true)
+      : {
+          id: null,
+          funding_source: 'wallet',
+          source_mode: runtime(ctx).mode,
+          allowed_providers: [...INFERENCE_PROVIDERS],
+          allow_instant: true,
+          expires_at: new Date(at.getTime() + WALLET_TOKEN_PACK_TTL_SECONDS * 1000),
+        };
+    if (grantId) agentPurchaseGrant(grant);
     activeMode(ctx, grant);
     await db.query('SELECT provider FROM broker_inference_routes ORDER BY provider FOR UPDATE');
-    await repairLegacyAllowance(db, grantId);
+    if (grantId) await repairLegacyAllowance(db, grantId);
     if (!grant.allow_instant)
       failure(403, 'instant_disabled', 'The owner disabled instant purchases for this grant.');
     const now = await clock(db),
@@ -356,7 +371,7 @@ export async function quotes(
         grant.allowed_providers,
       ])
     ).rows;
-    const packs = await activePacks(db, grantId);
+    const packs = grantId ? await activePacks(db, grantId) : [];
     const items: TokenQuote[] = [];
     for (const row of rows) {
       try {
@@ -376,7 +391,9 @@ export async function quotes(
       if (price.priceCents > 100_000_000) continue;
       const payload = {
         buyerId: actor.id,
-        grantId,
+        grantId: grantId ?? null,
+        fundingSource: grantId ? 'agent' : 'wallet',
+        ...(!grantId ? { packExpiresAt: new Date(grant.expires_at).toISOString() } : {}),
         provider: row.provider,
         inputTokens: input.inputTokens,
         outputTokens: input.outputTokens,
@@ -388,7 +405,9 @@ export async function quotes(
       items.push({
         ...price,
         quoteId: signQuote(ctx, payload),
-        grantId,
+        grantId: grantId ?? null,
+        fundingSource: grantId ? 'agent' : 'wallet',
+        ...(!grantId ? { packExpiresAt: new Date(grant.expires_at).toISOString() } : {}),
         provider: row.provider,
         modelId: INFERENCE_MODEL_ID,
         inputTokens: input.inputTokens,
@@ -433,8 +452,8 @@ async function purchase(db: PoolClient, grant: Row, order: Row, route: Row, bid:
   );
   const pack = (
     await db.query(
-      `INSERT INTO broker_token_packs(order_id,grant_id,buyer_id,provider,source_mode,route_fingerprint,snapshot,input_tokens,output_tokens,available_input,available_output,price_cents,expires_at,provider_id)
-    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$8,$9,$10,$11,$12) RETURNING *`,
+      `INSERT INTO broker_token_packs(order_id,grant_id,buyer_id,provider,source_mode,route_fingerprint,snapshot,input_tokens,output_tokens,available_input,available_output,price_cents,expires_at,provider_id,funding_source)
+    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$8,$9,$10,$11,$12,$13) RETURNING *`,
       [
         order.id,
         grant.id,
@@ -448,6 +467,7 @@ async function purchase(db: PoolClient, grant: Row, order: Row, route: Row, bid:
         price,
         grant.expires_at,
         route.provider_id,
+        grant.funding_source ?? 'agent',
       ],
     )
   ).rows[0];
@@ -464,7 +484,29 @@ async function purchase(db: PoolClient, grant: Row, order: Row, route: Row, bid:
     inputTokens: order.input_tokens,
     outputTokens: order.output_tokens,
   });
+  await returnWalletPurchaseRemainder(db, grant, order.id);
   return pack;
+}
+/** A direct purchase reserves only its ceiling; spare credit is never an agent budget. */
+async function returnWalletPurchaseRemainder(db: PoolClient, grant: Row, orderId: string) {
+  if (grant.funding_source !== 'wallet') return;
+  const state = (
+    await db.query('SELECT available_cents FROM broker_inference_grants WHERE id=$1', [grant.id])
+  ).rows[0];
+  const amount = Number(state.available_cents);
+  if (!amount) return;
+  await applyCreditEntry(db, grant.buyer_id, {
+    operationKey: `token-wallet-release:${orderId}`,
+    kind: 'agent_release',
+    grantId: grant.id,
+    balanceDeltaCents: 0,
+    reservedDeltaCents: -amount,
+    description: 'Return unused token purchase reservation to wallet',
+  });
+  await db.query(
+    'UPDATE broker_inference_grants SET available_cents=0,returned_cents=returned_cents+$2 WHERE id=$1',
+    [grant.id, amount],
+  );
 }
 export async function createTokenOrder(
   ctx: AppContext,
@@ -476,7 +518,8 @@ export async function createTokenOrder(
   requiredRoutes?: readonly AllowanceRoute[],
 ) {
   const input = createOrderSchema.parse(raw),
-    grantId = grantIdFor(actor, input.grantId),
+    requestedGrantId = grantIdFor(actor, input.grantId),
+    walletPurchase = !requestedGrantId,
     proofs = requiredRoutes === undefined ? null : requirementSchema.parse(requiredRoutes),
     digest = operationFingerprint(
       providerConstraint
@@ -485,7 +528,80 @@ export async function createTokenOrder(
     );
   return transaction(ctx.pool, async (db) => {
     await authority(db, actor, 'tokens:buy');
-    const grant = await lockedGrant(db, actor, grantId);
+    let grant: Row;
+    if (walletPurchase) {
+      if (actor.role !== 'buyer' || actor.apiKey)
+        failure(403, 'owner_required', 'Wallet token purchases require a signed-in buyer.');
+      // Serialize direct purchases per buyer before allocating any accounting grant.
+      // The normal grant path keeps its existing idempotency and API-key authority.
+      await db.query('SELECT pg_advisory_xact_lock(hashtext($1))', [
+        `wallet-token-purchases:${actor.id}`,
+      ]);
+      if (buying || studio || providerConstraint || proofs)
+        failure(403, 'grant_required', 'Automated purchases require their funded agent grant.');
+      const prior = (
+        await db.query(
+          `SELECT o.*,p.id pack_id FROM broker_token_orders o LEFT JOIN broker_token_packs p ON p.order_id=o.id
+           WHERE o.buyer_id=$1 AND o.funding_source='wallet' AND o.operation_key=$2`,
+          [actor.id, input.operationKey],
+        )
+      ).rows[0];
+      if (prior) {
+        if (prior.input_fingerprint !== digest)
+          failure(
+            409,
+            'operation_conflict',
+            'This operation key belongs to a different token purchase.',
+          );
+        return orderView(prior);
+      }
+      const now = await clock(db);
+      let expires = new Date(now.getTime() + WALLET_TOKEN_PACK_TTL_SECONDS * 1000);
+      if (input.mode === 'instant') {
+        if (!input.quoteId)
+          failure(400, 'quote_required', 'Instant purchases require a current quote.');
+        const quote = verifyQuote(ctx, input.quoteId);
+        if (
+          quote.buyerId !== actor.id ||
+          quote.grantId !== null ||
+          quote.fundingSource !== 'wallet' ||
+          quote.inputTokens !== input.inputTokens ||
+          quote.outputTokens !== input.outputTokens ||
+          !Number.isFinite(Date.parse(quote.packExpiresAt)) ||
+          Date.parse(quote.expiresAt) <= now.getTime() ||
+          !Number.isFinite(Date.parse(quote.expiresAt))
+        )
+          failure(
+            409,
+            'quote_expired',
+            'The quote expired or does not match this wallet purchase.',
+          );
+        expires = new Date(quote.packExpiresAt);
+        if (expires <= now)
+          failure(
+            409,
+            'quote_expired',
+            'The quoted token pack has expired. Request a fresh quote.',
+          );
+      }
+      grant = (
+        await db.query(
+          `INSERT INTO broker_inference_grants(buyer_id,name,source_mode,funding_source,funded_cents,available_cents,max_purchase_cents,allowed_providers,allow_instant,expires_at)
+           VALUES($1,'Token purchase',$2,'wallet',$3,$3,$3,$4,true,$5) RETURNING *`,
+          [
+            actor.id,
+            runtime(ctx).mode,
+            input.maxTotalCents,
+            JSON.stringify(INFERENCE_PROVIDERS),
+            expires,
+          ],
+        )
+      ).rows[0];
+    } else {
+      grant = await lockedGrant(db, actor, requestedGrantId!);
+      agentPurchaseGrant(grant);
+    }
+    const grantId = grant.id as string;
     const studioTask = studio ? await studioAuthority(db, studio, actor) : undefined;
     if (studioTask && studioTask.grant_id !== grantId)
       failure(
@@ -544,20 +660,23 @@ export async function createTokenOrder(
       );
     if (buying)
       await admitBuyingDecision(db, actor, grant, input, buying.decisionId, buying.automatic);
+    const boundScope = walletPurchase ? "buyer_id=$1 AND funding_source='wallet'" : 'grant_id=$1';
     const bounds = (
       await db.query(
         `SELECT
-      (SELECT count(*) FROM (SELECT 1 FROM broker_token_orders WHERE grant_id=$1 AND status='open' LIMIT 5) x)::int pending,
-      (SELECT count(*) FROM (SELECT 1 FROM broker_token_packs WHERE grant_id=$1 AND status<>'settled' LIMIT 10) x)::int packs,
-          (SELECT count(*) FROM (SELECT 1 FROM broker_token_orders WHERE grant_id=$1 AND created_at>$2::timestamptz-interval '1 minute' LIMIT 5) x)::int recent`,
-        [grantId, now],
+      (SELECT count(*) FROM (SELECT 1 FROM broker_token_orders WHERE ${boundScope} AND status='open' LIMIT 5) x)::int pending,
+      (SELECT count(*) FROM (SELECT 1 FROM broker_token_packs WHERE ${boundScope} AND status<>'settled' LIMIT 10) x)::int packs,
+          (SELECT count(*) FROM (SELECT 1 FROM broker_token_orders WHERE ${boundScope} AND created_at>$2::timestamptz-interval '1 minute' LIMIT 5) x)::int recent`,
+        [walletPurchase ? actor.id : grantId, now],
       )
     ).rows[0];
     if (bounds.pending >= 5 || bounds.packs >= 10 || bounds.recent >= 5)
       failure(
         429,
         'purchase_limit',
-        'The grant reached its pending orders, active packs, or purchase rate limit.',
+        walletPurchase
+          ? 'Wallet token purchases reached the pending orders, active packs, or purchase rate limit.'
+          : 'The grant reached its pending orders, active packs, or purchase rate limit.',
       );
     const rows = (
       await db.query(
@@ -674,7 +793,8 @@ export async function createTokenOrder(
       quote = verifyQuote(ctx, input.quoteId);
       if (
         quote.buyerId !== actor.id ||
-        quote.grantId !== grantId ||
+        quote.grantId !== (walletPurchase ? null : grantId) ||
+        (walletPurchase && quote.fundingSource !== 'wallet') ||
         quote.inputTokens !== input.inputTokens ||
         quote.outputTokens !== input.outputTokens ||
         Date.parse(quote.expiresAt) <= (await clock(db)).getTime()
@@ -732,8 +852,23 @@ export async function createTokenOrder(
         'quote_unavailable',
         'The quoted route, supply or price changed. Request another quote.',
       );
+    if (walletPurchase)
+      await applyCreditEntry(db, actor.id, {
+        operationKey: `token-wallet-reserve:${grantId}`,
+        kind: 'agent_fund',
+        grantId,
+        balanceDeltaCents: 0,
+        reservedDeltaCents: input.maxTotalCents,
+        description: 'Reserve wallet credit for token purchase',
+      });
     // Re-read the DB clock after lock waits; never extend a previously published deadline.
     const admitted = await clock(db);
+    if (walletPurchase && quote && Date.parse(quote.expiresAt) <= admitted.getTime())
+      failure(
+        409,
+        'quote_expired',
+        'The quote expired while waiting for wallet credit. Request a fresh quote.',
+      );
     if (
       new Date(grant.expires_at).getTime() <=
       admitted.getTime() + (input.mode === 'auction' ? 30000 : 0)
@@ -741,8 +876,8 @@ export async function createTokenOrder(
       failure(409, 'grant_closed', 'The grant expires before the purchase can complete.');
     const order = (
       await db.query(
-        `INSERT INTO broker_token_orders(grant_id,buyer_id,source_key_id,operation_key,input_fingerprint,mode,source_mode,input_tokens,output_tokens,max_total_cents,closes_at,expires_at,provider_constraint,required_input,required_output,required_routes)
-      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING *`,
+        `INSERT INTO broker_token_orders(grant_id,buyer_id,source_key_id,operation_key,input_fingerprint,mode,source_mode,input_tokens,output_tokens,max_total_cents,closes_at,expires_at,provider_constraint,required_input,required_output,required_routes,funding_source)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) RETURNING *`,
         [
           grantId,
           actor.id,
@@ -760,6 +895,7 @@ export async function createTokenOrder(
           requiredInput,
           requiredOutput,
           proofs ? JSON.stringify(proofs) : null,
+          grant.funding_source ?? 'agent',
         ],
       )
     ).rows[0];
@@ -822,6 +958,7 @@ async function releaseOrder(
   await event(db, grant.id, `release:${order.id}`, 'purchase_hold_released', order.id, undefined, {
     reason,
   });
+  await returnWalletPurchaseRemainder(db, grant, order.id);
 }
 export async function closeTokenAuction(ctx: AppContext, id: string) {
   const meta = (
@@ -882,8 +1019,12 @@ export async function closeTokenAuction(ctx: AppContext, id: string) {
     ).rows;
     const packCount = (
       await db.query(
-        "SELECT count(*)::int n FROM (SELECT 1 FROM broker_token_packs WHERE grant_id=$1 AND status<>'settled' LIMIT 10) p",
-        [grant.id],
+        `SELECT count(*)::int n FROM (SELECT 1 FROM broker_token_packs WHERE ${
+          grant.funding_source === 'wallet'
+            ? "buyer_id=$1 AND funding_source='wallet'"
+            : 'grant_id=$1'
+        } AND status<>'settled' LIMIT 10) p`,
+        [grant.funding_source === 'wallet' ? grant.buyer_id : grant.id],
       )
     ).rows[0].n;
     const ownedPacks = await activePacks(db, grant.id);
@@ -1072,7 +1213,10 @@ export async function retirePackLocked(
       const grant = (
         await db.query('SELECT * FROM broker_inference_grants WHERE id=$1', [pack.grant_id])
       ).rows[0];
-      const active = grant.status === 'active' && new Date(grant.expires_at) > (await clock(db));
+      const active =
+        grant.funding_source !== 'wallet' &&
+        grant.status === 'active' &&
+        new Date(grant.expires_at) > (await clock(db));
       await applyCreditEntry(db, pack.buyer_id, {
         operationKey: `token-refund:${pack.id}`,
         kind: 'token_refund',
@@ -1112,9 +1256,11 @@ export async function closeGrantLocked(db: PoolClient, grant: Row, reason: strin
       [grant.id],
     )
   ).rows;
+  // Releasing a wallet-funded order takes the wallet lock. Routes must come first,
+  // matching purchase/retirement, even when expiry closes a still-open auction.
+  await db.query('SELECT provider FROM broker_inference_routes ORDER BY provider FOR UPDATE');
   for (const order of orders)
     await releaseOrder(db, grant, order, reason === 'expired' ? 'expired' : 'cancelled');
-  await db.query('SELECT provider FROM broker_inference_routes ORDER BY provider FOR UPDATE');
   const packs = (
     await db.query(
       "SELECT * FROM broker_token_packs WHERE grant_id=$1 AND status<>'settled' ORDER BY id FOR UPDATE",

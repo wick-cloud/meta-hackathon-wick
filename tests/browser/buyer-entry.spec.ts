@@ -107,21 +107,23 @@ test('new purchase separates VM setup from prepaid AI tokens without creating an
   expect(writes).toHaveLength(0);
 });
 
-test('a buyer without an agent budget gets an actionable first step instead of a disabled token form', async ({
+test('a buyer without an agent budget can configure a wallet purchase immediately', async ({
   page,
 }) => {
   const writes = await buyer(page);
   await page.goto('/new');
   await page.getByRole('link', { name: 'Buy a token pack', exact: true }).click();
   await expect(page).toHaveURL(/\/token-orders\/new$/);
+  await expect(page.getByLabel('Pay with', { exact: true })).toHaveValue('');
+  await expect(page.getByLabel('Input tokens', { exact: true })).toHaveValue('2000000');
   await expect(
-    page.getByRole('heading', { name: 'Give your agent a budget first.' }),
+    page.getByText('Buy directly from your wallet. No agent setup is required.'),
   ).toBeVisible();
-  await expect(page.getByLabel('Input tokens', { exact: true })).toHaveCount(0);
-  await page.getByRole('link', { name: 'Create agent budget', exact: true }).click();
-  await expect(page).toHaveURL(/\/agents\?create=1$/);
-  await expect(page.getByRole('dialog')).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Create an agent', exact: true })).toBeVisible();
+  await page.getByRole('checkbox', { name: /I understand/ }).check();
+  await expect(page.getByRole('button', { name: 'Start 30-second auction' })).toBeEnabled();
+  await expect(page.getByRole('heading', { name: 'Give your agent a budget first.' })).toHaveCount(
+    0,
+  );
   expect(writes).toHaveLength(0);
 });
 
@@ -144,16 +146,24 @@ test('Orders retains history and exposes both purchase paths on the buyer landin
 });
 
 test('an active budget on a later page stays reachable from token setup', async ({ page }) => {
-  await buyer(page, true);
+  const writes = await buyer(page, true);
   await page.goto('/token-orders/new');
-  await expect(
-    page.getByRole('heading', { name: 'Choose or create an agent budget.' }),
-  ).toBeVisible();
+  await expect(page.getByLabel('Pay with', { exact: true })).toHaveValue('');
+  await page.getByRole('checkbox', { name: /I understand/ }).check();
+  await expect(page.getByRole('button', { name: 'Start 30-second auction' })).toBeEnabled();
   await page.getByRole('button', { name: 'Load more', exact: true }).click();
-  await expect(page.getByRole('combobox', { name: 'Agent budget', exact: true })).toContainText(
+  await expect(page.getByRole('combobox', { name: 'Pay with', exact: true })).toContainText(
     'Older active agent',
   );
+  await expect(page.getByLabel('Pay with', { exact: true })).toHaveValue('');
+  await page
+    .getByLabel('Pay with', { exact: true })
+    .selectOption('11111111-1111-4111-8111-111111111111');
+  await expect(
+    page.getByText('This purchase uses the selected agent’s budget and buying limits.'),
+  ).toBeVisible();
   await expect(page.getByLabel('Input tokens', { exact: true })).toBeVisible();
+  expect(writes).toEqual([]);
 });
 
 test('resource choices fit mobile and remain reachable with keyboard navigation', async ({
@@ -177,6 +187,27 @@ test('resource choices fit mobile and remain reachable with keyboard navigation'
 });
 
 for (const width of [1440, 1280, 390]) {
+  test(`wallet token purchase fits at ${width}px without requiring an agent`, async ({
+    page,
+  }, testInfo) => {
+    const writes = await buyer(page);
+    await page.setViewportSize({ width, height: 1000 });
+    await page.goto('/token-orders/new');
+    await expect(page.getByLabel('Pay with', { exact: true })).toHaveValue('');
+    await expect(page.getByLabel('Input tokens', { exact: true })).toBeVisible();
+    await page.getByRole('checkbox', { name: /I understand/ }).check();
+    await expect(page.getByRole('button', { name: 'Start 30-second auction' })).toBeEnabled();
+    await page.evaluate(() => document.fonts.ready);
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+    ).toBe(true);
+    await page.screenshot({
+      path: testInfo.outputPath(`wallet-composer-${width}.png`),
+      fullPage: true,
+    });
+    expect(writes).toEqual([]);
+  });
+
   test(`compact purchase actions stay separate from their description at ${width}px`, async ({
     page,
   }) => {

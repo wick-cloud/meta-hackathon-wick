@@ -15,6 +15,7 @@ const grantId = '11111111-1111-4111-8111-111111111111';
 const orderId = '22222222-2222-4222-8222-222222222222';
 const keyId = '33333333-3333-4333-8333-333333333333';
 const packId = '44444444-4444-4444-8444-444444444444';
+const walletGrantId = '55555555-5555-4555-8555-555555555555';
 const secret = `wbk_${keyId}.${'f'.repeat(43)}`;
 const modelId = 'meta/muse-spark-open';
 const future = () => new Date(Date.now() + 7 * 86400000).toISOString();
@@ -29,6 +30,9 @@ async function fixture(
     purchaseFailureOnce?: boolean;
     configured?: boolean;
     minimumInputReservation?: number;
+    walletCents?: number;
+    walletFailure?: boolean;
+    agentInstant?: boolean;
   } = {},
 ) {
   const role = options.role ?? 'buyer';
@@ -44,7 +48,7 @@ async function fixture(
     returnedCents: 0,
     maxPurchaseCents: 500,
     allowedProviders: ['modal', 'baseten'],
-    allowInstant: true,
+    allowInstant: options.agentInstant !== false,
     expiresAt: future(),
     createdAt: new Date().toISOString(),
     currency: 'USD',
@@ -98,6 +102,7 @@ async function fixture(
     providerCommissionBps: 1500,
   };
   let buyingPolicy: BuyingPolicy | null = null;
+  let walletQuoteExpiry: string | undefined;
   const buyingDecisions: BuyingDecision[] = [];
   await page.route('**/api/**', async (route) => {
     const request = route.request(),
@@ -118,17 +123,20 @@ async function fixture(
           catalog: [],
         },
       });
-    if (path === '/api/credits')
+    if (path === '/api/credits') {
+      if (options.walletFailure)
+        return route.fulfill({ status: 503, json: { error: 'Wallet temporarily unavailable' } });
       return route.fulfill({
         json: {
-          balanceCents: 10000,
+          balanceCents: (options.walletCents ?? 9000) + 1000,
           reservedCents: 1000,
-          availableCents: 9000,
+          availableCents: options.walletCents ?? 9000,
           currency: 'USD',
           kind: 'broker-pilot-credit',
           wickComputeCreditsSeparate: true,
         },
       });
+    }
     if (path === '/api/inference/agents')
       return route.fulfill({
         json: {
@@ -248,13 +256,16 @@ async function fixture(
         },
       });
     }
-    if (path === '/api/inference/quotes')
+    if (path === '/api/inference/quotes') {
+      walletQuoteExpiry = new Date(Date.now() + 7200000).toISOString();
       return route.fulfill({
         json: {
           items: [
             {
               quoteId: 'fixture-quote',
-              grantId,
+              grantId: body.grantId ?? null,
+              fundingSource: body.grantId ? 'agent' : 'wallet',
+              packExpiresAt: body.grantId ? grant.expiresAt : walletQuoteExpiry,
               provider: 'modal',
               modelId,
               inputTokens: body.inputTokens,
@@ -267,6 +278,7 @@ async function fixture(
           ],
         },
       });
+    }
     if (
       (path === '/api/token-orders' || path === `/api/inference/grants/${grantId}/buying/accept`) &&
       method === 'POST'
@@ -275,6 +287,13 @@ async function fixture(
         ? buyingDecisions.find((d) => d.id === body.decisionId)
         : undefined;
       const purchase = decision?.candidate ?? body;
+      const walletFunded = !decision && !body.grantId;
+      const purchaseGrantId = walletFunded ? walletGrantId : grantId;
+      const expiresAt = walletFunded
+        ? purchase.mode === 'instant'
+          ? walletQuoteExpiry!
+          : new Date(Date.now() + 7200000).toISOString()
+        : grant.expiresAt;
       if (decision) {
         decision.orderId = orderId;
         decision.status = 'ordered';
@@ -283,7 +302,8 @@ async function fixture(
         return route.abort('failed');
       const order: TokenOrder = {
         id: orderId,
-        grantId,
+        grantId: purchaseGrantId,
+        fundingSource: walletFunded ? 'wallet' : 'agent',
         mode: purchase.mode,
         sourceMode: 'fixture',
         status: purchase.mode === 'instant' ? 'awarded' : 'open',
@@ -294,7 +314,7 @@ async function fixture(
         priceCents: purchase.mode === 'instant' ? 250 : null,
         provider: purchase.mode === 'instant' ? 'modal' : null,
         closesAt: new Date(Date.now() + 30000).toISOString(),
-        expiresAt: grant.expiresAt,
+        expiresAt,
         createdAt: new Date().toISOString(),
         packId: purchase.mode === 'instant' ? packId : null,
       };
@@ -303,7 +323,8 @@ async function fixture(
         packs.push({
           id: packId,
           orderId,
-          grantId,
+          grantId: purchaseGrantId,
+          fundingSource: walletFunded ? 'wallet' : 'agent',
           provider: 'modal',
           mode: 'fixture',
           modelId,
@@ -320,7 +341,7 @@ async function fixture(
           retiredOutputTokens: 0,
           priceCents: 250,
           refundCents: 0,
-          expiresAt: grant.expiresAt,
+          expiresAt,
           createdAt: new Date().toISOString(),
           retirementReason: null,
           revenueShare: {
@@ -337,7 +358,17 @@ async function fixture(
       return route.fulfill({ json: orders[0] });
     }
     if (path === `/api/token-orders/${orderId}`)
-      return route.fulfill({ json: { order: orders[0], bids, pack: packs[0] ?? null, grant } });
+      return route.fulfill({
+        json: {
+          order: orders[0],
+          bids,
+          pack: packs[0] ?? null,
+          grant:
+            orders[0]?.fundingSource === 'wallet'
+              ? { ...grant, id: walletGrantId, fundingSource: 'wallet', name: 'Wallet purchase' }
+              : grant,
+        },
+      });
     if (path === '/api/orders')
       return route.fulfill({
         json: {
@@ -685,6 +716,198 @@ test('an uncertain purchase recovers the original operation even after its quote
   expect(purchases[1]!.body).toEqual(purchases[0]!.body);
 });
 
+test('a buyer with no agents buys an auction from the wallet and retries without an agent', async ({
+  page,
+}) => {
+  const f = await fixture(page, { empty: true });
+  await page.goto('/token-orders/new');
+  await expect(page.getByLabel('Pay with', { exact: true })).toHaveValue('');
+  await expect(page.getByText('Available wallet credit', { exact: true })).toBeVisible();
+  await expect(
+    page.getByText(/Wallet packs expire 2 hours after the auction starts/),
+  ).toBeVisible();
+  await page.getByLabel('Maximum total price').fill('1.2345');
+  await page.getByRole('checkbox', { name: /I understand/ }).check();
+  await page.getByRole('button', { name: 'Start 30-second auction' }).click();
+  await expect(
+    page.getByRole('heading', { name: 'Token pack auction', exact: true }),
+  ).toBeVisible();
+  const purchase = f.writes.find((write) => write.path === '/api/token-orders')!.body;
+  expect(purchase).not.toHaveProperty('grantId');
+  expect(purchase).toMatchObject({ mode: 'auction', maxTotalCents: 123.45 });
+  expect(f.orders[0]!.fundingSource).toBe('wallet');
+  await expect(page.locator('a[href^="/agents/"]')).toHaveCount(0);
+  await expect(
+    page.getByRole('link', { name: 'Broker wallet', exact: true }).last(),
+  ).toHaveAttribute('href', '/credits');
+  await page.getByRole('button', { name: 'Cancel open auction' }).click();
+  await expect(page.getByRole('link', { name: 'Review a new purchase' })).toHaveAttribute(
+    'href',
+    '/token-orders/new',
+  );
+  expect(f.writes.some((write) => write.path === '/api/inference/grants')).toBe(false);
+});
+
+test('wallet remains the default with existing agents and an instant pack exposes its own connection', async ({
+  page,
+}) => {
+  const f = await fixture(page);
+  await page.goto('/token-orders/new');
+  await expect(page.getByLabel('Pay with', { exact: true })).toContainText('Research assistant');
+  await expect(page.getByLabel('Pay with', { exact: true })).toHaveValue('');
+  await page.getByRole('radio', { name: /Buy at an instant price/ }).check();
+  await page.getByRole('button', { name: 'Get instant prices' }).click();
+  await expect(page.getByText(/This quoted pack expires at/)).toBeVisible();
+  expect(f.writes.find((write) => write.path === '/api/inference/quotes')!.body).not.toHaveProperty(
+    'grantId',
+  );
+  await page.getByRole('checkbox', { name: /I understand/ }).check();
+  await page.getByRole('button', { name: 'Buy pack · $2.50' }).click();
+  await expect(page.getByRole('heading', { name: 'Purchased quota' })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Connect token batch' })).toHaveAttribute(
+    'href',
+    `/tokens?connect=${packId}`,
+  );
+  await expect(page.locator('a[href^="/agents/"]')).toHaveCount(0);
+  await expect(page.getByText(/This pack expires at/)).toBeVisible();
+  expect(f.packs[0]!.fundingSource).toBe('wallet');
+  expect(f.writes.find((write) => write.path === '/api/token-orders')!.body).not.toHaveProperty(
+    'grantId',
+  );
+  expect(f.writes.map((write) => write.path)).toEqual([
+    '/api/inference/quotes',
+    '/api/token-orders',
+  ]);
+});
+
+test('changing wallet or agent funding invalidates the quote and purchase consent', async ({
+  page,
+}) => {
+  const f = await fixture(page);
+  await page.goto('/token-orders/new');
+  await page.getByRole('radio', { name: /Buy at an instant price/ }).check();
+  await page.getByRole('button', { name: 'Get instant prices' }).click();
+  await page.getByRole('checkbox', { name: /I understand/ }).check();
+  await page.getByLabel('Pay with', { exact: true }).selectOption(grantId);
+  await expect(page.getByRole('radio', { name: /Modal/ })).toHaveCount(0);
+  await expect(page.getByRole('checkbox', { name: /I understand/ })).not.toBeChecked();
+  await expect(page.getByRole('button', { name: 'Buy pack', exact: true })).toBeDisabled();
+  await page.getByRole('button', { name: 'Get instant prices' }).click();
+  expect(f.writes.at(-1)!.body.grantId).toBe(grantId);
+  await page.getByLabel('Pay with', { exact: true }).selectOption('');
+  await expect(page.getByRole('radio', { name: /Modal/ })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Get instant prices' }).click();
+  expect(f.writes.at(-1)!.body).not.toHaveProperty('grantId');
+  expect(f.writes.filter((write) => write.path === '/api/token-orders')).toHaveLength(0);
+});
+
+test('an explicit agent keeps its instant and spending limits even with an empty wallet', async ({
+  page,
+}) => {
+  const f = await fixture(page, { walletCents: 0, agentInstant: false });
+  await page.goto(`/token-orders/new?grantId=${grantId}`);
+  await expect(page.getByLabel('Pay with', { exact: true })).toHaveValue(grantId);
+  await expect(page.getByRole('radio', { name: /Buy at an instant price/ })).toBeDisabled();
+  await page.getByLabel('Maximum total price').fill('6');
+  await page.getByRole('checkbox', { name: /I understand/ }).check();
+  await expect(page.getByRole('button', { name: 'Start 30-second auction' })).toBeDisabled();
+  await page.getByLabel('Maximum total price').fill('4');
+  await page.getByRole('checkbox', { name: /I understand/ }).check();
+  await page.getByRole('button', { name: 'Start 30-second auction' }).click();
+  await expect(
+    page.getByRole('heading', { name: 'Token pack auction', exact: true }),
+  ).toBeVisible();
+  expect(f.writes.find((write) => write.path === '/api/token-orders')!.body.grantId).toBe(grantId);
+  await expect(page.getByRole('link', { name: 'View agent', exact: true })).toHaveAttribute(
+    'href',
+    `/agents/${grantId}`,
+  );
+});
+
+test('wallet read failure and insufficient exact credit prevent purchases until corrected', async ({
+  page,
+}) => {
+  const options = { empty: true, walletCents: 1.01, walletFailure: true };
+  const f = await fixture(page, options);
+  await page.goto('/token-orders/new');
+  await expect(page.getByRole('alert')).toContainText('Wallet temporarily unavailable');
+  await page.getByLabel('Maximum total price').fill('0.0101');
+  await page.getByRole('checkbox', { name: /I understand/ }).check();
+  await expect(page.getByRole('button', { name: 'Start 30-second auction' })).toBeDisabled();
+  options.walletFailure = false;
+  await page.getByRole('button', { name: 'Try again', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Start 30-second auction' })).toBeEnabled();
+  await page.getByLabel('Maximum total price').fill('0.0102');
+  await page.getByRole('checkbox', { name: /I understand/ }).check();
+  await expect(page.getByRole('button', { name: 'Start 30-second auction' })).toBeDisabled();
+  await expect(page.getByText('This purchase exceeds your available wallet credit.')).toBeVisible();
+  await page.getByRole('radio', { name: /Buy at an instant price/ }).check();
+  await page.getByRole('button', { name: 'Get instant prices' }).click();
+  await page.getByRole('checkbox', { name: /I understand/ }).check();
+  await expect(page.getByRole('button', { name: 'Buy pack · $2.50' })).toBeDisabled();
+  expect(f.writes.filter((write) => write.path === '/api/token-orders')).toHaveLength(0);
+});
+
+test('retrying optional agent budgets never submits a wallet purchase', async ({ page }) => {
+  const f = await fixture(page, { empty: true });
+  let fail = true;
+  await page.route(/\/api\/inference\/grants(?:\?|$)/, (route) =>
+    fail
+      ? route.fulfill({ status: 503, json: { error: 'Agent budgets temporarily unavailable' } })
+      : route.fallback(),
+  );
+  await page.goto('/token-orders/new');
+  await expect(page.getByRole('alert')).toContainText('Agent budgets temporarily unavailable');
+  await page.getByRole('checkbox', { name: /I understand/ }).check();
+  await expect(page.getByRole('button', { name: 'Start 30-second auction' })).toBeEnabled();
+  fail = false;
+  await page.getByRole('button', { name: 'Try again', exact: true }).click();
+  await expect(page.getByRole('alert')).toHaveCount(0);
+  expect(f.writes).toEqual([]);
+});
+
+test('an uncertain wallet purchase freezes funding and recovers the unchanged request', async ({
+  page,
+}) => {
+  const f = await fixture(page, { empty: true, purchaseFailureOnce: true });
+  await page.clock.install({ time: new Date() });
+  await page.goto('/token-orders/new');
+  await page.getByRole('radio', { name: /Buy at an instant price/ }).check();
+  await page.getByRole('button', { name: 'Get instant prices' }).click();
+  await page.getByRole('checkbox', { name: /I understand/ }).check();
+  await page.getByRole('button', { name: 'Buy pack · $2.50' }).click();
+  await expect(page.getByRole('alert')).toContainText('No automatic retry was made');
+  await expect(page.getByLabel('Pay with', { exact: true })).toBeDisabled();
+  await page.clock.fastForward(120000);
+  expect(f.writes.filter((write) => write.path === '/api/token-orders')).toHaveLength(1);
+  await page.getByRole('button', { name: 'Recover saved order' }).click();
+  await expect(page.getByRole('heading', { name: 'Purchased quota' })).toBeVisible();
+  const purchases = f.writes.filter((write) => write.path === '/api/token-orders');
+  expect(purchases).toHaveLength(2);
+  expect(purchases[1]!.body).toEqual(purchases[0]!.body);
+  expect(purchases[0]!.body).not.toHaveProperty('grantId');
+});
+
+test('token quantity maxima match the API for both wallet auctions and quotes', async ({
+  page,
+}) => {
+  const f = await fixture(page, { empty: true });
+  await page.goto('/token-orders/new');
+  const input = page.getByLabel('Input tokens', { exact: true });
+  const output = page.getByLabel('Output tokens', { exact: true });
+  await expect(input).toHaveAttribute('max', '10000000');
+  await expect(output).toHaveAttribute('max', '1000000');
+  await input.fill('10000001');
+  await page.getByRole('checkbox', { name: /I understand/ }).check();
+  await expect(page.getByRole('button', { name: 'Start 30-second auction' })).toBeDisabled();
+  await page.getByRole('radio', { name: /Buy at an instant price/ }).check();
+  await expect(page.getByRole('button', { name: 'Get instant prices' })).toBeDisabled();
+  await input.fill('2000000');
+  await output.fill('1000001');
+  await expect(page.getByRole('button', { name: 'Get instant prices' })).toBeDisabled();
+  expect(f.writes).toHaveLength(0);
+});
+
 test('provider edits quoted rates and sees explicit commission without provisioning', async ({
   page,
 }) => {
@@ -867,7 +1090,8 @@ function liveBids(): TokenBid[] {
 test('token auctions share the VM countdown, retain the deadline on refresh, and await a confirmed award', async ({
   page,
 }) => {
-  await page.clock.install({ time: new Date('2026-10-30T20:00:00Z') });
+  await page.clock.install({ time: new Date('2026-10-30T19:59:59Z') });
+  await page.clock.pauseAt(new Date('2026-10-30T20:00:00Z'));
   const f = await fixture(page);
   f.orders.push(liveOrder());
   f.bids.push(...liveBids());

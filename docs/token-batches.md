@@ -1,8 +1,20 @@
-# Purchased token batches and VM connections
+# Purchased token batches and connections
 
-**Purchased tokens** in the buyer sidebar opens `/tokens`. The table lists purchased batches across the owner's agent budgets, including completed and expired batches. It shows purchased and available input/output quota separately, consumed tokens, pending usage, expiry countdown and exact date, paid price, refunds and purchase links. A deadline passing removes usable availability immediately in the UI; unresolved usage remains shown as pending.
+**Purchased tokens** in the buyer sidebar opens `/tokens`. The table lists purchased batches bought directly from the wallet or through the owner’s agent budgets, including completed and expired batches. It shows purchased and available input/output quota separately, consumed tokens, pending usage, expiry countdown and exact date, paid price, refunds and purchase links. A deadline passing removes usable availability immediately in the UI; unresolved usage remains shown as pending.
 
 The page reads only its current 25-row page, newest first, with a stable cursor in the URL. Visible pages refresh every five seconds; hidden tabs pause network polling. An index on buyer/date/ID supports inventory reads without scanning unrelated buyers or loading private accounting snapshots. Viewing history never creates an order, VM or credential.
+
+## Buy and use tokens without an agent
+
+1. Open **Purchased tokens → Buy tokens** and keep **Pay with: Broker wallet**. No agent or VM is required. Choose input/output quantities and either a 30-second auction ceiling or a reviewed instant price.
+2. Confirm the purchase. Instant purchases charge the exact displayed price. Auctions temporarily reserve the ceiling, charge the winning price once, and release the remainder. Cancelled auctions and auctions with no eligible offers release the full hold.
+3. Open **Connect** on the purchased batch to issue its usage key. Use the key with the displayed base URL and model in an app, script, VM or agent. Model calls consume prepaid quota without another wallet charge.
+
+Direct purchases expire two hours after the auction starts, or at the expiry displayed in the accepted instant quote. The quote itself expires sooner and makes no reservation. Unused purchased quota remains non-refundable; a verified provider failure returns any eligible refund directly to available wallet credit. Buying and using tokens does not add an agent to the Agents page.
+
+The signed-in buyer can omit `grantId` from `POST /api/inference/quotes` and `POST /api/token-orders` to use the wallet. Responses identify direct purchases with `fundingSource: "wallet"`; wallet quotes have `grantId: null` and include `packExpiresAt`. Orders and packs retain an internal accounting identifier, which is not an agent budget and cannot be funded, reused for another order or issued an agent purchasing key. Direct purchases share buyer-wide limits of five open auctions, ten unsettled packs and five purchases per minute. An idempotency retry does not create another purchase or reservation.
+
+An agent budget remains an optional funding source. Selecting one retains its existing budget, policy, provider and expiry limits. Agent purchasing keys still use their bound grant when `grantId` is omitted; ordinary API keys do not gain wallet purchasing authority.
 
 ## Task → VM → purchased inference
 
@@ -28,6 +40,6 @@ Issuance accepts `{ "operationKey": "unique-key-issuance-id", "name": "Task batc
 
 Only a digest is stored. The secret is returned once, is not recoverable by refresh, and is never placed in connection URLs, browser storage, audit events or the setup example. Replaying a successful issuance returns `409 secret_already_issued`, never another secret or an implicit rotation. If a response is uncertain, creating a replacement is an explicit action with a new operation key.
 
-A replacement revokes only that batch's old key. Expiry cannot exceed the batch, task grant or issuing purchasing key. Delegated keys inherit parent revocation; replacing the grant's purchasing key retains the existing behavior of revoking all that grant's keys. Account/role changes and the existing 20-active-key account limit still apply. A batch key cannot purchase, fund, manage keys, access VM controls, inspect other batches or silently consume a different pack when exhausted. Rotation preserves usage and unresolved reservations.
+A replacement revokes only that batch's old key. Expiry cannot exceed the batch, its accounting scope or the issuing purchasing key. Direct wallet batches have no agent purchasing key to manage. Delegated keys inherit parent revocation; replacing the grant's purchasing key retains the existing behavior of revoking all that grant's keys. Account/role changes and the existing 20-active-key account limit still apply. A batch key cannot purchase, fund, manage keys, access VM controls, inspect other batches or silently consume a different pack when exhausted. Rotation preserves usage and unresolved reservations.
 
 The connection link `/tokens?connect=<pack-id>` opens an authenticated owner dialog without embedding a secret. Session ownership and all key scopes are revalidated by the server. Payment collection and supplier payouts remain separate; unused purchased quota is not automatically refundable.

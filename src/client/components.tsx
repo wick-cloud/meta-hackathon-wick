@@ -204,7 +204,7 @@ export function LoadMore({
       {error && <ErrorBox error={error} />}
       {available && (
         <div className="load-more">
-          <button className="button secondary" disabled={loading} onClick={onLoad}>
+          <button type="button" className="button secondary" disabled={loading} onClick={onLoad}>
             {loading ? <Spinner label="Loading more" /> : 'Load more'}
           </button>
         </div>
@@ -298,7 +298,7 @@ export function ErrorBox({ error, retry }: { error: string; retry?: () => void }
       <AlertCircle size={18} />
       <div>{error}</div>
       {retry && (
-        <button className="text-button" onClick={retry}>
+        <button type="button" className="text-button" onClick={retry}>
           Try again
         </button>
       )}

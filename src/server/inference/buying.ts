@@ -24,6 +24,7 @@ import {
 } from './data.js';
 import { allowance, decisionView, policyView, FIXTURE_BUYING_INPUT_BOUND } from './buying-guard.js';
 import { repairLegacyAllowance } from './allowance.js';
+import { requireAgentFunding } from './grants.js';
 import {
   createTokenOrder,
   OFFER_SELECT,
@@ -64,7 +65,7 @@ export async function listAgents(ctx: AppContext, actor: Actor, raw: unknown) {
     await ctx.pool.query(
       `SELECT g.*,g.created_at::text cursor_created_at,p.mode buying_mode,p.paused buying_paused,COALESCE(p.output_per_call,512) output_per_call
     FROM broker_inference_grants g LEFT JOIN broker_inference_buying_policies p ON p.grant_id=g.id
-    WHERE g.buyer_id=$1 AND ($2='' OR strpos(lower(g.name),lower($2))>0) AND ($3='all' OR g.status=$3)
+    WHERE g.buyer_id=$1 AND g.funding_source='agent' AND ($2='' OR strpos(lower(g.name),lower($2))>0) AND ($3='all' OR g.status=$3)
     AND ($4::timestamptz IS NULL OR(g.created_at,g.id)<($4,$5::uuid))
     ORDER BY g.created_at DESC,g.id DESC LIMIT $6`,
       [actor.id, filter.q, filter.status, page.cursor, page.cursorId, page.limit + 1],
@@ -111,6 +112,7 @@ export async function buyingWorkspace(
     await db.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
     await authority(db, actor);
     const grant = await lockedGrant(db, actor, id);
+    requireAgentFunding(grant);
     const policy = (
       await db.query('SELECT * FROM broker_inference_buying_policies WHERE grant_id=$1', [id])
     ).rows[0];
@@ -134,6 +136,7 @@ export async function saveBuyingPolicy(ctx: AppContext, actor: Actor, id: string
   return transaction(ctx.pool, async (db) => {
     await authority(db, actor);
     const grant = await lockedGrant(db, actor, id, true);
+    requireAgentFunding(grant);
     activeMode(ctx, grant);
     return withOperation(
       db,
@@ -206,6 +209,7 @@ export async function evaluateBuying(
   const claim = await transaction(ctx.pool, async (db) => {
     await authority(db, actor);
     const grant = await lockedGrant(db, actor, id, true);
+    requireAgentFunding(grant);
     activeMode(ctx, grant);
     await db.query('SELECT provider FROM broker_inference_routes ORDER BY provider FOR UPDATE');
     await repairLegacyAllowance(db, id);
@@ -431,6 +435,7 @@ export async function evaluateBuying(
     return await transaction(ctx.pool, async (db) => {
       await authority(db, actor);
       const current = await lockedGrant(db, actor, id);
+      requireAgentFunding(current);
       const saved = (
         await db.query(
           'SELECT * FROM broker_inference_buying_policies WHERE grant_id=$1 FOR UPDATE',
@@ -504,11 +509,12 @@ export async function acceptBuying(
   owner(actor);
   const decision = (
     await ctx.pool.query(
-      `SELECT d.* FROM broker_inference_buying_decisions d JOIN broker_inference_grants g ON g.id=d.grant_id
+      `SELECT d.*,g.funding_source FROM broker_inference_buying_decisions d JOIN broker_inference_grants g ON g.id=d.grant_id
     WHERE d.id=$1 AND d.grant_id=$2 AND g.buyer_id=$3`,
       [decisionId, grantId, actor.id],
     )
   ).rows[0];
+  if (decision) requireAgentFunding(decision);
   if (!decision?.candidate)
     failure(404, 'recommendation_missing', 'No purchase recommendation was found.');
   return createTokenOrder(ctx, actor, purchaseInput(grantId, decisionView(decision)), {
@@ -532,7 +538,7 @@ export async function maintainBuying(ctx: AppContext) {
       .query(`SELECT p.grant_id,g.buyer_id,u.name,u.email FROM broker_inference_buying_policies p
     JOIN broker_inference_grants g ON g.id=p.grant_id JOIN "user" u ON u.id=g.buyer_id
     WHERE p.mode='automatic' AND NOT p.paused AND p.model_calls<20 AND p.next_evaluation_at<=statement_timestamp()
-    AND g.status='active' AND g.expires_at>statement_timestamp() AND u.role='buyer'
+    AND g.funding_source='agent' AND g.status='active' AND g.expires_at>statement_timestamp() AND u.role='buyer'
     ORDER BY p.next_evaluation_at,p.grant_id LIMIT 4`)
   ).rows;
   for (const row of due) {

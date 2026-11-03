@@ -43,9 +43,10 @@ function pack(id: string, changes: Partial<TokenPack> = {}): TokenPack {
 }
 async function fixture(
   page: Page,
-  options: { failOnce?: boolean; expiresIn?: number; paged?: boolean } = {},
+  options: { failOnce?: boolean; expiresIn?: number; paged?: boolean; wallet?: boolean } = {},
 ) {
   const first = pack(a, {
+      ...(options.wallet ? ({ fundingSource: 'wallet' } as const) : {}),
       ...(options.expiresIn ? { expiresAt: new Date(+now + options.expiresIn).toISOString() } : {}),
     }),
     second = pack(b, { provider: 'baseten', createdAt: new Date(+now - 1000).toISOString() });
@@ -191,6 +192,28 @@ test('a batch connection reveals its key once without placing that secret into s
   await expect(page.getByRole('dialog')).toHaveCount(0);
   await expect(page.getByLabel('New batch API key')).toHaveCount(0);
   await expect(page).toHaveURL(/\/tokens$/);
+});
+
+test('a wallet purchase connects without an agent and keeps its batch-only key boundaries', async ({
+  page,
+}) => {
+  const f = await fixture(page, { wallet: true });
+  await page.goto('/tokens');
+  const row = page.getByRole('row').filter({ hasText: '#11111111' });
+  await expect(row).toContainText('Wallet purchase');
+  await expect(row.getByRole('link', { name: 'Agent budget' })).toHaveCount(0);
+  await row.getByRole('link', { name: /Connect Modal batch/ }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toContainText('your app, script, VM or agent');
+  await expect(dialog.locator('a[href^="/agents/"]')).toHaveCount(0);
+  expect(f.writes).toHaveLength(0);
+  await dialog.getByRole('button', { name: 'Create or replace batch key' }).click();
+  await expect(dialog.getByLabel('New batch API key')).toHaveValue(secret);
+  await expect(dialog).toContainText('It cannot buy tokens, add funding or access VM controls.');
+  await expect(dialog.locator('pre')).toContainText('OPENAI_API_KEY="<your batch key>"');
+  await expect(dialog.locator('pre')).not.toContainText(secret);
+  expect(f.writes.map((write) => write.path)).toEqual([`/api/inference/packs/${a}/keys`]);
+  expect(f.reads.some((path) => path.includes('/inference/grants'))).toBe(false);
 });
 
 test('expiry removes usable availability immediately without disguising held quota as available', async ({

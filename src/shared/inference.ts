@@ -3,6 +3,9 @@ export const INFERENCE_MODEL_ID = 'meta/muse-spark-open';
 export const INFERENCE_MODEL_NAME = 'Meta Muse Spark Open';
 export const INFERENCE_CONTRACT = 'muse-spark-open-text-v1';
 export const INFERENCE_PROVIDERS = ['modal', 'baseten'] as const;
+/** Direct wallet purchases keep an isolated two-hour allowance, without an agent. */
+export const WALLET_TOKEN_PACK_TTL_SECONDS = 2 * 60 * 60;
+export type TokenFundingSource = 'agent' | 'wallet';
 export type InferenceProvider = (typeof INFERENCE_PROVIDERS)[number];
 export type InferenceMode = 'fixture' | 'real';
 export type GrantStatus = 'active' | 'closing' | 'closed';
@@ -17,6 +20,8 @@ export interface InferenceGrantInput {
 }
 export interface InferenceGrant {
   id: string;
+  /** Wallet purchase scopes are internal accounting records, not agent budgets. */
+  fundingSource?: TokenFundingSource;
   name: string;
   status: GrantStatus;
   mode: InferenceMode;
@@ -77,7 +82,10 @@ export interface TokenOffering extends Omit<
 }
 export interface TokenQuote {
   quoteId: string;
-  grantId: string;
+  grantId: string | null;
+  fundingSource?: TokenFundingSource;
+  /** Signed expiry for a direct wallet purchase. */
+  packExpiresAt?: string;
   provider: InferenceProvider;
   modelId: string;
   inputTokens: number;
@@ -88,6 +96,7 @@ export interface TokenQuote {
   mode: InferenceMode;
 }
 export interface TokenQuoteInput {
+  /** Owner sessions omit this to use the wallet. Agent keys use their bound grant. */
   grantId?: string;
   modelId?: string;
   inputTokens: number;
@@ -110,6 +119,7 @@ export interface TokenBid {
 export interface TokenOrder {
   id: string;
   grantId: string;
+  fundingSource?: TokenFundingSource;
   mode: 'auction' | 'instant';
   sourceMode: InferenceMode;
   status: 'open' | 'awarded' | 'no_offers' | 'cancelled' | 'expired';
@@ -128,6 +138,7 @@ export interface TokenPack {
   id: string;
   orderId: string;
   grantId: string;
+  fundingSource?: TokenFundingSource;
   provider: InferenceProvider;
   mode: InferenceMode;
   modelId: string;
