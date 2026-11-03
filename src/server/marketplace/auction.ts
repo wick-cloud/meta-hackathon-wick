@@ -1,4 +1,17 @@
 import { diskCatalogEligible, requireDisk, reserveVmDisk } from '../disks/service.js';
+import {
+  authorizeDemoComputeSource,
+  authorizeDemoComputeRequest,
+  DEMO_COMPUTE_CATALOG_IDS,
+  demoComputeCatalogEligible,
+  demoComputeProviders,
+  demoComputePolicy,
+  demoComputePrice,
+  demoBidPrice,
+  newDemoComputePolicy,
+  selectDemoBid,
+  type DemoComputeSource,
+} from '../demo/compute.js';
 import { moneyCents } from './data.js';
 import { studioAuthority, type StudioSource } from '../coding/studio-budget.js';
 import { MIN_ORDER_PRICE_CENTS } from '../../shared/money.js';
@@ -47,6 +60,7 @@ export async function createRequest(
   body: Row,
   priorRequestId?: string,
   studio?: StudioSource,
+  demo?: DemoComputeSource,
 ) {
   if (!body || typeof body !== 'object' || Array.isArray(body))
     throw new HttpError(400, 'A request body is required.');
@@ -77,6 +91,18 @@ export async function createRequest(
   for (const key of ['git', 'repository', 'repo', 'task', 'command', 'agent'])
     if (key in body)
       throw new HttpError(400, 'Environment requests cannot contain workload execution fields.');
+  for (const key of [
+    'demo',
+    'demoSource',
+    'demoRunId',
+    'demoCompute',
+    'demoSponsorship',
+    'sponsorship',
+  ])
+    if (key in body)
+      throw new HttpError(400, 'Demo sponsorship cannot be selected through request input.');
+  if (demo && (studio || priorRequestId))
+    throw new HttpError(400, 'Demo sponsorship cannot authorize Studio or retry requests.');
   enforceKeyLimit(actor.apiKey, 'maxAuctionCents', maxPriceCents);
   const operation = clientOperationKey(body.operationKey, Boolean(actor.apiKey));
   return transaction(ctx.pool, async (db) =>
@@ -97,8 +123,21 @@ export async function createRequest(
         priorRequestId: priorRequestId ?? null,
         mode: ctx.wick.mode,
         ...(studio ? { studioTaskId: studio.id } : {}),
+        ...(demo ? { demoRunId: demo.runId } : {}),
       },
       async () => {
+        if (demo) {
+          await db.query("SELECT pg_advisory_xact_lock(hashtext('broker-global-vm-admission'))");
+          await authorizeDemoComputeSource(ctx, db, actor, demo, {
+            diskId,
+            catalogId,
+            durationMinutes,
+            maxPriceCents,
+            region,
+            matchAcrossProviders,
+            operationKey: operation,
+          });
+        }
         if (priorRequestId) {
           const prior = (
             await db.query('SELECT * FROM broker_requests WHERE id=$1 AND buyer_id=$2 FOR UPDATE', [
@@ -186,6 +225,7 @@ export async function createRequest(
            AND (item->>'cpu')::numeric >= $3 AND (item->>'memoryGb')::numeric >= $4
            AND ($5='any' OR item->>'region'=$5)
            AND item->'durationMinutes' @> $6::jsonb
+           AND ($8::text[] IS NULL OR id=ANY($8::text[]))
            ORDER BY id LIMIT $7 FOR SHARE`,
               [
                 ctx.wick.mode,
@@ -195,6 +235,7 @@ export async function createRequest(
                 region,
                 JSON.stringify([durationMinutes]),
                 MAX_MATCH_CATALOGS + 1,
+                demo ? [...DEMO_COMPUTE_CATALOG_IDS] : null,
               ],
             )
           ).rows;
@@ -206,6 +247,7 @@ export async function createRequest(
           eligibleCatalogs = rows
             .map((row) => ({ ...row.item, id: row.id, approved: true }) as CatalogItem)
             .filter((item) => !diskId || diskCatalogEligible(ctx, item))
+            .filter((item) => !demo || demoComputeCatalogEligible(ctx, item))
             .filter((item) =>
               catalogSatisfiesRequest(item, {
                 requirements: { cpu, memoryGb, ...(gpu ? { gpu } : {}) },
@@ -235,6 +277,12 @@ export async function createRequest(
               'No approved configuration satisfies the reviewed requirements.',
             );
         }
+        const sponsorship = demo
+          ? newDemoComputePolicy(
+              demo.runId,
+              await demoComputeProviders(ctx, db, eligibleCatalogs as CatalogItem[]),
+            )
+          : null;
         if (studio) {
           const task = await studioAuthority(db, studio, actor);
           if (task.vm_request_id) {
@@ -262,6 +310,7 @@ export async function createRequest(
             {
               ...frozen,
               ...(eligibleCatalogs ? { matchMode: 'compatible', eligibleCatalogs } : {}),
+              ...(sponsorship ? { demoCompute: sponsorship } : {}),
             },
             region,
             durationMinutes,
@@ -274,6 +323,11 @@ export async function createRequest(
           ],
         );
         const request = r.rows[0];
+        if (demo)
+          await db.query('UPDATE broker_demo_runs SET request_id=$2 WHERE id=$1', [
+            demo.runId,
+            request.id,
+          ]);
         if (studio)
           await db.query('UPDATE broker_studio_tasks SET vm_request_id=$2 WHERE id=$1', [
             studio.id,
@@ -293,6 +347,7 @@ export async function createRequest(
         const providers = await db.query(
           `SELECT p.id FROM broker_providers p WHERE p.policy->>'autoBid'='true'
        AND ($3::boolean=false OR $4 <> 'real' OR p.cloud_provider IS NOT NULL)
+       AND ($5::uuid[] IS NULL OR p.id=ANY($5::uuid[]))
        AND EXISTS(SELECT 1 FROM broker_catalog c
          JOIN LATERAL(SELECT 1 FROM broker_offerings o WHERE o.provider_id=p.id
            AND o.catalog_id=c.id AND o.active ORDER BY o.price_cents,o.id LIMIT 1) published ON true
@@ -300,13 +355,14 @@ export async function createRequest(
          AND (p.cloud_provider IS NULL OR p.cloud_provider=c.item->>'provider')
          AND (p.policy->'allowedCatalogIds' IS NULL OR p.policy->'allowedCatalogIds'='null'::jsonb
               OR p.policy->'allowedCatalogIds' ? c.id))
-       ORDER BY CASE WHEN $5 AND p.cloud_provider='modal' AND p.simulated=false THEN 0 ELSE 1 END,
+       ORDER BY CASE WHEN $6 AND p.cloud_provider='modal' AND p.simulated=false THEN 0 ELSE 1 END,
          (p.cloud_provider IS NOT NULL) DESC,p.id LIMIT $2`,
           [
             (eligibleCatalogs ?? [frozen]).map((item) => item.id),
             8,
             matchAcrossProviders,
             ctx.wick.mode,
+            sponsorship?.providerIds ?? null,
             ctx.wick.mode === 'real' && ctx.config.modalComputePromotionEnabled === true,
           ],
         );
@@ -475,6 +531,8 @@ export async function submitBid(
             'Price is outside the customer budget or provider pricing policy.',
           );
         const match = (await publishedMatches(ctx, db, request, p, input.offeringId))[0]!;
+        await authorizeDemoComputeRequest(ctx, db, request);
+        const sponsorship = demoComputePrice(request, p.id, match.frozen, price);
         const offering = match.offering;
         let pricing;
         if (ctx.wick.mode === 'real') {
@@ -558,6 +616,7 @@ export async function submitBid(
                 cloudProvider: p.cloud_provider,
                 revenueShare: revenueShare(price),
                 ...(pricing ? { pricing } : {}),
+                ...(sponsorship ? { demoSponsorship: sponsorship } : {}),
               },
               price,
               actor.apiKey?.id ?? null,
@@ -632,6 +691,25 @@ export async function closeAuction(ctx: AppContext, requestId: string) {
       );
       return;
     }
+    let winner = bids[0];
+    try {
+      const sponsorship = await authorizeDemoComputeRequest(ctx, db, request);
+      if (sponsorship) winner = selectDemoBid(request, bids);
+    } catch (error) {
+      if (!(error instanceof HttpError)) throw error;
+      await db.query(
+        "UPDATE broker_requests SET status='failed',failure_reason='The reserved Modal sponsorship is unavailable. No fallback VM was allocated.' WHERE id=$1",
+        [requestId],
+      );
+      await db.query("UPDATE broker_bids SET status='lost' WHERE request_id=$1 AND status='held'", [
+        requestId,
+      ]);
+      await db.query(
+        "UPDATE broker_holds SET released_at=now(),release_reason='Demo sponsorship unavailable' WHERE bid_id IN(SELECT id FROM broker_bids WHERE request_id=$1) AND released_at IS NULL",
+        [requestId],
+      );
+      return;
+    }
     if (!(await globalAdmissionAvailable(ctx, db, request))) {
       await db.query(
         "UPDATE broker_requests SET status='failed',failure_reason='The concurrent VM limit, booked capacity, or original launch deadline prevents this rental. Review a new auction.' WHERE id=$1",
@@ -647,7 +725,7 @@ export async function closeAuction(ctx: AppContext, requestId: string) {
     if (request.disk_id) {
       try {
         await requireDisk(ctx, db, request.buyer_id, request.disk_id);
-        const winningCatalogId = bids[0].offering_snapshot?.catalog?.id ?? request.catalog_id;
+        const winningCatalogId = winner.offering_snapshot?.catalog?.id ?? request.catalog_id;
         const current = (
           await db.query(
             'SELECT item,approved FROM broker_catalog WHERE id=$1 AND source_mode=$2 FOR SHARE',
@@ -673,7 +751,7 @@ export async function closeAuction(ctx: AppContext, requestId: string) {
         return;
       }
     }
-    return awardHeldBid(ctx, db, request, bids[0]);
+    return awardHeldBid(ctx, db, request, winner);
   });
 }
 
@@ -717,6 +795,12 @@ export async function globalAdmissionAvailable(ctx: AppContext, db: PoolClient, 
 
 /** Shared frozen quote + VM + provision-job owner; does not call Wick or run workloads. */
 export async function awardHeldBid(ctx: AppContext, db: PoolClient, request: Row, winner: Row) {
+  if (request.catalog_snapshot?.demoCompute)
+    await db.query("SELECT pg_advisory_xact_lock(hashtext('broker-global-vm-admission'))");
+  const sponsorshipPolicy = await authorizeDemoComputeRequest(ctx, db, request);
+  const sponsorship = sponsorshipPolicy ? demoBidPrice(request, winner) : null;
+  if (sponsorship && winner.offering_snapshot?.catalog?.id !== DEMO_COMPUTE_CATALOG_IDS[0])
+    throw new HttpError(409, 'Only the sponsored Modal Micro offer can be awarded for this demo.');
   const winnerCatalog = winner.offering_snapshot?.catalog as CatalogItem | undefined;
   if (compatibleRequest(request) && !winnerCatalog)
     throw new HttpError(409, 'The winning bid has no frozen provider configuration.');
@@ -817,6 +901,7 @@ export async function awardHeldBid(ctx: AppContext, db: PoolClient, request: Row
         acceptedAt: isoDate(winner.created_at),
         admissionDeadlineAt: instantReservationInterval(request).admissionDeadlineAt,
         ...(winner.offering_snapshot.pricing ? { pricing: winner.offering_snapshot.pricing } : {}),
+        ...(sponsorship ? { demoSponsorship: sponsorship } : {}),
       },
       request.disk_id ?? null,
     ],
@@ -831,9 +916,11 @@ export async function awardHeldBid(ctx: AppContext, db: PoolClient, request: Row
     winner.provider_id,
     requestId,
     'awarded',
-    request.negotiation_intent_id
-      ? 'Buyer explicitly accepted the reviewed provider and fixed total. Quote and offering revision frozen.'
-      : 'Lowest eligible fixed-price offer won. Quote and offering revision frozen.',
+    sponsorship
+      ? 'The eligible Modal Micro offer won at one cent after the disclosed demo sponsorship. Gross provider quote and commission are unchanged; Modal has tie priority.'
+      : request.negotiation_intent_id
+        ? 'Buyer explicitly accepted the reviewed provider and fixed total. Quote and offering revision frozen.'
+        : 'Lowest eligible fixed-price offer won. Quote and offering revision frozen.',
   );
   await enqueue(ctx, db, QUEUES.provision, { vmId });
   return { vmId, winningBidId: winner.id };
@@ -862,6 +949,9 @@ export async function proposeBid(ctx: AppContext, actor: Actor, requestId: strin
     ).rows[0].n,
   );
   const match = (await publishedMatches(ctx, ctx.pool, request, provider))[0]!;
+  const sponsorship = demoComputePolicy(request);
+  if (sponsorship && !sponsorship.providerIds.includes(provider.id))
+    throw new HttpError(403, 'This provider is outside the frozen demo auction.');
   const minimumPriceCents = match.minimumPriceCents;
   const availableCapacity = availableForBids(provider.total_capacity, held, provider.policy);
   const prices = automaticBidPrices(
@@ -885,6 +975,39 @@ export async function proposeBid(ctx: AppContext, actor: Actor, requestId: strin
         constraints: ['No model call or capacity reservation.', 'No payment due.'],
       },
     };
+  if (sponsorship && !match.promotion) {
+    // This disclosed demo strategy binds the supplier's existing allowed base.
+    // It does not change policy or consume extra paid model calls for bid generation.
+    const allowed =
+      availableCapacity > 0 &&
+      prices.basePriceCents <= request.max_price_cents &&
+      (provider.policy.maxPriceCents === undefined ||
+        prices.basePriceCents <= provider.policy.maxPriceCents);
+    return {
+      decision: allowed ? ('bid' as const) : ('decline' as const),
+      ...(allowed
+        ? {
+            totalPriceCents: prices.basePriceCents,
+            catalogId: match.catalog.id,
+            offeringId: match.offering.id as string,
+          }
+        : {}),
+      mode: ctx.muse.mode,
+      modelCalled: false,
+      receipt: {
+        observed: [
+          'Frozen demo routes, supplier policy, available capacity and the current compute floor.',
+        ],
+        decision: allowed
+          ? 'The demo uses the supplier’s permitted base bid; Modal receives a separately disclosed sponsorship credit.'
+          : 'No supplier base bid fits the demo budget and available capacity.',
+        constraints: [
+          'No model call or provider policy change.',
+          'Gross pricing and commission remain unchanged.',
+        ],
+      },
+    };
+  }
   // The database clock owns the auction deadline. Monotonic elapsed time
   // conservatively includes the intervening eligibility reads and leaves room
   // for the binding submission's own SQL deadline/capacity recheck.

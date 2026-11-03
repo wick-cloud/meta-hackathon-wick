@@ -7,12 +7,18 @@ import { transaction, enqueue } from '../marketplace/db.js';
 import { iso, type Row } from '../marketplace/data.js';
 import { clientOperationKey } from '../operations.js';
 import { diskCatalogEligible, diskOptions } from '../disks/service.js';
-import { requireFreshManagedRate, fixedQuote, managedPricing } from '../../shared/pricing.js';
+import {
+  requireFreshManagedRate,
+  fixedQuote,
+  managedPricing,
+  isSponsoredComputeQuote,
+} from '../../shared/pricing.js';
 import { applyCreditEntry } from '../agreements/credits.js';
 import { createGrantInTransaction } from '../inference/grants.js';
 import { OFFER_SELECT, offeringOpen, packPrice } from '../inference/market.js';
 import { issuePackKey } from '../inference/pack-access.js';
 import type { DemoIdentity } from './access.js';
+import { DEMO_COMPUTE_CATALOG_IDS, demoComputeProviders } from './compute.js';
 
 export const DEMO_QUEUE = 'broker-homepage-demo';
 export const DEMO_CATALOG_ID = 'modal:micro:auto';
@@ -58,13 +64,12 @@ export async function demoPrerequisites(
     return { reason: 'The demo terminal and private disk are not ready.' };
   const rows = (
     await ctx.pool.query(
-      'SELECT item,approved FROM broker_catalog WHERE id=$1 AND source_mode=$2',
-      [DEMO_CATALOG_ID, ctx.wick.mode],
+      'SELECT item,approved FROM broker_catalog WHERE id=ANY($1::text[]) AND source_mode=$2',
+      [[...DEMO_COMPUTE_CATALOG_IDS], ctx.wick.mode],
     )
   ).rows;
-  const catalog = rows[0]
-    ? ({ ...rows[0].item, approved: rows[0].approved } as CatalogItem)
-    : undefined;
+  const catalogs = rows.map((row) => ({ ...row.item, approved: row.approved }) as CatalogItem);
+  const catalog = catalogs.find((item) => item.id === DEMO_CATALOG_ID);
   if (
     !catalog ||
     catalog.provider !== 'modal' ||
@@ -86,17 +91,15 @@ export async function demoPrerequisites(
       return { reason: 'The Modal Micro price needs a fresh qualification check.' };
     }
   }
-  const supply = (
-    await ctx.pool.query(
-      `SELECT 1 FROM broker_providers p JOIN broker_offerings o ON o.provider_id=p.id
-     WHERE o.catalog_id=$1 AND o.active AND p.policy->>'autoBid'='true' AND p.total_capacity>0
-     AND (p.cloud_provider='modal' OR ($2='fixture' AND p.cloud_provider IS NULL))
-     AND (p.policy->'allowedCatalogIds' IS NULL OR p.policy->'allowedCatalogIds'='null'::jsonb OR p.policy->'allowedCatalogIds' ? $1)
-     AND COALESCE((p.policy->>'basePriceCents')::numeric,0)<=$3 LIMIT 1`,
-      [DEMO_CATALOG_ID, ctx.wick.mode, DEMO_VM_CENTS],
-    )
-  ).rowCount;
-  if (!supply) return { reason: 'Modal Micro has no eligible demo offering.' };
+  try {
+    await demoComputeProviders(
+      ctx,
+      ctx.pool,
+      catalogs.filter((item) => item.cpu >= catalog.cpu && item.memoryGb >= catalog.memoryGb),
+    );
+  } catch {
+    return { reason: 'Qualified Modal and E2B Micro offers are required within the demo limit.' };
+  }
   const route = ctx.inference?.routes.get('baseten');
   const until = Date.now() + 18 * 60_000;
   if (
@@ -422,7 +425,7 @@ export async function demoState(
           row.buyer_id,
         ]),
         ctx.pool.query(
-          'SELECT total_price_cents,created_at FROM broker_bids WHERE request_id=$1 ORDER BY created_at,id LIMIT 8',
+          'SELECT total_price_cents,offering_snapshot,created_at FROM broker_bids WHERE request_id=$1 ORDER BY created_at,id LIMIT 8',
           [row.request_id],
         ),
         ctx.pool.query(
@@ -466,11 +469,38 @@ export async function demoState(
             provider: 'modal',
             catalogId: DEMO_CATALOG_ID,
             terminalPath: live ? `/api/vms/${vm.id}/terminal` : null,
-            priceCents: vm?.quote_snapshot?.totalPriceCents ?? null,
+            priceCents:
+              vm?.quote_snapshot?.demoSponsorship?.effectivePriceCents ??
+              vm?.quote_snapshot?.totalPriceCents ??
+              null,
+            ...(isSponsoredComputeQuote(vm?.quote_snapshot?.pricing)
+              ? { operatorSponsored: true }
+              : {}),
+            ...(vm?.quote_snapshot?.demoSponsorship
+              ? {
+                  grossPriceCents: Number(vm.quote_snapshot.totalPriceCents),
+                  sponsorCreditCents: vm.quote_snapshot.demoSponsorship.sponsorCreditCents,
+                }
+              : {}),
             auctionEndsAt: iso(request.closes_at),
             bids: vmBids.rows.map((b) => ({
-              provider: 'modal',
-              priceCents: Number(b.total_price_cents),
+              provider:
+                b.offering_snapshot?.catalog?.provider ??
+                b.offering_snapshot?.cloudProvider ??
+                'modal',
+              priceCents:
+                b.offering_snapshot?.demoSponsorship?.effectivePriceCents ??
+                Number(b.total_price_cents),
+              ...(isSponsoredComputeQuote(b.offering_snapshot?.pricing)
+                ? { operatorSponsored: true }
+                : {}),
+              ...(b.offering_snapshot?.demoSponsorship
+                ? {
+                    grossPriceCents: Number(b.total_price_cents),
+                    sponsorCreditCents: b.offering_snapshot.demoSponsorship.sponsorCreditCents,
+                    catalogId: b.offering_snapshot.catalog.id,
+                  }
+                : {}),
               acceptedAt: iso(b.created_at)!,
             })),
             cleanupConfirmed: Boolean(vm?.cleanup_confirmed_at),

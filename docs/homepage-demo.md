@@ -1,12 +1,19 @@
 # Homepage hackathon demo
 
 The homepage provides one sponsored, anonymous journey: a real Baseten token
-auction, a real Modal Micro compute auction, and a live terminal with a small
+auction, a real compute auction with Modal and E2B Micro eligibility, and a live terminal with a small
 Python example. Judges do not need an account, payment details, Wick credentials,
 or a Baseten service key. Both auctions retain their normal 30-second deadlines.
-Each has exactly one eligible provider, disclosed in the interface. A missing
-valid bid ends that attempt; the demo never invents competing bids or silently
-switches provider or VM size.
+The token auction has one eligible provider: Baseten. The compute auction invites
+qualified Modal and E2B Micro supply and displays only bids actually accepted by
+the server. Modal's effective bid is **$0.01**, through its operator-funded
+provider promotion or a disclosed homepage credit. The receipt shows the original
+gross bid and any additional demo credit.
+Modal has priority on a one-cent tie. A missing valid Modal bid ends that attempt;
+the demo never invents competing bids or silently switches provider or VM size.
+The demo uses each invited supplier's valid base bid or fixed provider promotion,
+subject to its pricing policy and available capacity. It does not spend extra Muse calls on compute bid
+discount proposals; the terminal example demonstrates the real Muse integration.
 
 ## Judge experience
 
@@ -30,15 +37,24 @@ retain their reservations and cannot be automatically retried.
 
 ## Fixed demo policy
 
-| Resource          | Limit                                                                                        |
-| ----------------- | -------------------------------------------------------------------------------------------- |
-| Compute           | Exact `modal:micro:auto`, 15-minute lease including setup, maximum $0.25 auction price       |
-| Tokens            | Baseten only, 5,000 input / 2,048 output, maximum $0.05 purchase                             |
-| Model requests    | At most two accepted attempts per run; at most 1,024 output tokens per request               |
-| Disk              | One private disk per run, preloaded with `hello_muse.py` and instructions                    |
-| Next run          | Both resources unlock 20 minutes after confirmed VM cleanup; pending cleanup remains blocked |
-| Concurrent runs   | At most two globally, and one per anonymous identity or observed client IP                   |
-| Daily sponsorship | $5 per America/New_York calendar day; reserve $0.50 per admitted run                         |
+| Resource           | Limit                                                                                                                        |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
+| Compute            | Qualified Modal and E2B Micro bids; exact `modal:micro:auto` award, 15-minute lease including setup, maximum $0.25 gross bid |
+| Demo compute price | Modal $0.01 after sponsorship; original gross bid and sponsor contribution disclosed                                         |
+| Tokens             | Baseten only, 5,000 input / 2,048 output, maximum $0.05 purchase                                                             |
+| Model requests     | At most two accepted attempts per run; at most 1,024 output tokens per request                                               |
+| Disk               | One private disk per run, preloaded with `hello_muse.py` and instructions                                                    |
+| Next run           | Both resources unlock 20 minutes after confirmed VM cleanup; pending cleanup remains blocked                                 |
+| Concurrent runs    | At most two globally, and one per anonymous identity or observed client IP                                                   |
+| Daily sponsorship  | $5 per America/New_York calendar day; reserve $0.50 per admitted run                                                         |
+
+The one-cent display price does not reduce the provider's accepted gross price,
+invoice, or commission calculation. If the separate operator-funded Modal provider
+promotion is enabled, its genuine gross bid is already one cent and the homepage
+adds no further credit. That provider promotion retains its recorded native cost
+estimate and subsidy. The homepage still enforces its stricter $0.25 cost-covered
+compute ceiling. Judges pay nothing. Normal buyer auctions retain their existing
+pricing rules, including any separately configured provider promotion.
 
 The conservative $0.50 reservation covers the compute and token purchase
 ceilings plus $0.20 reserved for disk/operational overhead. Once a run attempts
@@ -67,8 +83,12 @@ Enable `LIVE_DEMO_ENABLED=true` only after deployment and qualification. Keep
 `DISKS_ENABLED=true`. Configure the existing server-only Wick/Baseten credentials,
 an unexpired Baseten request-sized inference accounting certificate, published
 automatic-bid token supply, and approved Modal Micro compute supply with a valid
-current rate. Its fixed demo ceilings must cover the published offers. The
-existing disk qualification requirements also apply.
+current rate. Also publish qualified E2B Micro supply
+with automatic bidding, available capacity, and a gross bid within the $0.25
+ceiling. Both routes must satisfy the existing native-disk qualification and
+provider-account checks; the demo admits no larger profiles. Additional configured
+providers are outside this bounded demo auction. The fixed demo ceilings must
+cover the genuine gross offers before sponsorship.
 
 For Railway's public HTTP edge, use the already-supported
 `AUTH_TRUST_RAILWAY_PROXY=true` so abuse limits use the edge's sanitized
@@ -105,7 +125,8 @@ and these judge instructions alongside the public GitHub repo and demo video.
 
 The opt-in verifier runs that journey through public HTTP and terminal WebSocket
 APIs. It allocates one real demo VM/disk, makes two bounded Baseten requests,
-checks that a third request is rejected, then explicitly ends its own test run
+checks that a third request is rejected and the terminal still accepts commands
+and reconnects without changing the lease, then explicitly ends its own test run
 to verify cleanup and cooldown. Ordinary judge sessions stay open after token
 exhaustion until their lease expires or the judge selects **End demo**.
 It requires no provider or account credentials and never logs the key or terminal

@@ -1,7 +1,12 @@
 /** Public, guest-scoped demo receipts. Never contains upstream identifiers or secrets. */
 export interface DemoBid {
   provider: string;
+  /** Price after any explicit demo sponsorship. */
   priceCents: number;
+  grossPriceCents?: number;
+  sponsorCreditCents?: number;
+  operatorSponsored?: boolean;
+  catalogId?: string;
   acceptedAt: string;
 }
 export interface DemoRun {
@@ -18,6 +23,9 @@ export interface DemoRun {
     catalogId: 'modal:micro:auto';
     terminalPath: string | null;
     priceCents: number | null;
+    grossPriceCents?: number | null;
+    sponsorCreditCents?: number | null;
+    operatorSponsored?: boolean;
     auctionEndsAt: string | null;
     bids: DemoBid[];
     cleanupConfirmed: boolean;
