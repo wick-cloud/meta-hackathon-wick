@@ -4,6 +4,7 @@ import { Brand } from './brand';
 import { Link } from './components';
 import {
   DemoAction,
+  StudioDemoTask,
   DemoError,
   DemoOverview,
   HomepageDemoSession,
@@ -128,6 +129,7 @@ export function DemoLanding() {
                 A guided Hello World task with visible source and execution results. Then explore
                 the files in your terminal. No API key to copy.
               </p>
+              <StudioDemoTask />
               <DemoAction demo={demo} kind="studio" />
             </div>
           </section>

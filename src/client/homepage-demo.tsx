@@ -206,6 +206,21 @@ export function useHomepageDemo() {
 }
 export type HomepageDemo = ReturnType<typeof useHomepageDemo>;
 
+export function StudioDemoTask() {
+  return (
+    <label className="demo-task-box">
+      <span>Your Muse task</span>
+      <textarea
+        aria-label="Your Muse task"
+        value="Create hello_world.py that prints Hello, World! Run it and verify the output."
+        readOnly
+        rows={3}
+      />
+      <small>Fixed Hello World task for this hackathon demo · Up to 2 model calls</small>
+    </label>
+  );
+}
+
 export function DemoAction({ demo, kind = 'terminal' }: { demo: HomepageDemo; kind?: DemoKind }) {
   const { data, loading, busy, active, cooldown } = demo;
   if (data?.run && (active || cooldown)) {
@@ -741,6 +756,7 @@ export function HomepageDemoSession({ demo }: { demo: HomepageDemo }) {
           Fixture environment · resources and inference are simulated.
         </p>
       )}
+      {isStudio && <StudioDemoTask />}
       <ol className="demo-progress" aria-label="Demo progress">
         {[
           'Live auctions',
