@@ -6,6 +6,12 @@ import { createDemoIdentity, demoIdentity, demoIpDigest } from './access.js';
 import { DEMO_QUEUE, demoState, startDemo, endDemo, demoKey } from './service.js';
 import { maintainDemo, reconcileDemo } from './worker.js';
 
+const startMutation = z
+  .object({
+    operationKey: operationSchema,
+    kind: z.enum(['terminal', 'studio']).default('terminal'),
+  })
+  .strict();
 const mutation = z.object({ operationKey: operationSchema }).strict();
 function origin(ctx: AppContext, request: FastifyRequest) {
   if (
@@ -48,10 +54,10 @@ export async function registerDemo(app: FastifyInstance, ctx: AppContext) {
   app.post('/api/demo/start', async (request, reply) => {
     origin(ctx, request);
     throttle(request, 'write');
-    const input = mutation.parse(request.body);
+    const input = startMutation.parse(request.body);
     const identity = createDemoIdentity(ctx, request, reply);
     try {
-      await startDemo(ctx, identity, input.operationKey);
+      await startDemo(ctx, identity, input.operationKey, input.kind);
     } catch (error) {
       // A losing parallel first-start must not overwrite the winning browser cookie.
       reply.removeHeader('Set-Cookie');

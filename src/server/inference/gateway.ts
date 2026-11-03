@@ -32,6 +32,7 @@ import {
 import { retirePackLocked } from './market.js';
 import { studioAuthority } from '../coding/studio-budget.js';
 import { seal } from '../coding/artifacts.js';
+import { demoStudioMessages } from '../demo/studio-script.js';
 import { assertDemoInference } from '../demo/inference-guard.js';
 import {
   planTokenAllowance,
@@ -329,6 +330,18 @@ export async function settleRequest(
           result.finishReason,
         ],
       );
+    if (result && request.source_demo_run_id)
+      await db.query(
+        `UPDATE broker_demo_studio_attempts SET response_cipher=$2,finish_reason=$3,failure_code=NULL,completed_at=clock_timestamp() WHERE request_id=$1 AND response_cipher IS NULL`,
+        [
+          request.id,
+          seal(ctx, {
+            content: result.content.length <= 2048 ? result.content : '',
+            oversized: result.content.length > 2048,
+          }),
+          result.finishReason,
+        ],
+      );
     if (result?.platformOutputTokens)
       await event(
         db,
@@ -451,6 +464,43 @@ export async function completeStudioTask(
     planAttempt,
   });
 }
+/** Fixed anonymous guided preset, callable only by its leased worker. */
+export async function completeDemoStudio(
+  ctx: AppContext,
+  actor: Actor,
+  runId: string,
+  leaseToken: string,
+  attempt: 0 | 1,
+) {
+  if (actor.apiKey || actor.role !== 'buyer')
+    failure(403, 'owner_required', 'Guided Studio requires its worker authority.');
+  const run = (
+    await ctx.pool.query(
+      "SELECT grant_id,pack_id FROM broker_demo_runs WHERE id=$1 AND buyer_id=$2 AND kind='studio'",
+      [runId, actor.id],
+    )
+  ).rows[0];
+  if (!run?.pack_id) failure(404, 'not_found', 'Guided demo not found.');
+  return completeInternal(
+    ctx,
+    actor,
+    {
+      operationKey: `demo-studio:${runId}:${attempt}`,
+      model: INFERENCE_MODEL_ID,
+      messages: demoStudioMessages(attempt),
+      max_tokens: 1024,
+      stream: false,
+    },
+    {
+      kind: 'demo',
+      id: runId,
+      grantId: run.grant_id,
+      packId: run.pack_id,
+      leaseToken,
+      planAttempt: attempt,
+    },
+  );
+}
 async function codingAuthority(
   db: PoolClient,
   source: { id: string; leaseToken: string },
@@ -479,7 +529,8 @@ async function completeInternal(
   actor: Actor,
   raw: unknown,
   source?: {
-    kind: 'coding' | 'studio';
+    kind: 'coding' | 'studio' | 'demo';
+    packId?: string;
     id: string;
     grantId: string;
     leaseToken: string;
@@ -488,7 +539,12 @@ async function completeInternal(
 ): Promise<InferenceCompletion> {
   const { operationKey, ...input } = completionSchema.parse(raw),
     grantId = source?.grantId ?? requireGrantKey(actor),
-    rt = runtime(ctx);
+    rt = runtime(ctx),
+    demoSource =
+      source?.kind === 'demo'
+        ? { ...source, packId: source.packId!, planAttempt: source.planAttempt! }
+        : undefined,
+    scopedPackId = demoSource?.packId ?? actor.apiKey?.packId;
   // Public request parameters remain unchanged; task prompts choose their own bounded reasoning policy.
   const fingerprint = operationFingerprint(input);
   const reservation = await transaction(ctx.pool, async (db) => {
@@ -499,7 +555,17 @@ async function completeInternal(
         const task = await studioAuthority(db, source, actor);
         if (task.plan_attempt !== source.planAttempt)
           failure(409, 'planning_attempt_changed', 'The planning attempt changed.');
-      } else await codingAuthority(db, source, actor);
+      } else if (source.kind === 'demo')
+        await assertDemoInference(
+          db,
+          ctx.config,
+          actor,
+          grantId,
+          input.max_tokens,
+          false,
+          demoSource,
+        );
+      else await codingAuthority(db, source, actor);
     }
     const prior = (
       await db.query(
@@ -508,7 +574,7 @@ async function completeInternal(
       )
     ).rows[0];
     if (prior) {
-      if (!(await packScopedRequest(db, prior, actor.apiKey?.packId)))
+      if (!(await packScopedRequest(db, prior, scopedPackId)))
         failure(403, 'pack_scope', 'This request belongs to another token batch.');
       if (prior.input_fingerprint !== fingerprint)
         failure(
@@ -530,7 +596,7 @@ async function completeInternal(
     }
     if (grant.status !== 'active' || new Date(grant.expires_at) <= (await clock(db)))
       failure(409, 'grant_closed', 'The grant has closed or expired.');
-    await assertDemoInference(db, ctx.config, actor, grantId, input.max_tokens, true);
+    await assertDemoInference(db, ctx.config, actor, grantId, input.max_tokens, true, demoSource);
     activeMode(ctx, grant);
     const routes = (
       await db.query('SELECT * FROM broker_inference_routes ORDER BY provider FOR UPDATE')
@@ -554,7 +620,7 @@ async function completeInternal(
       await db.query(
         `SELECT * FROM broker_token_packs WHERE grant_id=$1 AND status='active' AND expires_at>clock_timestamp() AND($2::uuid IS NULL OR id=$2)
       ORDER BY expires_at,id LIMIT 10 FOR UPDATE`,
-        [grantId, actor.apiKey?.packId ?? null],
+        [grantId, scopedPackId ?? null],
       )
     ).rows;
     let requiredOutputMinimum: number | undefined;
@@ -590,16 +656,17 @@ async function completeInternal(
     const groups = tokenAllowanceGroups(packs, qualified, {
       grantId,
       now: await clock(db),
-      packId: actor.apiKey?.packId,
+      packId: scopedPackId,
     });
     let busy = false;
     for (const group of groups) {
       const plan = planTokenAllowance([group], {
         maxOutputTokens: input.max_tokens,
-        minimumOutputReservation: source
-          ? Math.min(input.max_tokens, MIN_TASK_OUTPUT_RESERVATION)
-          : input.max_tokens,
-        allowReducedOutput: Boolean(source),
+        minimumOutputReservation:
+          source && source.kind !== 'demo'
+            ? Math.min(input.max_tokens, MIN_TASK_OUTPUT_RESERVATION)
+            : input.max_tokens,
+        allowReducedOutput: Boolean(source && source.kind !== 'demo'),
       });
       if (!plan) continue;
       const route = routes.find((r) => r.provider === group.route.provider)!;
@@ -635,8 +702,8 @@ async function completeInternal(
       );
       const request = (
         await db.query(
-          `INSERT INTO broker_inference_requests(grant_id,pack_id,buyer_id,source_key_id,provider,source_mode,operation_key,input_fingerprint,reserved_input,reserved_output,deadline_at,source_job_id,source_task_id)
-           VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,clock_timestamp()+interval '120 seconds',$11,$12) RETURNING *`,
+          `INSERT INTO broker_inference_requests(grant_id,pack_id,buyer_id,source_key_id,provider,source_mode,operation_key,input_fingerprint,reserved_input,reserved_output,deadline_at,source_job_id,source_task_id,source_demo_run_id)
+           VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,clock_timestamp()+interval '120 seconds',$11,$12,$13) RETURNING *`,
           [
             grantId,
             pack.id,
@@ -650,6 +717,7 @@ async function completeInternal(
             plan.outputBound,
             source?.kind === 'coding' ? source.id : null,
             source?.kind === 'studio' ? source.id : null,
+            source?.kind === 'demo' ? source.id : null,
           ],
         )
       ).rows[0];
@@ -659,6 +727,14 @@ async function completeInternal(
          FROM jsonb_to_recordset($2::jsonb) AS a(pack_id uuid,allocation_order smallint,reserved_input integer,reserved_output integer)`,
         [request.id, JSON.stringify(rows)],
       );
+      if (source?.kind === 'demo') {
+        const linked = await db.query(
+          'UPDATE broker_demo_studio_attempts SET request_id=$3 WHERE run_id=$1 AND attempt=$2 AND request_id IS NULL',
+          [source.id, source.planAttempt, request.id],
+        );
+        if (!linked.rowCount)
+          failure(409, 'demo_studio_attempt_changed', 'The guided attempt is already dispatched.');
+      }
       if (source?.kind === 'studio') {
         const linked = await db.query(
           'UPDATE broker_studio_plan_attempts SET request_id=$3,failure_code=NULL WHERE task_id=$1 AND attempt=$2 AND request_id IS NULL',
@@ -705,13 +781,21 @@ async function completeInternal(
     await transaction(ctx.pool, async (db) => {
       await authority(db, actor, 'inference:use');
       const grant = await lockedGrant(db, actor, grantId, true);
-      await assertDemoInference(db, ctx.config, actor, grantId, input.max_tokens, false);
+      await assertDemoInference(
+        db,
+        ctx.config,
+        actor,
+        grantId,
+        input.max_tokens,
+        false,
+        demoSource,
+      );
       if (source) {
         if (source.kind === 'studio') {
           const task = await studioAuthority(db, source, actor);
           if (task.plan_attempt !== source.planAttempt)
             failure(409, 'planning_attempt_changed', 'The planning attempt changed.');
-        } else await codingAuthority(db, source, actor);
+        } else if (source.kind === 'coding') await codingAuthority(db, source, actor);
       }
       activeMode(ctx, grant);
       const route = (
