@@ -350,7 +350,7 @@ async function verify(origin: string) {
       true,
     );
     check(
-      (!ended.run?.vm || ended.run.vm.cleanupConfirmed) &&
+      (!ended.run?.vm?.id || ended.run.vm.cleanupConfirmed) &&
         (!ended.run?.disk || ended.run.disk.status === 'deleted') &&
         !ended.run?.canIssueKey &&
         !ended.run?.vm?.terminalPath,
@@ -373,13 +373,18 @@ async function verify(origin: string) {
     startAttempted = true;
     const operationKey = randomUUID();
     const start = await request('/api/demo/start', { operationKey });
-    check(start.status === 200 && cookie, 'demo_start_failed');
+    if (start.status >= 400 && start.status < 500 && !cookie) startAttempted = false;
+    check(start.status === 200 && cookie, `demo_start_http_${start.status}`);
     admitted = true;
-    log('admitted');
+    const admittedRun = parse(
+      z.object({ run: z.object({ id: z.string().uuid() }) }),
+      start.value,
+      'demo_start_run_id_invalid',
+    );
+    log('admitted', { runId: admittedRun.run.id });
     const replay = await request('/api/demo/start', { operationKey });
     check(
-      replay.status === 200 &&
-        (replay.value as DemoState).run?.id === (start.value as DemoState).run?.id,
+      replay.status === 200 && (replay.value as DemoState).run?.id === admittedRun.run.id,
       'start_replay_not_idempotent',
     );
     const me = await request('/api/me');
@@ -389,6 +394,7 @@ async function verify(origin: string) {
     );
     const ready = await poll((value) => value.run?.status === 'ready');
     const run = ready.run!;
+    check(run.id === admittedRun.run.id, 'demo_run_changed');
     check(
       run.tokens?.provider === 'baseten' && run.tokens.status === 'awarded',
       'baseten_not_awarded',
@@ -410,7 +416,16 @@ async function verify(origin: string) {
         run.vm.priceCents <= 25,
       'demo_pack_or_price_limit',
     );
-    log('ready', { tokenPriceCents: run.tokens.priceCents, vmPriceCents: run.vm.priceCents });
+    const ownedIds = parse(
+      z.object({ vmId: z.string().uuid(), diskId: z.string().uuid(), packId: z.string().uuid() }),
+      { vmId: run.vm.id, diskId: run.disk.id, packId: run.tokens.packId },
+      'demo_resource_ids_invalid',
+    );
+    log('ready', {
+      ...ownedIds,
+      tokenPriceCents: run.tokens.priceCents,
+      vmPriceCents: run.vm.priceCents,
+    });
     active();
     const issued = await request('/api/demo/key', { operationKey: randomUUID() });
     check(issued.status === 200, 'demo_key_http');
