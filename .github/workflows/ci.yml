@@ -10,7 +10,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   check:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     services:
       postgres:
@@ -58,6 +58,11 @@ jobs:
       - run: npm run test:static
       - run: PGPASSWORD=wick_ci_only createdb -h localhost -U wick wick_broker_test
       - run: npm run typecheck
+      - name: Restore with client tools matching the PostgreSQL 16 test server
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends postgresql-client-16
+          PATH="/usr/lib/postgresql/16/bin:$PATH" npm run test:restore
       - run: |
           npm test -- --reporter=default --reporter=json --outputFile=/tmp/broker-unit-results.json
           node scripts/check-test-results.mjs vitest /tmp/broker-unit-results.json
@@ -65,11 +70,6 @@ jobs:
       - run: npm run security:secrets
       - run: npm run db:seed
       - run: npm run test:recovery
-      - name: Restore with client tools matching the PostgreSQL 16 test server
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends postgresql-client-16
-          PATH="/usr/lib/postgresql/16/bin:$PATH" npm run test:restore
       - run: npx playwright install --with-deps chromium
       - run: |
           INFERENCE_MARKET_MODE=fixture node dist/src/server/index.js > /tmp/wick-broker.log 2>&1 &
@@ -83,18 +83,44 @@ jobs:
           if [ "$ready" != true ]; then echo 'Fixture application did not become ready.' >&2; exit 1; fi
           RUN_INFERENCE_E2E=1 PLAYWRIGHT_JSON_OUTPUT_FILE=/tmp/broker-browser-results.json npm run test:browser -- --reporter=list,json
           node scripts/check-test-results.mjs playwright /tmp/broker-browser-results.json
-      - name: Verify the real Linux guest sandbox with fixture inference
-        run: |
-          docker build -f tests/fixtures/coding-linux.Dockerfile -t wick-broker-coding-local:bookworm .
-          CODING_TEST_DOCKER_CONTEXT=default npm run test:coding-local
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         if: failure()
         with:
           name: browser-test-results
           path: test-results/
           retention-days: 7
+  sandbox:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: wick
+          POSTGRES_PASSWORD: wick_ci_only
+          POSTGRES_DB: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U wick -d postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql://wick:wick_ci_only@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Verify the real Linux guest sandbox with fixture inference
+        run: |
+          docker build -f tests/fixtures/coding-linux.Dockerfile -t wick-broker-coding-local:bookworm .
+          CODING_TEST_DOCKER_CONTEXT=default npm run test:coding-local
   security:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -107,7 +133,7 @@ jobs:
       - name: Scan application security boundaries
         run: /tmp/broker-semgrep/bin/semgrep scan --config .semgrep.yml --metrics=off --disable-version-check --error
   container:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
