@@ -14,6 +14,8 @@ The permanent **Orders** hub retains VM auctions and AI token purchases, includi
 
 **Developer access:** buyers and providers can create separate Broker API keys in **API keys**, then use the [TypeScript SDK, CLI and local MCP server](docs/developer-access.md). The same account, orders, funding and capacity rules apply. Broker keys are independent of Wick service credentials.
 
+**Improve my sales:** sellers can ask Meta Muse to review recent demand and their selling history, compare bounded policy recommendations, and explicitly apply one after reviewing its exact changes. Recommendations preserve price floors and spare slots; comparisons show base-price matches, not predicted wins or revenue. See [seller sales recommendations](docs/improve-my-sales.md).
+
 **Agent purchasing:** the [buying workspace](docs/agent-buying.md) adds owner-reviewed Muse recommendations, optional automatic refills, purchase comparison receipts, and provider selling windows. It uses the existing app, database, wallet and worker. New agent grants default to two hours; buying never extends their deadline.
 
 **Agent tokens:** the [prepaid inference marketplace](docs/inference-marketplace.md) adds owner-funded agent budgets, grant-bound API keys, 30-second token auctions, instant quotes and a buffered Meta Muse gateway in this same app/database. Modal and Baseten inference are separate from VM providers. It defaults off; unqualified real routes cannot sell token packs. SDK/CLI/MCP `0.4.0` includes the inference interfaces and [four-decimal USD prices](docs/money.md), with the retired scheduled VM commands removed from current CLI/MCP discovery. Earlier client downloads remain immutable.

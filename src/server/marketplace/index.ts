@@ -5,6 +5,7 @@ import { modalComputePromotionQuote, compareComputeBidPriority } from './compute
 import { moneyCents } from './data.js';
 import { registerComputePromotionAdmin } from './compute-promotion-admin.js';
 import { registerVmInventory } from './inventory.js';
+import { registerSales } from './sales.js';
 import { clientOperationKey, recordKeyAction, withOperation } from '../operations.js';
 import type { FastifyInstance } from 'fastify';
 import type { Pool } from 'pg';
@@ -52,6 +53,7 @@ export {
 export { markReady, confirmCleanup } from './lifecycle.js';
 
 export async function registerMarketplace(app: FastifyInstance, ctx: AppContext) {
+  registerSales(app, ctx);
   registerVmInventory(app, ctx);
   registerComputePromotionAdmin(app, ctx);
   const proposalCalls = new Map<string, { count: number; resetsAt: number }>();
@@ -369,6 +371,8 @@ export async function registerMarketplace(app: FastifyInstance, ctx: AppContext)
   app.put('/api/provider/policy', async (request) => {
     const actor = await ctx.requireActor(request, ['provider']);
     const body = request.body as Row;
+    const expectedProviderId =
+      body?.expectedProviderId === undefined ? undefined : uuid(body.expectedProviderId);
     const expectedRevision = integer(body?.expectedRevision, 'Expected policy revision', 1);
     const operationKey = shortText(body?.operationKey, 'Operation key', 128);
     if (operationKey.length < 8 || !/^[a-zA-Z0-9:._-]+$/.test(operationKey))
@@ -378,6 +382,7 @@ export async function registerMarketplace(app: FastifyInstance, ctx: AppContext)
       );
     const { operationKey: _operationKey, ...input } = body;
     const allowedFields = new Set([
+      'expectedProviderId',
       'expectedRevision',
       'autoBid',
       'minimumPriceCents',
@@ -398,6 +403,11 @@ export async function registerMarketplace(app: FastifyInstance, ctx: AppContext)
         )
       ).rows[0];
       if (!p) throw new HttpError(403, 'Provider access is not configured.');
+      if (expectedProviderId !== undefined && p.id !== expectedProviderId)
+        throw new HttpError(
+          409,
+          'The signed-in seller changed. Generate recommendations for this account before applying.',
+        );
       // Replays must be checked before current policy/capacity validation: the
       // successful response can have been lost before those values changed.
       if (p.policy_apply_receipt?.operationKey === operationKey) {
