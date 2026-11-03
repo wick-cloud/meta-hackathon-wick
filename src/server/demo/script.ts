@@ -216,8 +216,10 @@ export function demoBootstrapCommand(
   resetDisk = false,
   receipt: DemoReceiptFacts | null = null,
 ): string {
+  // Archil exposes .archil as a reserved, client-local mount control entry.
+  // Never traverse or delete it; it is not persisted customer workspace data.
   const reset = resetDisk
-    ? `python3 -I -S -c 'import os,shutil; root="/workspace"; entries=list(os.scandir(root)); [(os.unlink(e.path) if e.is_symlink() or not e.is_dir(follow_symlinks=False) else shutil.rmtree(e.path)) for e in entries]; assert not os.listdir(root)' && `
+    ? `python3 -I -S -c 'import os,shutil; root="/workspace"; entries=[e for e in os.scandir(root) if e.name!=".archil"]; [(os.unlink(e.path) if e.is_symlink() or not e.is_dir(follow_symlinks=False) else shutil.rmtree(e.path)) for e in entries]; assert not [name for name in os.listdir(root) if name!=".archil"]' && `
     : '';
   if (kind === 'studio') {
     const readme = Buffer.from(
