@@ -12,6 +12,7 @@ import { createRequest, cancelRequest } from '../marketplace/auction.js';
 import { terminateVm } from '../marketplace/lifecycle.js';
 import { demoBootstrapCommand } from './script.js';
 import { demoReceiptFacts } from './receipt.js';
+import { INFERENCE_PROVIDERS } from '../../shared/inference.js';
 import {
   DEMO_QUEUE,
   DEMO_CATALOG_ID,
@@ -176,7 +177,7 @@ async function advance(ctx: AppContext, run: Row) {
       ctx,
       run,
       'auction',
-      'Running the 30-second Baseten token auction. One eligible provider.',
+      'Running the 30-second Muse token auction. Every qualified seller is invited.',
     );
     return;
   }
@@ -190,10 +191,10 @@ async function advance(ctx: AppContext, run: Row) {
   if (
     !order ||
     order.status !== 'awarded' ||
-    order.provider !== 'baseten' ||
+    !(INFERENCE_PROVIDERS as readonly string[]).includes(order.provider) ||
     Number(order.price_cents) > 5
   ) {
-    await fail(ctx, run, 'No eligible Baseten token offer was awarded. Closing the demo.');
+    await fail(ctx, run, 'No eligible Muse token offer was awarded. Closing the demo.');
     return;
   }
   if (!run.pack_id) return; // Award checkpoint is discovered on the next tick.
@@ -315,7 +316,7 @@ async function advance(ctx: AppContext, run: Row) {
       'ready',
       run.kind === 'studio'
         ? 'Your guided Muse Studio workspace and terminal are ready.'
-        : 'Your Modal terminal and Baseten Muse tokens are ready.',
+        : 'Your Modal terminal and Muse tokens are ready.',
     );
     if (run.kind === 'studio') await reconcileDemoStudio(ctx, run.id, run.lease_token);
     return;
@@ -355,6 +356,7 @@ async function advance(ctx: AppContext, run: Row) {
             )
           ).rows,
           tokenPriceCents: order.price_cents,
+          tokenProvider: order.provider,
           leaseMinutes: DEMO_LIMITS.durationMinutes,
           inputTokens: DEMO_LIMITS.inputTokens,
           outputTokens: DEMO_LIMITS.outputTokens,
@@ -392,7 +394,7 @@ async function advance(ctx: AppContext, run: Row) {
     'ready',
     run.kind === 'studio'
       ? 'Your guided Muse Studio workspace and terminal are ready.'
-      : 'Your Modal terminal and Baseten Muse tokens are ready.',
+      : 'Your Modal terminal and Muse tokens are ready.',
   );
 }
 

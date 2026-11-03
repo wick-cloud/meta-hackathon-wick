@@ -136,6 +136,7 @@ function sampleReceipt(extraBids = 0): DemoReceiptFacts {
     },
     bids: [sponsored, rival, ...Array.from({ length: extraBids }, () => rival)],
     tokenPriceCents: '1.8',
+    tokenProvider: 'baseten',
     leaseMinutes: 15,
     inputTokens: 5000,
     outputTokens: 2048,

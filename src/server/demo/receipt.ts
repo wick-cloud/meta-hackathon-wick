@@ -41,6 +41,9 @@ export function demoBidView(b: Row): DemoBid {
 }
 
 const providerName = (id: string) => PROVIDER_REGISTRY.find((p) => p.id === id)?.name ?? id;
+/** Muse token routes, which are separate from the compute registry's display labels. */
+const tokenSellerName = (id: string) =>
+  ({ baseten: 'Baseten', modal: 'Modal' })[id as 'baseten' | 'modal'] ?? id;
 /** Display-only; an unexpected amount is omitted rather than failing demo setup. */
 const usd = (cents: number | string | null | undefined) => {
   if (cents === null || cents === undefined) return null;
@@ -59,6 +62,7 @@ export function demoReceiptFacts(input: {
   vm: Row;
   bids: Row[];
   tokenPriceCents: unknown;
+  tokenProvider: string | null;
   leaseMinutes: number;
   inputTokens: number;
   outputTokens: number;
@@ -83,7 +87,7 @@ export function demoReceiptFacts(input: {
         .map((b) => [providerName(b.provider), usd(b.priceCents)]),
     },
     tokens: {
-      seller: 'Baseten',
+      seller: input.tokenProvider ? tokenSellerName(input.tokenProvider) : null,
       model: 'Muse Spark Open',
       input: input.inputTokens,
       output: input.outputTokens,

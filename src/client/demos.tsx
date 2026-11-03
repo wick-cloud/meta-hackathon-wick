@@ -4,6 +4,7 @@ import { Brand } from './brand';
 import { Link } from './components';
 import {
   DemoAction,
+  DemoAvailability,
   StudioDemoTask,
   DemoError,
   DemoOverview,
@@ -72,8 +73,12 @@ export function DemoLanding() {
           </p>
         )}
         {!demo.data?.run && <DemoError demo={demo} />}
-        {!demo.data?.run && !demo.error && (
-          <div className="demos-status-action">
+        <div className="demos-toolbar">
+          <div>
+            <h2>Choose a demo</h2>
+            <DemoAvailability demo={demo} />
+          </div>
+          {!demo.data?.run && !demo.error && (
             <button
               className="button secondary small"
               disabled={demo.refreshing || !!demo.busy}
@@ -82,34 +87,23 @@ export function DemoLanding() {
               <RefreshCw size={14} />
               {demo.refreshing ? 'Checking demo status…' : 'Check demo status'}
             </button>
-          </div>
-        )}
+          )}
+        </div>
         <div className={`demos-options ${demo.data?.run ? 'has-active-demo' : ''}`}>
-          <section className="demos-terminal-choice" aria-label="Terminal demo">
-            <div className="demos-choice-action">
-              <DemoAction demo={demo} />
-              <p>
-                {demo.data?.run
-                  ? 'Your guest session is saved. Return to this page to resume it.'
-                  : fixtureMode
-                    ? 'A simulated VM, demo disk, and fixture model responses.'
-                    : 'A real VM, your own disk, and a small Meta Muse allowance.'}
-              </p>
-            </div>
-            <DemoOverview demo={demo} />
-          </section>
-          <section
-            id="studio-demo"
-            className="demos-studio-choice"
-            aria-labelledby="studio-demo-title"
-          >
-            <div className="demos-studio-topline">
-              <span>GUIDED MUSE STUDIO</span>
+          <DemoOverview demo={demo}>
+            <DemoAction demo={demo} />
+          </DemoOverview>
+          <section id="studio-demo" className="demos-card" aria-labelledby="studio-demo-title">
+            <div className="demo-card-top">
+              <span>
+                <i className="demo-live-dot" />{' '}
+                {fixtureMode ? 'GUIDED MUSE STUDIO · FIXTURE' : 'GUIDED MUSE STUDIO'}
+              </span>
               <span className="demo-sponsored">Sponsored</span>
             </div>
-            <div className="demos-studio-body">
-              <span className="demos-studio-icon">
-                <Bot size={32} />
+            <div className="demos-card-body">
+              <span className="demos-card-icon" aria-hidden="true">
+                <Bot size={26} />
               </span>
               <h2 id="studio-demo-title">
                 Let Muse write it.
@@ -121,39 +115,44 @@ export function DemoLanding() {
                   ? 'Preview a Python Hello World task with fixture source, simulated VM execution, and an explicit test receipt.'
                   : 'Give Meta Muse one task: write a Python Hello World file. Watch it generate the code, run in your VM, and verify the output.'}
               </p>
-              <div className="demos-studio-preview">
+              <div className="demos-card-flow" aria-label="How the Studio demo works">
                 <span>Generate Python</span>
                 <ArrowRight size={13} />
                 <span>Run in your VM</span>
                 <ArrowRight size={13} />
                 <span>Check the result</span>
               </div>
-              <p className="demos-studio-notice">
+              <div className="demos-studio-fields">
+                <label className="demo-task-box">
+                  <span>Choose a task</span>
+                  <select aria-label="Choose a task" defaultValue="hello-world" disabled={locked}>
+                    <option value="hello-world">Hello World</option>
+                  </select>
+                </label>
+                <label className="demo-task-box">
+                  <span>Your name (optional)</span>
+                  <input
+                    aria-label="Your name (optional)"
+                    aria-describedby="studio-name-hint"
+                    value={taskName}
+                    maxLength={40}
+                    placeholder="e.g. Alex"
+                    disabled={locked}
+                    onChange={(event) => setName(event.target.value)}
+                  />
+                </label>
+                <small id="studio-name-hint">
+                  Letters, numbers, spaces, periods, apostrophes and hyphens. Leave blank for World.
+                </small>
+              </div>
+              <StudioDemoTask name={taskName} />
+            </div>
+            <div className="demos-card-footer">
+              <DemoAction demo={demo} kind="studio" demoName={taskName} />
+              <p>
                 A guided Hello World task with visible source and execution results. Then explore
                 the files in your terminal. No API key to copy.
               </p>
-              <label className="demo-task-box">
-                <span>Choose a task</span>
-                <select aria-label="Choose a task" defaultValue="hello-world" disabled={locked}>
-                  <option value="hello-world">Hello World</option>
-                </select>
-              </label>
-              <label className="demo-task-box">
-                <span>Your name (optional)</span>
-                <input
-                  aria-label="Your name (optional)"
-                  value={taskName}
-                  maxLength={40}
-                  placeholder="e.g. Alex"
-                  disabled={locked}
-                  onChange={(event) => setName(event.target.value)}
-                />
-                <small>
-                  Letters, numbers, spaces, periods, apostrophes and hyphens. Leave blank for World.
-                </small>
-              </label>
-              <StudioDemoTask name={taskName} />
-              <DemoAction demo={demo} kind="studio" demoName={taskName} />
             </div>
           </section>
         </div>

@@ -244,7 +244,9 @@ test('demo page starts only on explicit action and supports legacy single-provid
     page.getByRole('article', { name: 'Token auction' }).getByText('Baseten', { exact: true }),
   ).toBeVisible();
   await expect(
-    page.getByText('One eligible token provider in this demo.', { exact: false }),
+    page.getByText('Every qualified Muse seller is invited; the lowest bid wins.', {
+      exact: false,
+    }),
   ).toHaveCount(1);
   await expect(
     page.getByRole('heading', {

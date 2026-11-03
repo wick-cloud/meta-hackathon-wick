@@ -183,7 +183,7 @@ def main(key):
     question(key, available_in, available_out, receipt())
 
 
-print("Hello Muse — Meta Muse Spark Open, served by Baseten")
+print("Hello Muse — Meta Muse Spark Open, served by " + ((receipt().get("tokens") or {}).get("seller") or "the winning token seller"))
 print("Muse explains what you just bought, then answers one question from you.")
 print("Paste the demo batch key. It is hidden, held only in memory, and never saved.")
 key = getpass.getpass("Batch key: ").strip()
@@ -199,7 +199,7 @@ const TERMINAL_README = `Wick live demo
 
 This is your private Modal Micro workspace.
 Run: python3 /workspace/hello_muse.py
-Select Get demo key on /demos, then Copy key, to use the purchased Baseten batch.
+Select Get demo key on /demos, then Copy key, to use the Muse token batch you won.
 Paste it at the hidden prompt. No provider credentials are needed.
 Muse first explains your VM and auction receipt (receipt.json), then answers one question.
 The batch allows at most two requests and 1,024 output tokens per request.

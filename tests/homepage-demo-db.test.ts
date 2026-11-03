@@ -604,19 +604,27 @@ describe.skipIf(!databaseUrl)(
       expect(commands).not.toHaveBeenCalled();
     });
 
-    it('runs genuine fixture auctions in order with fixed Baseten tokens and exact Modal compute', async () => {
+    it('runs genuine fixture auctions in order with every qualified token seller and exact Modal compute', async () => {
       const guest = await visitor();
       const current = await readyRun(guest);
       const grant = (
         await pool.query('SELECT * FROM broker_inference_grants WHERE id=$1', [current.grant_id])
       ).rows[0];
-      expect(grant.allowed_providers).toEqual(['baseten']);
+      expect(grant.allowed_providers).toEqual(['modal', 'baseten']);
       expect(grant.max_purchase_cents).toBe(5);
       expect(grant.allow_instant).toBe(false);
       const pack = (
         await pool.query('SELECT * FROM broker_token_packs WHERE id=$1', [current.pack_id])
       ).rows[0];
-      expect(pack.provider).toBe('baseten');
+      // Both qualified Muse sellers genuinely bid; the lowest accepted bid supplies the pack.
+      const tokenBids = (
+        await pool.query(
+          'SELECT provider,price_cents FROM broker_token_bids WHERE order_id=$1 ORDER BY price_cents,provider',
+          [current.token_order_id],
+        )
+      ).rows;
+      expect(tokenBids.map((b) => b.provider).sort()).toEqual(['baseten', 'modal']);
+      expect(pack.provider).toBe(tokenBids[0].provider);
       const request = (
         await pool.query('SELECT * FROM broker_requests WHERE id=$1', [current.request_id])
       ).rows[0];
@@ -635,7 +643,8 @@ describe.skipIf(!databaseUrl)(
       ).toBe(1);
       expect(commands).toHaveBeenCalledTimes(1);
       const view = await read(guest);
-      expect(view.run!.tokens!.provider).toBe('baseten');
+      expect(view.run!.tokens!.provider).toBe(pack.provider);
+      expect(view.run!.tokens!.bids).toHaveLength(2);
       expect(view.run!.vm!.provider).toBe('modal');
       expect(view.run!.vm).toMatchObject({
         priceCents: 1,
@@ -657,7 +666,11 @@ describe.skipIf(!databaseUrl)(
         sponsorCredit: '$0.07',
       });
       expect(receipt.compute.bids).toHaveLength(view.run!.vm!.bids.length);
-      expect(receipt.tokens).toMatchObject({ seller: 'Baseten', input: 5000, output: 2048 });
+      expect(receipt.tokens).toMatchObject({
+        seller: pack.provider === 'modal' ? 'Modal' : 'Baseten',
+        input: 5000,
+        output: 2048,
+      });
       expect(receipt.tokens.paid).toBe(
         view.run!.tokens!.priceCents === null ? null : `$${view.run!.tokens!.priceCents / 100}`,
       );
@@ -947,14 +960,14 @@ describe.skipIf(!databaseUrl)(
       expect((await finishCleanup(current.id)).status).toBe('ended');
     });
 
-    it('creates no disk or VM when the Baseten auction loses its eligible offer', async () => {
+    it('creates no disk or VM when the token auction loses every eligible offer', async () => {
       const guest = await visitor();
       const started = await start(guest);
       expect(started.statusCode).toBe(200);
       const id = started.json<DemoState>().run!.id;
       await reconcileDemo(ctx, id);
       let current = await row(id);
-      await pool.query("UPDATE broker_token_offerings SET active=false WHERE provider='baseten'");
+      await pool.query('UPDATE broker_token_offerings SET active=false');
       await pool.query(
         "UPDATE broker_token_orders SET closes_at=clock_timestamp()-interval '1 second' WHERE id=$1",
         [current.token_order_id],
