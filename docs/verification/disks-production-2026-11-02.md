@@ -120,3 +120,14 @@ run-owned disk was confirmed deleted.
 See [PR #41](https://github.com/wick-cloud/meta-hackathon-wick/pull/41) for the
 final hosted Studio execution and continuation results. The private runner
 reports and exact resource journals remain under ignored `test-results/`.
+
+The first task on the corrected sandbox completed, passed its test, and retained
+its file, patch, metadata and test receipt after VM termination. Its continuation
+opened the same workspace but repeatedly reread an unchanged file, eventually
+reaching the bounded probe timeout. Cleanup and unused-funding return succeeded.
+Coding context now includes bounded successful-read counts and step numbers,
+with instructions to advance after confirmed reads. Rereading remains possible
+when content is omitted or there is evidence of changed files. A regression
+exercised nine identical reads beyond the eight-receipt history window and
+verified distinct, bounded prompts and increasing progress. All 22 focused
+coding/guest tests and typecheck passed before deploying this further fix.
