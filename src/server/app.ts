@@ -164,6 +164,16 @@ export async function buildApp(
         user,
         modes: { wick: config.wickMode, muse: config.museMode },
         commissionBps: 1500,
+        ...(config.wickMode === 'real' && config.modalComputePromotionEnabled
+          ? {
+              computePromotion: {
+                provider: 'modal',
+                totalPriceCents: 1,
+                tiePriority: 'modal',
+                fundedBy: 'operator-wick-account',
+              },
+            }
+          : {}),
         catalog:
           !user.apiKey || user.apiKey.scopes.includes('catalog:read')
             ? (await getCatalog(ctx)).map(publicCatalogView)

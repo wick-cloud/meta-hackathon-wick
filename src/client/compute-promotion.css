@@ -1,0 +1,36 @@
+.compute-promotion-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 13px 14px;
+  margin: 16px 0;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--panel-radius, 10px);
+  background: var(--card);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.compute-promotion-notice > svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--accent);
+}
+.compute-promotion-notice strong {
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 600;
+}
+.compute-promotion-notice p {
+  margin-top: 5px;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.compute-promotion-badge {
+  display: block;
+  margin-top: 5px;
+  color: var(--accent);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: normal;
+}

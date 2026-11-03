@@ -52,10 +52,19 @@ export interface FixedQuote extends ManagedPricing {
   /** Optional on historical snapshots. The target is a suggestion, not a mandatory bid. */
   targetTotalPriceCents?: number;
   upstreamCostFloorCents?: number;
-  priceBasis?: 'target-markup' | 'provider-commission-floor' | 'provider-bid';
+  priceBasis?:
+    'target-markup' | 'provider-commission-floor' | 'provider-bid' | 'operator-sponsored';
+  promotion?: ComputePromotion;
   revenueShare?: RevenueShare;
   currency: 'USD';
   rounding: 'ceil-once-to-cent-minimum-one-cent';
+}
+/** Frozen operator funding attribution; never supplied by a bidder. */
+export interface ComputePromotion {
+  id: 'modal-one-cent-v1';
+  fundedBy: 'operator-wick-account';
+  estimatedSubsidyMicros: string;
+  maxUpstreamComputeMicros: string;
 }
 export interface Requirements {
   cpu: number;
