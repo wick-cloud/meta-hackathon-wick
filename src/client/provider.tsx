@@ -557,10 +557,10 @@ export function ProviderPolicy() {
                 <div>
                   <strong>Automatic bids and counteroffers</strong>
                   <p>
-                    After you apply, Muse may submit bids and propose alternatives within these
-                    limits. Buyer acceptance can bind a counteroffer and start provisioning. Pausing
-                    stops new automatic proposals and counteroffer fills; manual bids remain
-                    available.
+                    Broker submits eligible base-price bids. Muse may choose an optional discount;
+                    declining it keeps the base when it fits the buyer’s budget. Buyer acceptance
+                    can bind a counteroffer and start provisioning. Pausing stops new automatic bids
+                    and counteroffer fills; manual bids remain available.
                   </p>
                 </div>
                 <input
@@ -599,7 +599,9 @@ export function ProviderPolicy() {
               <p className="field-hint">
                 These limits are the gross total the buyer pays, before Broker’s 15% commission. You
                 keep 85% before compute costs. The buyer’s budget also applies; real Wick bids must
-                leave enough after commission to cover the estimated compute cost.
+                leave enough after commission to cover the estimated compute cost. Automatic bids
+                use your base or that cost floor, whichever is higher. The last free slot stays at
+                base.
               </p>
               <ProviderRevenueSplit grossCents={policy.basePriceCents} />
               <div className="form-divider" />
@@ -675,9 +677,10 @@ export function ProviderPolicy() {
                 <div>
                   <h3>A proposal with boundaries</h3>
                   <p>
-                    Muse selects among server-priced options or declines. Deterministic validation
-                    checks the configuration, available capacity, pricing bounds, and auction
-                    deadline.
+                    With at least two free slots and half of unreserved capacity available, Muse may
+                    offer up to 10% off without crossing your floor. Declining the discount keeps
+                    the eligible base. Capacity, budget, pricing limits, and the auction deadline
+                    still apply.
                   </p>
                   <span className="tiny-label">
                     {modes.muse === 'fixture' ? 'Fixture proposals · no model calls' : museLabel}
@@ -912,7 +915,7 @@ function ProviderRequestCard({
                   {proposal.decision === 'decline' ? (
                     <>
                       <X size={15} />
-                      Muse recommends declining
+                      No eligible bid
                     </>
                   ) : (
                     <>

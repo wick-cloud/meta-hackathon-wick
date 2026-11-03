@@ -5,7 +5,7 @@ import {
   configureRealMarketplace,
   configureProviderMarketplace,
 } from '../src/server/marketplace/configure-real.js';
-import type { CloudProvider } from '../src/server/marketplace/provider-identity.js';
+import { providerSetupOptions } from './provider-setup-options.js';
 import { fixedQuote, managedPricing } from '../src/shared/pricing.js';
 
 async function main() {
@@ -16,6 +16,10 @@ async function main() {
     throw new Error(
       'Use --list for a public rate preview, --apply for existing demo suppliers, or --apply-providers for explicitly configured provider accounts.',
     );
+  const setup =
+    command === '--apply-providers'
+      ? providerSetupOptions(process.argv.slice(3), process.env)
+      : undefined;
   const pool = createPool(config.databaseUrl);
   try {
     const catalog = await createWickAdapter(config, pool).catalog();
@@ -53,25 +57,8 @@ async function main() {
         .map((value) => value.trim())
         .filter(Boolean);
     if (command === '--apply-providers') {
-      const identities: [CloudProvider, string, string][] = [
-        ['e2b', 'E2B', 'E2B'],
-        ['daytona', 'DAYTONA', 'Daytona'],
-        ['provider-blaxel', 'BLAXEL', 'Baseten'],
-        ['modal', 'MODAL', 'Modal'],
-      ];
       await migrate(pool);
-      const summary = await configureProviderMarketplace(pool, catalog, {
-        providers: identities.map(([cloudProvider, key, name]) => ({
-          cloudProvider,
-          name,
-          email: process.env[`REAL_PROVIDER_${key}_EMAIL`] ?? '',
-          password: process.env[`REAL_PROVIDER_${key}_PASSWORD`] ?? '',
-          catalogIds: list(`REAL_PROVIDER_${key}_CATALOG_IDS`),
-          capacity: Number(process.env.REAL_PROVIDER_CAPACITY ?? '5'),
-          autoBid: true,
-        })),
-        retireSupplierEmails: list('REAL_RETIRED_SUPPLIER_EMAILS'),
-      });
+      const summary = await configureProviderMarketplace(pool, catalog, setup!);
       console.log(JSON.stringify({ ...summary, mode: 'real' }));
       return;
     }

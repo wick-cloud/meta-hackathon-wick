@@ -1,3 +1,4 @@
+import { CLOUD_PROVIDERS } from '../../shared/providers.js';
 import { addCents, subtractCents, multiplyCents, moneyUnits } from '../../shared/money.js';
 import type { PoolClient } from 'pg';
 import type { AgreementInput, ScheduledOfferingInput } from '../../shared/agreements.js';
@@ -7,7 +8,7 @@ import type { AppContext } from '../context.js';
 import { transaction } from '../marketplace/db.js';
 import { iso, type Row } from '../marketplace/data.js';
 import { assertProviderCatalog } from '../marketplace/provider-identity.js';
-import { sameCatalogAllocation } from '../marketplace/matching.js';
+import { assertManagedCustomerRoute, sameCatalogAllocation } from '../marketplace/matching.js';
 import { applyCreditEntry, lockedWallet } from './credits.js';
 import { deadlineEligible, globalLock, offeringInput } from './data.js';
 import { globalAvailableForInterval } from './calendar.js';
@@ -25,6 +26,7 @@ function eligible(ctx: AppContext, c: Row, spec: AgreementInput, w: WindowTimes)
     return false;
   try {
     assertProviderCatalog(c, item);
+    if (ctx.wick.mode === 'real') assertManagedCustomerRoute(item);
   } catch {
     return false;
   }
@@ -176,7 +178,7 @@ export async function matchAgreement(ctx: AppContext, id: string) {
          AND s.capacity_quantity>COALESCE(op.quantity,0)
          AND($1='fixture' OR(c.item->>'deadlineEnforcement'='native' AND(c.item->>'maxTtlSeconds')::int>=extract(epoch FROM w.e-w.s)
            AND c.item->>'pricingMode'='managed' AND COALESCE(c.item->>'providerKeyId','')=''
-           AND c.item->>'provider'=ANY(ARRAY['e2b','daytona','provider-blaxel','modal'])
+           AND c.item->>'provider'=ANY($9::text[])
            AND(c.item->>'rateRetrievedAt')::timestamptz BETWEEN clock_timestamp()-interval '15 minutes' AND clock_timestamp()+interval '60 seconds'
            AND (ceil((extract(epoch FROM w.d-w.s)*s.discount_rate_cents_per_hour+extract(epoch FROM w.e-w.d)*s.normal_rate_cents_per_hour)/36)/100)*8500>=(c.item->>'rateMicrosPerSecond')::numeric*extract(epoch FROM w.e-w.s)))
          AND EXISTS(SELECT 1 FROM generate_series(-1,1) n CROSS JOIN LATERAL(SELECT(w.s AT TIME ZONE s.time_zone)::date+n AS day) local
@@ -205,6 +207,7 @@ export async function matchAgreement(ctx: AppContext, id: string) {
                 e: iso(w.ends_at),
               })),
           ),
+          CLOUD_PROVIDERS,
         ],
       )
     ).rows;

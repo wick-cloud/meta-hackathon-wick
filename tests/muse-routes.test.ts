@@ -5,6 +5,7 @@ import { createMuseAdapter } from '../src/server/integrations/muse.js';
 import { HttpError, type AppContext } from '../src/server/context.js';
 import type { Mode, Role } from '../src/shared/types.js';
 import { MAX_MATCH_CATALOGS } from '../src/server/marketplace/matching.js';
+import { CLOUD_PROVIDERS } from '../src/shared/providers.js';
 
 const apps: ReturnType<typeof Fastify>[] = [];
 afterEach(async () => {
@@ -216,7 +217,10 @@ describe('Muse route authorization and input boundaries', () => {
       ]);
       const catalogQuery = query.mock.calls.find(([sql]) => sql.includes('FROM broker_catalog'));
       expect(catalogQuery?.[0]).toContain('WHERE source_mode=$1');
-      expect(catalogQuery?.[1]).toEqual([mode]);
+      expect(catalogQuery?.[0]).toContain("$1 <> 'real' OR (item->>'provider'=ANY($2::text[])");
+      expect(catalogQuery?.[0]).toContain("COALESCE(item->>'providerKeyId','')=''");
+      expect(catalogQuery?.[0]).toContain("item->>'pricingMode'='managed'");
+      expect(catalogQuery?.[1]).toEqual([mode, CLOUD_PROVIDERS]);
     },
   );
   it('obtains policy for authenticated supplier and uses only recorded aggregate demand', async () => {
@@ -236,7 +240,10 @@ describe('Muse route authorization and input boundaries', () => {
     expect(providerQuery?.[1]).toEqual(['actor-owned-id']);
     const catalogQuery = query.mock.calls.find(([sql]) => sql.includes('FROM broker_catalog'));
     expect(catalogQuery?.[0]).toContain('WHERE source_mode=$1');
-    expect(catalogQuery?.[1]).toEqual(['fixture']);
+    expect(catalogQuery?.[0]).toContain("$1 <> 'real' OR (item->>'provider'=ANY($2::text[])");
+    expect(catalogQuery?.[0]).toContain("COALESCE(item->>'providerKeyId','')=''");
+    expect(catalogQuery?.[0]).toContain("item->>'pricingMode'='managed'");
+    expect(catalogQuery?.[1]).toEqual(['fixture', CLOUD_PROVIDERS]);
     const suggestionInput = proposeOfferings.mock.calls[0]?.[0] as unknown as {
       policy: { basePriceCents: number };
       demand: unknown[];

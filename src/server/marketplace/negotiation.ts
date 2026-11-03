@@ -1,3 +1,5 @@
+import { CLOUD_PROVIDERS, isCloudProvider } from '../../shared/providers.js';
+import { assertManagedCustomerRoute } from './matching.js';
 import { diskCatalogEligible, requireDisk } from '../disks/service.js';
 import { isMoneyCents, MIN_ORDER_PRICE_CENTS } from '../../shared/money.js';
 import { moneyCents } from './data.js';
@@ -440,6 +442,8 @@ async function generateCounteroffers(
       SELECT 1 FROM broker_catalog c JOIN LATERAL(
         SELECT 1 FROM broker_offerings o WHERE o.provider_id=p.id AND o.catalog_id=c.id AND o.active ORDER BY o.price_cents,o.id LIMIT 1
       ) published ON true WHERE c.approved AND c.source_mode=$1
+        AND ($1 <> 'real' OR (c.item->>'provider'=ANY($2::text[])
+          AND COALESCE(c.item->>'providerKeyId','')='' AND c.item->>'pricingMode'='managed'))
         AND (p.cloud_provider IS NULL OR c.item->>'provider'=p.cloud_provider)
         AND (p.policy->'allowedCatalogIds' IS NULL OR p.policy->'allowedCatalogIds'='null'::jsonb OR p.policy->'allowedCatalogIds' ? c.id)
     ) ORDER BY p.id LIMIT 4)
@@ -447,11 +451,13 @@ async function generateCounteroffers(
       SELECT published.* FROM broker_catalog c JOIN LATERAL(
         SELECT o.* FROM broker_offerings o WHERE o.provider_id=p.id AND o.catalog_id=c.id AND o.active ORDER BY o.price_cents,o.id LIMIT 1
       ) published ON true WHERE c.approved AND c.source_mode=$1
+        AND ($1 <> 'real' OR (c.item->>'provider'=ANY($2::text[])
+          AND COALESCE(c.item->>'providerKeyId','')='' AND c.item->>'pricingMode'='managed'))
         AND (p.cloud_provider IS NULL OR c.item->>'provider'=p.cloud_provider)
         AND (p.policy->'allowedCatalogIds' IS NULL OR p.policy->'allowedCatalogIds'='null'::jsonb OR p.policy->'allowedCatalogIds' ? c.id)
       ORDER BY published.price_cents,published.id LIMIT 12
     ) o JOIN broker_catalog c ON c.id=o.catalog_id AND c.approved AND c.source_mode=$1 ORDER BY p.id,o.id LIMIT 48`,
-      [ctx.wick.mode],
+      [ctx.wick.mode, CLOUD_PROVIDERS],
     )
   ).rows;
   const groups = new Map<string, { provider: Row; candidates: Row[] }>();
@@ -459,7 +465,11 @@ async function generateCounteroffers(
     const p = row.provider,
       offering = row.offering,
       item = { ...row.item, approved: true } as CatalogItem;
-    if (ctx.wick.mode === 'real' && item.provider === 'boat') continue;
+    if (
+      ctx.wick.mode === 'real' &&
+      (!isCloudProvider(item.provider) || item.providerKeyId || item.pricingMode !== 'managed')
+    )
+      continue;
     if (p.cloud_provider && p.cloud_provider !== item.provider) continue;
     if (
       p.policy.autoBid !== true ||
@@ -757,8 +767,7 @@ export async function acceptCounteroffer(
         409,
         'The reviewed offering, catalog or provider limits changed. Review a new alternative.',
       );
-    if (ctx.wick.mode === 'real' && catalog.item.provider === 'boat')
-      throw new HttpError(409, 'This provider is unavailable for customer rentals.');
+    if (ctx.wick.mode === 'real') assertManagedCustomerRoute(catalog.item);
     assertProviderCatalog(p, catalog.item);
     if (
       intent.desired.diskId &&

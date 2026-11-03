@@ -1,3 +1,4 @@
+import { PROVIDER_REGISTRY } from '../shared/providers.js';
 import { centsToUsd, formatMoney, formatMoneyMicros } from '../shared/money';
 import type {
   Actor,
@@ -283,12 +284,9 @@ export const saveDraft = (draft: Draft) =>
   sessionStorage.setItem('wick-draft', JSON.stringify(draft));
 
 export const cloudRouteName = (provider: string) =>
-  (
-    ({ e2b: 'E2B', daytona: 'Daytona', modal: 'Modal', 'provider-blaxel': 'Blaxel' }) as Record<
-      string,
-      string
-    >
-  )[provider] || provider;
+  provider === 'provider-blaxel'
+    ? 'Blaxel'
+    : (PROVIDER_REGISTRY.find(({ id }) => id === provider)?.name ?? provider);
 const regionLabels = new Map([
   ['any', 'Any available region'],
   ['auto', 'Provider-selected region'],

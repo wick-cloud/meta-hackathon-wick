@@ -1,4 +1,4 @@
-import { isMoneyCents, formatMoney, usdToCents } from '../../shared/money.js';
+import { isMoneyCents, formatMoney, moneyUnits, usdToCents } from '../../shared/money.js';
 import type {
   CatalogItem,
   Requirements,
@@ -920,19 +920,65 @@ export function createMuseAdapter(config: MuseConfig, options: MuseOptions = {})
         return decline(
           'Declined: the customer’s fixed total budget is below this supplier’s minimum.',
         );
-      const totalPriceCents = money(
+      const baseTotalPriceCents = money(
         input.suggestedTotalPriceCents ??
           Math.max(ownPolicy.minimumPriceCents, ownPolicy.basePriceCents),
-        'Server fixed total price',
+        'Server base total price',
       );
+      const discountTotalPriceCents =
+        input.discountTotalPriceCents === undefined
+          ? undefined
+          : money(input.discountTotalPriceCents, 'Server discount total price');
+      const permitted = (price: number) =>
+        price >= ownPolicy.minimumPriceCents &&
+        price <= maxPrice &&
+        (ownPolicy.maxPriceCents === undefined || price <= ownPolicy.maxPriceCents);
       if (
-        totalPriceCents < ownPolicy.minimumPriceCents ||
-        totalPriceCents > maxPrice ||
-        (ownPolicy.maxPriceCents !== undefined && totalPriceCents > ownPolicy.maxPriceCents)
+        baseTotalPriceCents < Math.max(ownPolicy.minimumPriceCents, ownPolicy.basePriceCents) ||
+        (discountTotalPriceCents !== undefined &&
+          (discountTotalPriceCents >= baseTotalPriceCents ||
+            discountTotalPriceCents < ownPolicy.minimumPriceCents ||
+            // Both values are valid money amounts; compare integer money units.
+            moneyUnits(discountTotalPriceCents) * 10n < moneyUnits(baseTotalPriceCents) * 9n))
       )
-        return decline(
-          'Declined: the server-priced quote is outside the allowed supplier or buyer limits.',
-        );
+        fail('The server bid strategy violates the supplier base, minimum, or discount limit.');
+      const bid = (totalPriceCents: number, decision: string): BidProposal => ({
+        decision: 'bid',
+        catalogId: item.id,
+        totalPriceCents,
+        modelCalled,
+        receipt: receipt(
+          mode,
+          [
+            `${available} available supplier capacity slots.`,
+            `${duration} minutes on ${item.name}; customer budget ${formatMoney(maxPrice)}.`,
+            `Effective base total ${formatMoney(baseTotalPriceCents)}; minimum total ${formatMoney(ownPolicy.minimumPriceCents)}.`,
+          ],
+          decision,
+          [
+            'Only this supplier’s capacity and pricing policy were considered.',
+            modelCalled
+              ? 'A Baseten Muse call completed; the server validated the discount decision.'
+              : totalPriceCents === baseTotalPriceCents
+                ? 'The server selected the base price without a model call.'
+                : 'Fixture simulation selected the server discount; no model call.',
+            'Submission must atomically recheck auction deadline, eligibility and capacity; a suggestion reserves nothing.',
+          ],
+        ),
+      });
+      const baseBid = (reason: string) =>
+        permitted(baseTotalPriceCents)
+          ? bid(
+              baseTotalPriceCents,
+              `${reason} Bid the base total ${formatMoney(baseTotalPriceCents)}.`,
+            )
+          : decline(
+              `${reason} The unchanged base total is outside supplier or buyer limits; no bid was proposed.`,
+            );
+      if (discountTotalPriceCents === undefined)
+        return baseBid('No discount is offered by the capacity and price strategy.');
+      if (!permitted(discountTotalPriceCents))
+        return baseBid('The strategy discount does not fit supplier or buyer limits.');
       let value: unknown;
       if (mode === 'fixture') value = { decision: 'bid', catalogId: item.id };
       else {
@@ -949,7 +995,7 @@ export function createMuseAdapter(config: MuseConfig, options: MuseOptions = {})
         value = await complete(
           'wick_supplier_bid',
           bidSchema,
-          'Accept the supplied deterministic fixed total quote by selecting bid and the requested catalogId, or decline with null catalogId. Never originate or change a price. Respect this supplier isolated policy and available capacity. This suggestion reserves nothing.',
+          'Decide whether to offer the supplied server-computed discount. Select bid and the requested catalogId to offer that discounted total, or decline with null catalogId to decline the discount. A declined discount causes the server to offer the unchanged base total when it satisfies supplier and buyer limits. Never originate or change a price. Respect this supplier isolated policy and available capacity. This suggestion reserves nothing.',
           {
             request: {
               description: descriptionInput(input.request.description),
@@ -961,7 +1007,8 @@ export function createMuseAdapter(config: MuseConfig, options: MuseOptions = {})
             },
             policy: ownPolicy,
             availableCapacity: available,
-            totalPriceCents,
+            baseTotalPriceCents,
+            totalPriceCents: discountTotalPriceCents,
             catalog: modelCatalog([item]),
           },
           Math.min(8000, input.timeoutMs ?? 8000),
@@ -971,31 +1018,14 @@ export function createMuseAdapter(config: MuseConfig, options: MuseOptions = {})
       requireKeys(row, ['decision', 'catalogId'], 'Muse bid');
       if (row.decision === 'decline') {
         if (row.catalogId !== null) fail('A declined proposal must not contain a configuration.');
-        return decline('Declined: Muse did not propose an eligible quote for this supplier.');
+        return baseBid('Muse declined the optional discount.');
       }
       if (row.decision !== 'bid' || row.catalogId !== item.id)
         fail('Muse proposed an invalid bid or changed the requested configuration.');
-      return {
-        decision: 'bid',
-        catalogId: item.id,
-        totalPriceCents,
-        modelCalled,
-        receipt: receipt(
-          mode,
-          [
-            `${available} available supplier capacity slots.`,
-            `${duration} minutes on ${item.name}; customer budget ${formatMoney(maxPrice)}.`,
-          ],
-          `Propose a fixed total quote of ${formatMoney(totalPriceCents)}.`,
-          [
-            'Only this supplier’s capacity and pricing policy were considered.',
-            modelCalled
-              ? 'A Baseten Muse call completed; the server validated the proposal.'
-              : 'This decision required no Meta model call.',
-            'Submission must atomically recheck auction deadline, eligibility and capacity; a suggestion reserves nothing.',
-          ],
-        ),
-      };
+      return bid(
+        discountTotalPriceCents,
+        `Offer the strategy discount at a fixed total of ${formatMoney(discountTotalPriceCents)}; base total ${formatMoney(baseTotalPriceCents)}.`,
+      );
     },
     async proposeOfferings(input: OfferingsInput) {
       const ownPolicy = policy(input.policy);

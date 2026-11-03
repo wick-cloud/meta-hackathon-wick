@@ -76,11 +76,12 @@ const checks: [string, () => Promise<void>][] = [
         policy,
         availableCapacity: 5,
         suggestedTotalPriceCents: 8,
+        discountTotalPriceCents: 7.2,
         catalog,
       });
       assert.equal(result.modelCalled, true);
       assert.equal(result.decision, 'bid');
-      assert.equal(result.totalPriceCents, 8);
+      assert.ok([7.2, 8].includes(result.totalPriceCents!));
     },
   ],
   [

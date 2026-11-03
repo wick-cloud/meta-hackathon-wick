@@ -4,6 +4,7 @@ import { hashPassword } from 'better-auth/crypto';
 import type { CatalogItem } from '../../shared/types.js';
 import { fixedQuote, managedPricing, requireFreshManagedRate } from '../../shared/pricing.js';
 import { transaction } from './db.js';
+import { centsFromUnits, moneyUnits } from '../../shared/money.js';
 import { CLOUD_PROVIDERS, type CloudProvider } from './provider-identity.js';
 
 export interface RealSetupOptions {
@@ -115,7 +116,8 @@ export interface ProviderAccountSetup {
   cloudProvider: CloudProvider;
   name: string;
   email: string;
-  password: string;
+  /** Required only when creating a new credential account. Existing passwords are never reset. */
+  password?: string;
   catalogIds: string[];
   capacity: number;
   autoBid: boolean;
@@ -124,19 +126,37 @@ export interface ProviderAccountSetup {
 export interface ProviderMarketplaceSetup {
   providers: ProviderAccountSetup[];
   retireSupplierEmails: string[];
+  /** Stage is the default. Activation is an explicit operator action after qualification. */
+  mode?: 'stage' | 'activate';
+  /** Explicitly replace selected provider defaults and selected offering prices. */
+  updateExisting?: boolean;
 }
 
-/** Operator-only bootstrap. No session, existing credential, rental or ledger is rewritten. */
+/** Twenty percent above the cost-covered quote, rounded upward to $0.0001. */
+export function providerSetupBasePrice(costCoveredCents: number): number {
+  return centsFromUnits((moneyUnits(costCoveredCents) * 120n + 99n) / 100n);
+}
+
+/** Operator-only onboarding; retries preserve existing settings unless explicitly activated/updated. */
 export async function configureProviderMarketplace(
   pool: Pool,
   catalog: CatalogItem[],
   options: ProviderMarketplaceSetup,
 ) {
-  if (!options.providers.length || options.providers.length > CLOUD_PROVIDERS.length)
-    throw new Error('Choose one to four provider accounts.');
+  const mode = options.mode ?? 'stage';
+  const activate = mode === 'activate';
+  const updateExisting = options.updateExisting ?? false;
+  if (
+    !options.providers.length ||
+    options.providers.length > CLOUD_PROVIDERS.length ||
+    !['stage', 'activate'].includes(mode) ||
+    typeof updateExisting !== 'boolean'
+  )
+    throw new Error('Choose a bounded subset of registered providers and a valid setup mode.');
   const inputs = options.providers.map((provider) => ({
     ...provider,
     email: provider.email.trim().toLowerCase(),
+    password: provider.password || undefined,
   }));
   const emails = inputs.map((provider) => provider.email);
   const retiredEmails = options.retireSupplierEmails.map((email) => email.trim().toLowerCase());
@@ -152,8 +172,8 @@ export async function configureProviderMarketplace(
         !CLOUD_PROVIDERS.includes(provider.cloudProvider) ||
         !provider.name.trim() ||
         provider.name.length > 160 ||
-        provider.password.length < 12 ||
-        provider.password.length > 128 ||
+        (provider.password !== undefined &&
+          (provider.password.length < 12 || provider.password.length > 128)) ||
         !Number.isSafeInteger(provider.capacity) ||
         provider.capacity < 0 ||
         provider.capacity > 10000 ||
@@ -164,7 +184,7 @@ export async function configureProviderMarketplace(
     )
   )
     throw new Error(
-      'Provider setup requires distinct identities, supplied passwords and bounded configurations.',
+      'Provider setup requires distinct identities, valid optional passwords and bounded configurations.',
     );
   const catalogById = new Map(catalog.map((item) => [item.id, item]));
   const selected = inputs.flatMap((provider) =>
@@ -176,23 +196,24 @@ export async function configureProviderMarketplace(
         );
       requireFreshManagedRate(item);
       const pricing = managedPricing(item);
+      const costCoveredPrice = fixedQuote(pricing, 30).totalPriceCents;
       return {
         provider: provider.cloudProvider,
         item,
         pricing,
-        price: fixedQuote(pricing, 30).totalPriceCents,
+        costCoveredPrice,
+        price: providerSetupBasePrice(costCoveredPrice),
       };
     }),
   );
-  // Password hashing is bounded to four accounts and never runs under database locks.
+  // Bounded by the registry; hashing never runs under database locks.
   const prepared = await Promise.all(
     inputs.map(async (provider) => ({
       ...provider,
       id: randomUUID(),
-      passwordHash: await hashPassword(provider.password),
+      passwordHash: provider.password ? await hashPassword(provider.password) : undefined,
     })),
   );
-  const catalogIds = selected.map(({ item }) => item.id);
   return transaction(pool, async (db) => {
     await db.query("SELECT pg_advisory_xact_lock(hashtext('broker-configure-real'))");
     const existingUsers = (
@@ -203,6 +224,12 @@ export async function configureProviderMarketplace(
     ).rows;
     if (existingUsers.some((user) => user.role !== 'provider'))
       throw new Error('A requested provider email is already assigned to another role.');
+    if (
+      prepared.some(
+        (input) => !existingUsers.some((user) => user.email === input.email) && !input.passwordHash,
+      )
+    )
+      throw new Error('A private password is required for each new provider account.');
     const existingProviders = (
       await db.query(
         'SELECT p.*,u.email FROM broker_providers p JOIN "user" u ON u.id=p.user_id WHERE u.email=ANY($1::text[]) FOR UPDATE OF p',
@@ -218,18 +245,6 @@ export async function configureProviderMarketplace(
       )
         throw new Error('An existing provider account has a different upstream binding.');
     }
-    const credentials = (
-      await db.query(
-        'SELECT "userId" FROM account WHERE "providerId"=\'credential\' AND "accountId"=ANY($1::text[]) AND "userId"="accountId" AND password IS NOT NULL FOR SHARE',
-        [existingUsers.map((user) => user.id)],
-      )
-    ).rows;
-    if (
-      existingUsers.some((user) => !credentials.some((credential) => credential.userId === user.id))
-    )
-      throw new Error(
-        'An existing provider account has no credential login; existing authentication was preserved.',
-      );
     const retired = (
       await db.query(
         'SELECT p.id,p.cloud_provider,u.role FROM broker_providers p JOIN "user" u ON u.id=p.user_id WHERE u.email=ANY($1::text[]) FOR UPDATE OF p',
@@ -238,13 +253,13 @@ export async function configureProviderMarketplace(
     ).rows;
     if (
       retired.length !== retiredEmails.length ||
-      retired.some((provider) => provider.role !== 'provider' || provider.cloud_provider)
+      retired.some((p) => p.role !== 'provider' || p.cloud_provider)
     )
       throw new Error('Retirement must explicitly select existing unbound supplier accounts.');
     const existingCatalog = (
       await db.query(
         'SELECT id,source_mode FROM broker_catalog WHERE id=ANY($1::text[]) FOR UPDATE',
-        [catalogIds],
+        [selected.map(({ item }) => item.id)],
       )
     ).rows;
     if (existingCatalog.some((item) => item.source_mode !== 'real'))
@@ -257,6 +272,11 @@ export async function configureProviderMarketplace(
         [JSON.stringify(prepared.map(({ id, email, name }) => ({ id, email, name })))],
       )
     ).rows;
+    for (const user of created)
+      await db.query(
+        `INSERT INTO account(id,"accountId","providerId","userId",password) VALUES($1,$2,'credential',$2,$3)`,
+        [randomUUID(), user.id, prepared.find((input) => input.email === user.email)!.passwordHash],
+      );
     const users = (
       await db.query(
         'SELECT id,email,role,"providerId" FROM "user" WHERE email=ANY($1::text[]) FOR UPDATE',
@@ -265,101 +285,150 @@ export async function configureProviderMarketplace(
     ).rows;
     if (users.length !== emails.length || users.some((user) => user.role !== 'provider'))
       throw new Error('Provider account creation collided with another role.');
-    await db.query(
-      `INSERT INTO account(id,"accountId","providerId","userId",password)
-       SELECT id,user_id,'credential',user_id,password FROM jsonb_to_recordset($1::jsonb) AS x(id text,user_id text,password text)`,
-      [
-        JSON.stringify(
-          created.map((user) => ({
-            id: randomUUID(),
-            user_id: user.id,
-            password: prepared.find((input) => input.email === user.email)!.passwordHash,
-          })),
-        ),
-      ],
-    );
-    await db.query(
-      `INSERT INTO broker_catalog(id,item,approved,source_mode)
-       SELECT id,item,true,'real' FROM jsonb_to_recordset($1::jsonb) AS x(id text,item jsonb)
-       ON CONFLICT(id) DO UPDATE SET item=excluded.item,approved=true,updated_at=now()`,
-      [
-        JSON.stringify(
-          selected.map(({ item }) => ({ id: item.id, item: { ...item, approved: true } })),
-        ),
-      ],
-    );
-    const providerRecords = prepared.map((input) => ({
-      user_id: users.find((user) => user.email === input.email)!.id,
-      name: input.name,
-      cloud_provider: input.cloudProvider,
-      total_capacity: input.capacity,
-      policy: {
-        autoBid: input.autoBid,
+    const credentials = (
+      await db.query(
+        `SELECT "userId" FROM account WHERE "providerId"='credential' AND "accountId"=ANY($1::text[]) AND "userId"="accountId" AND password IS NOT NULL FOR SHARE`,
+        [users.map((user) => user.id)],
+      )
+    ).rows;
+    if (users.some((user) => !credentials.some((credential) => credential.userId === user.id)))
+      throw new Error(
+        'An existing provider account has no credential login; existing authentication was preserved.',
+      );
+    for (const { item } of selected)
+      await db.query(
+        `INSERT INTO broker_catalog(id,item,approved,source_mode) VALUES($1,$2,$3,'real')
+       ON CONFLICT(id) DO UPDATE SET item=CASE WHEN $4 THEN excluded.item ELSE broker_catalog.item END,
+         approved=CASE WHEN $3 THEN true ELSE broker_catalog.approved END,
+         updated_at=CASE WHEN $4 THEN now() ELSE broker_catalog.updated_at END`,
+        [item.id, { ...item, approved: activate }, activate, activate || updateExisting],
+      );
+    const providerResults = [];
+    for (const input of prepared) {
+      const user = users.find((entry) => entry.email === input.email)!;
+      const own = selected.filter((entry) => entry.provider === input.cloudProvider);
+      const defaultPolicy = {
+        autoBid: activate && input.autoBid,
         minimumPriceCents: 1,
-        basePriceCents: Math.max(
-          1,
-          Math.min(
-            ...selected
-              .filter((item) => item.provider === input.cloudProvider)
-              .map((item) => item.price),
-          ),
-        ),
+        basePriceCents: Math.min(...own.map((entry) => entry.price)),
         maxPriceCents: 100000000,
         reserveSlots: 0,
         allowedCatalogIds: input.catalogIds,
-      },
-    }));
-    const providers = (
+      };
+      const inserted = (
+        await db.query(
+          `INSERT INTO broker_providers(user_id,name,cloud_provider,total_capacity,policy,simulated)
+         VALUES($1,$2,$3,$4,$5,false) ON CONFLICT(user_id) DO NOTHING RETURNING *`,
+          [user.id, input.name, input.cloudProvider, input.capacity, defaultPolicy],
+        )
+      ).rows[0];
+      let provider =
+        inserted ??
+        (await db.query('SELECT * FROM broker_providers WHERE user_id=$1 FOR UPDATE', [user.id]))
+          .rows[0];
+      if (provider.cloud_provider !== input.cloudProvider)
+        throw new Error('An existing provider account has a different upstream binding.');
+      if (!inserted && (updateExisting || activate)) {
+        const policy = updateExisting
+          ? defaultPolicy
+          : {
+              ...provider.policy,
+              autoBid: input.autoBid,
+              ...(Array.isArray(provider.policy.allowedCatalogIds)
+                ? {
+                    allowedCatalogIds: [
+                      ...new Set([...provider.policy.allowedCatalogIds, ...input.catalogIds]),
+                    ],
+                  }
+                : {}),
+            };
+        provider = (
+          await db.query(
+            `UPDATE broker_providers SET name=CASE WHEN $2 THEN $3 ELSE name END,
+           total_capacity=CASE WHEN $2 THEN $4 ELSE total_capacity END,policy=$5 WHERE id=$1 RETURNING *`,
+            [provider.id, updateExisting, input.name, input.capacity, policy],
+          )
+        ).rows[0];
+      }
       await db.query(
-        `INSERT INTO broker_providers(user_id,name,cloud_provider,total_capacity,policy,simulated)
-       SELECT user_id,name,cloud_provider,total_capacity,policy,false FROM jsonb_to_recordset($1::jsonb)
-       AS x(user_id text,name text,cloud_provider text,total_capacity integer,policy jsonb)
-       ON CONFLICT(user_id) DO UPDATE SET name=excluded.name,total_capacity=excluded.total_capacity,policy=excluded.policy,simulated=false
-       RETURNING id,user_id,cloud_provider`,
-        [JSON.stringify(providerRecords)],
-      )
-    ).rows;
-    await db.query(
-      'UPDATE "user" u SET "providerId"=p.id::text FROM broker_providers p WHERE p.user_id=u.id AND u.id=ANY($1::text[]) AND u."providerId" IS DISTINCT FROM p.id::text',
-      [users.map((user) => user.id)],
-    );
-    const offerings = selected.map(({ provider, item, pricing, price }) => ({
-      provider_id: providers.find((entry) => entry.cloud_provider === provider)!.id,
-      catalog_id: item.id,
-      name: `${prepared.find((input) => input.cloudProvider === provider)!.name} allocation`,
-      description: `Operator-managed allocation via Wick. Underlying route: ${provider}. Provider keeps 85% before compute costs; Broker receives 15%. Demo billing; no payment due.`,
-      price_cents: price,
-      pricing,
-    }));
-    await db.query(
-      `INSERT INTO broker_offerings(provider_id,catalog_id,name,description,price_cents,pricing)
-       SELECT provider_id,catalog_id,name,description,price_cents,pricing FROM jsonb_to_recordset($1::jsonb)
-       AS x(provider_id uuid,catalog_id text,name text,description text,price_cents integer,pricing jsonb)
-       ON CONFLICT(provider_id,catalog_id,name) DO UPDATE SET description=excluded.description,price_cents=excluded.price_cents,
-       pricing=CASE WHEN (broker_offerings.pricing-'rateRetrievedAt') IS NOT DISTINCT FROM (excluded.pricing-'rateRetrievedAt') THEN broker_offerings.pricing ELSE excluded.pricing END,
-       active=true,revision=broker_offerings.revision+CASE WHEN (broker_offerings.pricing-'rateRetrievedAt') IS DISTINCT FROM (excluded.pricing-'rateRetrievedAt') OR broker_offerings.active=false THEN 1 ELSE 0 END`,
-      [JSON.stringify(offerings)],
-    );
+        'UPDATE "user" SET "providerId"=$2 WHERE id=$1 AND "providerId" IS DISTINCT FROM $2',
+        [user.id, provider.id],
+      );
+      for (const { item, pricing, price, costCoveredPrice } of own) {
+        const name = `${input.name} allocation`;
+        const existing = (
+          await db.query(
+            'SELECT * FROM broker_offerings WHERE provider_id=$1 AND catalog_id=$2 ORDER BY created_at,id FOR UPDATE',
+            [provider.id, item.id],
+          )
+        ).rows;
+        const offering =
+          existing.find((row) => row.name === name) ??
+          (existing.length === 1 ? existing[0] : undefined);
+        if (!existing.length) {
+          await db.query(
+            `INSERT INTO broker_offerings(provider_id,catalog_id,name,description,price_cents,pricing,active)
+             VALUES($1,$2,$3,$4,$5,$6,$7)`,
+            [
+              provider.id,
+              item.id,
+              name,
+              `Operator-managed allocation via Wick. Underlying route: ${input.cloudProvider}. Provider keeps 85% before compute costs; Broker receives 15%. Demo billing; no payment due.`,
+              price,
+              pricing,
+              activate,
+            ],
+          );
+        } else if (activate || updateExisting) {
+          if (!offering)
+            throw new Error(
+              'Multiple customized offerings exist; select and update them in the provider console.',
+            );
+          const nextPrice = updateExisting ? price : Number(offering.price_cents);
+          if (activate && nextPrice < costCoveredPrice)
+            throw new Error(
+              'The existing offering is below the current managed cost floor; explicitly update its price before activation.',
+            );
+          await db.query(
+            `UPDATE broker_offerings SET price_cents=$2,pricing=$3,active=CASE WHEN $4 THEN true ELSE active END,
+             revision=revision+CASE WHEN price_cents<>$2 OR (pricing-'rateRetrievedAt') IS DISTINCT FROM ($3::jsonb-'rateRetrievedAt') OR ($4 AND NOT active) THEN 1 ELSE 0 END
+             WHERE id=$1`,
+            [offering.id, nextPrice, pricing, activate],
+          );
+        }
+      }
+      providerResults.push({
+        name: provider.name,
+        email: input.email,
+        cloudProvider: input.cloudProvider,
+        capacity: provider.total_capacity,
+        autoBid: provider.policy.autoBid,
+        basePriceCents: provider.policy.basePriceCents,
+        catalogIds: input.catalogIds,
+      });
+    }
     await db.query(
       `UPDATE broker_offerings o SET active=false,revision=revision+1 FROM broker_catalog c
        WHERE o.catalog_id=c.id AND c.source_mode='real' AND o.active AND o.provider_id=ANY($1::uuid[])`,
-      [retired.map((provider) => provider.id)],
+      [retired.map((p) => p.id)],
     );
     await db.query(
       `UPDATE broker_providers SET policy=jsonb_set(policy,'{autoBid}','false'::jsonb)
        WHERE id=ANY($1::uuid[]) AND policy->>'autoBid' IS DISTINCT FROM 'false'`,
-      [retired.map((provider) => provider.id)],
+      [retired.map((p) => p.id)],
     );
+    const approved = (
+      await db.query(
+        'SELECT count(*)::int n FROM broker_catalog WHERE id=ANY($1::text[]) AND approved',
+        [selected.map(({ item }) => item.id)],
+      )
+    ).rows[0].n;
     return {
-      approvedConfigurations: selected.length,
+      setupMode: mode,
+      updateExisting,
+      approvedConfigurations: approved,
       createdAccounts: created.length,
-      providers: prepared.map((input) => ({
-        name: input.name,
-        email: input.email,
-        cloudProvider: input.cloudProvider,
-        capacity: input.capacity,
-        catalogIds: input.catalogIds,
-      })),
+      providers: providerResults,
       retiredSuppliers: retired.length,
       commissionBps: 1500,
       note: 'Operator-managed Wick allocations. Existing credentials, sessions, reservations and frozen history preserved. No VMs allocated; demo billing only.',

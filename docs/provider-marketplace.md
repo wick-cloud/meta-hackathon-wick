@@ -1,27 +1,35 @@
 # Provider accounts and cross-provider matching
 
-The four workspaces are operator-managed allocations using Wick's managed routes. They are not accounts operated by E2B, Daytona, Baseten or Modal, and their configured slots do not measure upstream free capacity. Customer VMs are still created through Wick; Broker runs as one Railway app with PostgreSQL.
+Broker's registry supports **eight native Wick providers**: E2B, Daytona, Blaxel (displayed as Baseten), Modal, Sail, Tenki, Freestyle, and Boat.dev. The four additions are implemented and their accounts were created staged; [the production receipt](verification/provider-expansion-2026-11-02.md) records that separate operation. Deployment, activation, and live qualification remain separate. See the [expansion implementation and rollout record](provider-expansion-plan.md). Supported identity does not imply approved inventory or working live terminals.
 
-| Account display | Immutable Wick provider ID | Environment key | Observed catalog configurations | Native region |
-| --------------- | -------------------------- | --------------- | ------------------------------: | ------------- |
-| E2B             | `e2b`                      | `E2B`           |                               3 | `us`          |
-| Daytona         | `daytona`                  | `DAYTONA`       |                               3 | `us`          |
-| Baseten         | `provider-blaxel`          | `BLAXEL`        |                               2 | `us-pdx-1`    |
-| Modal           | `modal`                    | `MODAL`         |                               4 | `auto`        |
+The workspaces are operator-managed allocations using Wick's managed routes, not accounts operated by the named companies. Configured slots do not measure upstream free capacity. Customer VMs are created through Wick; Broker remains one Railway app with PostgreSQL.
 
-**Baseten is the requested display alias for this account; its actual underlying route is Blaxel.** The label does not imply that Baseten and Blaxel are the same company or that Broker connects to a Baseten API. The native provider ID remains visible in configuration and allocation descriptions.
+| Account display | Immutable Wick provider ID | Environment key | Documented configurations | Native region |
+| --------------- | -------------------------- | --------------- | ------------------------: | ------------- |
+| E2B             | `e2b`                      | `E2B`           |                         3 | `us`          |
+| Daytona         | `daytona`                  | `DAYTONA`       |                         3 | `us`          |
+| Baseten         | `provider-blaxel`          | `BLAXEL`        |                         2 | `us-pdx-1`    |
+| Modal           | `modal`                    | `MODAL`         |                         4 | `auto`        |
+| Sail            | `sail`                     | `SAIL`          |                         3 | `auto`        |
+| Tenki           | `provider-tenki`           | `TENKI`         |                         1 | `auto`        |
+| Freestyle       | `provider-freestyle`       | `FREESTYLE`     |                         1 | `auto`        |
+| Boat.dev        | `boat`                     | `BOAT`          |                         3 | `auto`        |
 
-## One-time account setup
+Counts for the original four come from the October 28 baseline; additions were observed November 2. Always use a fresh catalog listing for setup. Boat Small advertises 3,814 MiB RAM, not 4 GiB; missing profiles are not synthesized.
 
-Deploy `main` with the migration-only pre-deploy command. On a fresh database, bootstrap the original invited buyer/admin roles in fixture mode once as described in [Railway setup](RAILWAY.md). On the existing app, preserve those accounts and credentials; do not rerun the seed command. Any outstanding fixture rentals must finish confirmed cleanup before switching to real Wick mode.
+**Baseten is the retained display alias for the Blaxel account.** Its native ID remains `provider-blaxel`; this does not make Blaxel and Baseten the same company or connect this compute route to the Baseten API. Muse inference separately uses the actual Baseten service.
 
-Keep server-side `WICK_MODE=real`, `MUSE_MODE=fixture` and the existing managed Wick credential/scope. Review current eligible configurations from the app container:
+## Incremental account setup
+
+Deploy with the migration-only pre-deploy command. On a fresh database, bootstrap the original invited buyer/admin roles in fixture mode once as described in [Railway setup](RAILWAY.md). Do not reseed an existing app. Outstanding fixture rentals must complete cleanup before changing the app's Wick mode.
+
+Use server-side `WICK_MODE=real` and the reviewed managed Wick credential/scope. Keep Muse fixtures for setup if live model decisions are not being tested. Review fresh eligible routes from the app container:
 
 ```sh
 npm run configure:real:production -- --list
 ```
 
-Supply the following private variables for **each** key in the table:
+Supply private variables for **only the selected providers**:
 
 ```text
 REAL_PROVIDER_<KEY>_EMAIL
@@ -29,45 +37,46 @@ REAL_PROVIDER_<KEY>_PASSWORD
 REAL_PROVIDER_<KEY>_CATALOG_IDS
 ```
 
-Passwords must contain 12–128 characters and belong only in private service variables. Catalog IDs are explicit comma-separated selections from the current listing; never invent an ID or substitute one provider's profile for another. Add:
+New-account passwords must contain 12–128 characters. Existing accounts need no password on retries; supplying another password never resets one. Catalog IDs are explicit comma-separated selections from the fresh listing, belonging to the selected native provider.
 
-```text
-REAL_PROVIDER_CAPACITY=5
-MAX_CONCURRENT_VMS=20
-REAL_RETIRED_SUPPLIER_EMAILS=<comma-separated existing legacy supplier emails>
-```
+`REAL_PROVIDER_<KEY>_CAPACITY` overrides `REAL_PROVIDER_CAPACITY`; the default is **one slot**. `REAL_PROVIDER_<KEY>_AUTO_BID` defaults to `true` for explicit activation, but newly staged accounts always have automatic bidding disabled. `MAX_CONCURRENT_VMS` remains capped at 20. Set `REAL_RETIRED_SUPPLIER_EMAILS` only to explicitly retire existing unbound legacy suppliers; it is not needed for adding the new four.
 
-Then run once in the app container:
+Stage the additions with their own credentials and selected catalogs:
 
 ```sh
-npm run configure:real:production -- --apply-providers
+npm run configure:real:production -- --apply-providers --providers sail,tenki,freestyle,boat --stage
 ```
 
-The setup creates missing provider credentials and binds each account to its own native configurations. Existing credentials and sessions are preserved, including on retries; a conflicting role or cloud binding fails explicitly. The operation keeps buyer/admin accounts, frozen bids, invoices, reservations and cleanup state. Explicitly retired legacy suppliers lose automatic bidding and active **real** offerings while their history and fixture records remain. The command allocates no VM and collects no payment.
+`--providers` accepts native IDs or environment keys, case-insensitively. `REAL_PROVIDER_IDS` is an alternative comma-separated selection. A subset is required; omitting it does not reconfigure all eight accounts. `--stage` is the default. New catalog rows are unapproved, new offerings inactive, and new accounts' automatic bidding off. Ordinary retries preserve existing custom policy, capacity, renamed offerings, prices, approval state, credentials, sessions, reservations, and frozen history. Staging is not a command to pause an already active account.
 
-Do not keep this command in startup or the permanent pre-deploy hook. If deployment access requires a temporary one-time setup hook, restore `npm run db:migrate:production` after success. Subsequent setup runs are explicit configuration operations, not routine deployment work. Account email and password changes require a separate deliberate operation; supplying another password on a setup retry does not reset an existing account.
+After qualification, activate only the reviewed provider/configuration subset:
 
-## Buyer and provider interactions
+```sh
+npm run configure:real:production -- --apply-providers --providers sail --activate
+```
 
-The buyer reviews minimum CPU/memory, any GPU requirement, exact rental duration, maximum gross total and location before the 30-second auction. Cross-provider matching requires explicit `matchAcrossProviders` review. A named native region stays exact: `us`, `us-pdx-1` and `auto` are not silently treated as equivalent. The buyer must choose the available-region option to permit matching across those native locations.
+Activation refreshes selected catalog/pricing evidence, approves those routes, activates the selected setup offering, and applies the selected automatic-bidding setting. It preserves custom capacity, base price, and offering price. If an existing offering is below the current cost floor, activation fails atomically. `--update-existing` is the separate explicit option for replacing selected accounts' default capacity/policy and selected offering prices; combine it with `--activate` only when those changes and activation are intended. Ambiguous multiple customized offerings require the provider console. A conflicting role/cloud binding fails without repurposing the account.
 
-Each eligible provider may bid only an active, approved offering belonging to its immutable upstream binding and satisfying the reviewed requirements. Providers can narrow their allowed configurations, pause automatic bidding, reserve spare capacity and adjust pricing within the cost floor and budget. They cannot broaden their cloud identity through policy edits. Each workspace starts with five configured slots; the global 20-VM admission limit still applies. Holds for accepted bids and rentals remain until their normal release or confirmed cleanup.
+Setup allocates no VM and collects no payment. Keep it out of startup and permanent pre-deploy hooks. Migration 032 admits the new identities and quarantines historical real Boat approvals plus ordinary/scheduled offerings; old history and cleanup remain intact.
 
-The selected offering's native provider, profile, region, resources and pricing are frozen for provisioning. The winning cloud's configuration is passed to Wick. Existing exact-route requests and historical snapshots keep their prior semantics; matching does not silently migrate an existing rental to a different cloud.
+## Provider prices and automatic bids
 
-Suggested gross prices use the current managed Wick rate and the fixed provider commission. Broker receives **15% of provider gross**, and the provider retains **85% before compute costs**. There is no extra buyer fee and no stacked markup. Actual VM use consumes Wick credits. Customer invoices and provider earnings remain demo accounting records marked **No payment due**; payments and payouts are not implemented.
+The managed cost-covered floor is `max(1, ceil(rateMicrosPerSecond × durationSeconds / 8500))` cents. New bound accounts start with base and offering prices **20% above the 30-minute cost-covered quote**, rounded upward to $0.0001. With several selected routes, the provider base uses the lowest selected baseline. Minimum policy price starts at one cent; every actual real bid must also meet the route's duration-specific cost floor. Existing custom policies are unchanged by ordinary setup retries.
 
-## Coverage record
+Automatic bids use the higher of the saved base and current required floor. The last available slot stays at base. When more than one slot is free and at least half of unreserved capacity is available, the server may offer up to 10% off, bounded by the floor. Muse decides whether to use that discount; declining it leaves the exact base price if it fits buyer/provider limits. With no discount candidate, base bids need no model call. An unaffordable base is not lowered to the buyer's budget. Model errors remain errors. Capacity, price, eligibility, and auction deadlines are checked before a binding hold. New one-slot accounts therefore begin with base-only bidding after activation.
 
-Scope is Broker's customer VM admission, lifecycle and authenticated browser terminal through the public Wick SDK. This change does not implement or modify native Wick provider adapters or guest package installation. Git integration, copy/file tools, saved snapshots, pause/resume and other Wick product features are outside this Broker UI change; their absence here is not evidence that the corresponding native provider lacks them.
+Broker deducts **15% of provider gross revenue**, leaving **85% before compute costs**, with no extra buyer fee. The default provider margin is a selling-policy choice, not another Broker fee or a change to the managed rate. Invoices and earnings remain demo records marked **No payment due**; payments and payouts are not implemented.
 
-| Feature                                        | Implementation / offline coverage                                                                                                                                                                 | Four-provider live observation                                                                           |
-| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| Native catalog and managed billing scope       | SDK parsing, route identity, resources, rate provenance and fail-closed preview contracts                                                                                                         | All 12 current routes passed read-only catalog/execution preview at 2026-10-28 18:33 UTC; no allocations |
-| Provider identity and account setup            | [Setup DB tests](../tests/provider-setup-db.test.ts): role/binding collisions, hashed new credentials, existing auth/history preservation and concurrent retries                                  | Provider configuration is an operator action; preview does not verify login or upstream capacity         |
-| Cross-provider matchmaking                     | [Matching owner](../src/server/marketplace/matching.ts) and [auction owner](../src/server/marketplace/auction.ts): explicit compatibility review, native region preservation and winning snapshot | No new live allocation claim                                                                             |
-| VM create, admission expiry and idempotency    | Shared Wick SDK adapter plus fixture/contract and database tests; original create key and frozen quote retained                                                                                   | Not exercised by the read-only preview                                                                   |
-| Ownership, scoped browser terminal and renewal | [Terminal contracts](../tests/wick-sdk-terminal.test.ts) and [terminal authorization](../tests/wick-terminal.test.ts)                                                                             | No four-provider live terminal/PTY validation in this change                                             |
-| Cleanup, reservations and demo invoices        | Shared lifecycle/database coverage; holds release only after confirmed cleanup; exactly one frozen invoice on readiness                                                                           | No real VM was created or deleted by the preview                                                         |
+## Buyer matching and availability
 
-Read-only preview success demonstrates a matching managed route at the observation time. It does not prove real provisioning, terminal interoperability, measured capacity, sustained scale or asynchronous physical deletion. Earlier [live scale results](live-scale-results.md) retain their original provider and test scope and must not be generalized to all four providers.
+Buyers review minimum CPU/memory, GPU requirements, exact 15/30/60-minute duration, maximum gross total, and location before the 30-second auction. Cross-provider matching requires explicit review. Native `us`, `us-pdx-1`, and `auto` remain distinct; choose the available-region option to compare them. Discovery and frozen cross-provider books are bounded at 32 routes, with four concurrent read-only Wick previews; excess routes fail explicitly.
+
+Providers can only bid active, approved offerings belonging to their immutable cloud binding. Policy edits cannot broaden that identity. The winning native provider/profile/region/resources/pricing are frozen. Exact-route requests and historical snapshots retain their original semantics. Configured capacity and the global 20-VM cap remain separate; holds persist until their normal release or confirmed cleanup. Studio qualification remains a separate allowlist.
+
+## Coverage and historical evidence
+
+Offline coverage includes [SDK contracts](../tests/wick-contract.test.ts), [provider setup and preservation](../tests/provider-setup-db.test.ts), [identity boundaries](../tests/provider-identity-routes.test.ts), [cross-provider matching](../tests/cross-provider-auction.test.ts), [discount/base decisions](../tests/base-bidding.test.ts), and [fractional memory](../tests/fractional-memory-db.test.ts). Database suites require a dedicated `TEST_DATABASE_URL`; skipped suites are not passing database evidence.
+
+The October 28 read-only check observed twelve routes across the original four providers. The [four-provider live record](live-four-provider-scale-results.md) later reported 20 compute VMs and 15 maintained E2B/Daytona/Modal terminals, with full four-provider terminal overlap failing and Blaxel listings paused. The [earlier E2B scale result](live-scale-results.md) has its own scope. None qualifies the four new providers.
+
+November 2 catalog and user-scoped doctor checks for the additions establish advertised capabilities and admission eligibility only. The [production receipt](verification/provider-expansion-2026-11-02.md) separately records fresh service-credential previews and staged accounts. Actual provisioning, terminal/renewal behavior, and confirmed cleanup remain pending before production activation. No new-provider live terminal pass is claimed here.

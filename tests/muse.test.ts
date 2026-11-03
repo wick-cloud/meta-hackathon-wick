@@ -73,6 +73,7 @@ const bidInput = () => ({
   },
   policy: supplierPolicy,
   availableCapacity: 2,
+  discountTotalPriceCents: 60,
   catalog,
 });
 const translateOutput = {
@@ -144,7 +145,7 @@ describe('explicit Muse fixture mode', () => {
     expect(await fixture.proposeBid(bidInput())).toMatchObject({
       decision: 'bid',
       catalogId: 'small',
-      totalPriceCents: 65,
+      totalPriceCents: 60,
       modelCalled: false,
     });
     expect(await fixture.proposeBid({ ...bidInput(), availableCapacity: 0 })).toMatchObject({

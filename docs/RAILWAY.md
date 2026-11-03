@@ -89,19 +89,21 @@ WICK_GROUP_ID
 railway ssh --service wick-broker -- npm run configure:real:production -- --list
 ```
 
-For the four provider workspaces, supply private `REAL_PROVIDER_E2B_*`, `REAL_PROVIDER_DAYTONA_*`, `REAL_PROVIDER_BLAXEL_*` and `REAL_PROVIDER_MODAL_*` variables, each with `EMAIL`, `PASSWORD` and `CATALOG_IDS`. Catalog IDs are comma-separated selections from `--list`. Set `REAL_PROVIDER_CAPACITY=5` and explicitly list the old supplier emails in `REAL_RETIRED_SUPPLIER_EMAILS`. Apply once from the running app container:
+The registry supports E2B, Daytona, Baseten (native Blaxel), Modal, Sail, Tenki, Freestyle, and Boat.dev. Supply private `REAL_PROVIDER_<KEY>_EMAIL` and `_CATALOG_IDS` only for the selected providers, plus `_PASSWORD` for newly created accounts. Keys are `E2B`, `DAYTONA`, `BLAXEL`, `MODAL`, `SAIL`, `TENKI`, `FREESTYLE`, and `BOAT`; catalog IDs must come from a fresh `--list`. Per-provider `_CAPACITY` overrides `REAL_PROVIDER_CAPACITY` and defaults to one slot. Staged account creation is explicit:
 
 ```sh
-railway ssh --service wick-broker -- npm run configure:real:production -- --apply-providers
+railway ssh --service wick-broker -- npm run configure:real:production -- --apply-providers --providers sail,tenki,freestyle,boat --stage
 ```
 
-This creates new credential accounts only when absent, binds each workspace to its native cloud configurations, and retires the selected legacy suppliers' automatic bidding and active real offerings. It preserves existing passwords, sessions, reservations, fixture records and frozen financial history. Existing-role or cloud-binding collisions fail rather than resetting or repurposing an account. Five slots per workspace are configured allocations within the shared 20-VM limit, not a claim about measured upstream capacity.
+An explicit subset is required (`REAL_PROVIDER_IDS` is an alternative). Staging creates missing accounts/bindings with new catalog rows unapproved, new offerings inactive, and automatic bidding disabled. Default retries preserve existing passwords, sessions, custom policies, capacity, approval/activity state, prices and frozen history. Existing passwords can be omitted and are never reset. Role or cloud-binding conflicts fail atomically. These configured slots are not measured upstream capacity; the shared global limit remains 20 VMs.
 
-Display names are E2B, Daytona, Baseten and Modal. Baseten is the requested account label for the underlying Blaxel route, whose Wick ID is `provider-blaxel`. That compute-account label does not establish company affiliation or turn the Blaxel VM route into a Baseten compute service. Separately, real Muse inference uses the actual Baseten Model API described below. Boat remains excluded. See [provider marketplace setup](provider-marketplace.md) for exact environment names and the coverage record, and [real Wick operations](REAL_WICK.md) for managed-route checks and rate freshness. Real buyer allocations consume Wick credits; invoices and earnings remain demo records without collected payments or payouts.
+After service-credential and live lifecycle/terminal qualification, use `--apply-providers --providers <qualified-subset> --activate`. Activation preserves custom prices/capacity and fails if an existing offering is below the current floor. `--update-existing` explicitly replaces selected defaults/prices; use it only for an intended policy update. `_AUTO_BID=false` can keep automation disabled during activation. New account base/offer prices are 120% of the 30-minute cost-covered quote, rounded upward to $0.0001. One-slot accounts use base-only bidding; see [provider strategies](provider-marketplace.md).
 
-Keep the permanent pre-deploy command as `npm run db:migrate:production`. Provider setup must not become part of startup or every deployment. If an operator temporarily uses a one-time pre-deploy setup hook because a container console is unavailable, restore the migration-only command after successful setup and verify the restored service settings. Do not put the seed command in that hook.
+Only set `REAL_RETIRED_SUPPLIER_EMAILS` when deliberately retiring existing unbound suppliers. Setup allocates no VMs and does not deploy the app. Never leave setup in startup or a permanent pre-deploy hook; keep `npm run db:migrate:production` as the permanent command. Migration 032 expands identities and quarantines historical real Boat approvals/offerings while preserving rentals and cleanup.
 
-The older `--apply` command remains available for explicitly selected unbound demo suppliers using `REAL_CATALOG_IDS` and `REAL_SUPPLIER_EMAILS`; it refuses cloud-bound accounts. Use `--apply-providers` for these four workspaces.
+Baseten remains the requested compute-account display alias for native `provider-blaxel`; the actual Baseten Muse API is separate. Native provider names are routing identities, not company-operated accounts. Real buyer allocations consume Wick credits; invoices/earnings remain demo accounting without collected payments or payouts. The [expansion record](provider-expansion-plan.md) distinguishes implemented support from deployment and live qualification.
+
+The older `--apply` command remains for explicitly selected unbound demo suppliers through `REAL_CATALOG_IDS` and `REAL_SUPPLIER_EMAILS`; it refuses cloud-bound accounts. Use the subset-aware `--apply-providers` flow for registered provider accounts.
 
 ## Enable real Muse Spark Open on Baseten
 

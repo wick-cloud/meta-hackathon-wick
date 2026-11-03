@@ -13,13 +13,13 @@ import type { CatalogItem } from '../src/shared/types.js';
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const schema = `broker_fractional_${randomUUID().replaceAll('-', '')}`;
-// Preserve the fractional GiB regression without asserting this is an E2B resource size.
+// Wick advertises Boat Small as 3814 MiB; never round it up to 4 GiB.
 const fractionalMemory = 3814 / 1024;
 const syntheticOffering: CatalogItem = {
-  id: 'offline-synthetic-fractional',
-  name: 'Synthetic fractional memory fixture',
-  description: 'Synthetic resources for offline validation, not actual E2B catalog specifications',
-  provider: 'e2b',
+  id: 'boat:small:auto',
+  name: 'Boat Small offline catalog fixture',
+  description: 'Offline fixture of the observed Wick Boat Small resource metadata',
+  provider: 'boat',
   profile: 'small',
   region: 'auto',
   cpu: 2,
@@ -34,7 +34,7 @@ const syntheticOffering: CatalogItem = {
   rateRetrievedAt: new Date().toISOString(),
 };
 
-describe.skipIf(!databaseUrl)('synthetic fractional GiB through buyer HTTP APIs, offline', () => {
+describe.skipIf(!databaseUrl)('Boat fractional GiB through buyer HTTP APIs, offline', () => {
   let admin: Pool;
   let pool: Pool;
   const app = Fastify();
@@ -135,7 +135,7 @@ describe.skipIf(!databaseUrl)('synthetic fractional GiB through buyer HTTP APIs,
     expect(submitted.json().requirements.memoryGb).toBe(fractionalMemory);
   });
 
-  it('accepts positive sub-GiB requirements but rejects requests above synthetic catalog memory', async () => {
+  it('accepts positive sub-GiB requirements but rejects requests above Boat catalog memory', async () => {
     const body = requestBody();
     body.requirements.memoryGb = 0.5;
     expect(

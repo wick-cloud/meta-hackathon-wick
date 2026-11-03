@@ -1,3 +1,5 @@
+import { assertManagedCustomerRoute } from './matching.js';
+import { CLOUD_PROVIDERS } from '../../shared/providers.js';
 import { cancelRequest } from './auction.js';
 import { moneyCents } from './data.js';
 import { registerVmInventory } from './inventory.js';
@@ -330,8 +332,14 @@ export async function registerMarketplace(app: FastifyInstance, ctx: AppContext)
         `SELECT id FROM broker_catalog WHERE approved AND source_mode=$1
        AND ($2::text[] IS NULL OR id=ANY($2))
        AND ($3::text IS NULL OR item->>'provider'=$3)
-       AND ($1 <> 'real' OR COALESCE(item->>'provider','') <> 'boat') ORDER BY id LIMIT 100`,
-        [ctx.wick.mode, policy.allowedCatalogIds ?? null, p.cloud_provider ?? null],
+       AND ($1 <> 'real' OR (item->>'provider'=ANY($4::text[])
+         AND COALESCE(item->>'providerKeyId','')='' AND item->>'pricingMode'='managed')) ORDER BY id LIMIT 100`,
+        [
+          ctx.wick.mode,
+          policy.allowedCatalogIds ?? null,
+          p.cloud_provider ?? null,
+          CLOUD_PROVIDERS,
+        ],
       )
     ).rows.map((row) => row.id as string);
     const proposal = await ctx.muse.proposeCapacityPolicy({
@@ -527,6 +535,7 @@ export async function registerMarketplace(app: FastifyInstance, ctx: AppContext)
               'Offerings must use an administrator-approved existing Wick configuration.',
             );
           assertProviderCatalog(p, c.item);
+          if (ctx.wick.mode === 'real') assertManagedCustomerRoute(c.item);
           let pricing;
           if (ctx.wick.mode === 'real') {
             try {
@@ -622,6 +631,7 @@ export async function registerMarketplace(app: FastifyInstance, ctx: AppContext)
             if (!catalog?.approved)
               throw new HttpError(409, 'This configuration is no longer approved.');
             assertProviderCatalog(p, catalog.item);
+            if (ctx.wick.mode === 'real') assertManagedCustomerRoute(catalog.item);
             if (p.policy.allowedCatalogIds && !p.policy.allowedCatalogIds.includes(row.catalog_id))
               throw new HttpError(403, 'Provider policy excludes this configuration.');
           }
