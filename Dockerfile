@@ -1,4 +1,4 @@
-FROM node:24-bookworm-slim@sha256:c86ecead9e55a5210ac1727de38a4ca840bf03dcaf34dc9749addbf383b1920c AS build
+FROM node:26-bookworm-slim@sha256:bc0a2afd3b74ce12222fc8bab99271e66257f021078f5f4a5d687a77d280c1d9 AS build
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci --workspaces=false
@@ -9,7 +9,7 @@ COPY packages/sdk/src/contracts.ts ./packages/sdk/src/contracts.ts
 RUN npm run build:app
 
 # Install against the same musl runtime, then leave all package-manager tooling behind.
-FROM node:24-alpine@sha256:8a32c8cf649a49915a66e81e7a609223c708d0adabf288ee3f4077d765542f85 AS production-deps
+FROM node:26-alpine@sha256:c6ad9e9c1d80f6eb607c26b4b0a132ff7a2344fad1c78ea3baa2a7d4c8de6d94 AS production-deps
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci --omit=dev --workspaces=false --ignore-scripts
