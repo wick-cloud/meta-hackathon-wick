@@ -213,13 +213,13 @@ describe.skipIf(!databaseUrl)(
       const response = await app.inject({ method: 'GET', url: '/api/demo', headers: headers(ip) });
       expect(response.statusCode).toBe(200);
       // Model a previously issued opaque browser secret without creating a DB identity.
-      // A separate HTTP test below covers the first POST's actual cookie issuance.
+      // A separate HTTP test below covers registration before the first start.
       expect(response.headers['set-cookie']).toBeUndefined();
       const cookie = `wick_demo=${randomBytes(32).toString('base64url')}`;
       return { ip, cookie, state: response.json<DemoState>() };
     }
     async function start(
-      client: Awaited<ReturnType<typeof visitor>>,
+      client: { ip: string; cookie: string },
       operationKey = randomUUID(),
       extra = {},
     ) {
@@ -233,7 +233,7 @@ describe.skipIf(!databaseUrl)(
     async function row(id: string) {
       return (await pool.query('SELECT * FROM broker_demo_runs WHERE id=$1', [id])).rows[0];
     }
-    async function read(client: Awaited<ReturnType<typeof visitor>>) {
+    async function read(client: { ip: string; cookie: string }) {
       const response = await app.inject({
         method: 'GET',
         url: '/api/demo',
@@ -428,19 +428,107 @@ describe.skipIf(!databaseUrl)(
       expect(stored.reserved_cents).toBe(50);
     });
 
-    it('issues the first guest cookie only when the visitor starts the demo', async () => {
+    it('registers a durable browser cookie before any demo resources are admitted', async () => {
       const response = await app.inject({
         method: 'POST',
-        url: '/api/demo/start',
+        url: '/api/demo/session',
         headers: headers('192.0.2.44'),
-        payload: { operationKey: randomUUID() },
+        payload: {},
       });
-      expect(response.statusCode, response.body).toBe(200);
+      expect(response.statusCode, response.body).toBe(204);
       const cookie = response.headers['set-cookie'];
       expect(cookie).toEqual(expect.stringContaining('wick_demo='));
       expect(cookie).toEqual(expect.stringContaining('HttpOnly'));
       expect(cookie).toEqual(expect.stringContaining('SameSite=Strict'));
       expect(cookie).not.toEqual(expect.stringContaining('better-auth'));
+      expect((await pool.query('SELECT count(*)::int n FROM broker_demo_runs')).rows[0].n).toBe(0);
+      expect((await pool.query('SELECT count(*)::int n FROM broker_demo_visitors')).rows[0].n).toBe(
+        0,
+      );
+      expect((await pool.query('SELECT count(*)::int n FROM broker_demo_days')).rows[0].n).toBe(0);
+      const guest = { ip: '192.0.2.44', cookie: String(cookie).split(';')[0]! };
+      const renewed = await app.inject({
+        method: 'POST',
+        url: '/api/demo/session',
+        headers: headers(guest.ip, guest.cookie),
+        payload: {},
+      });
+      expect(renewed.statusCode).toBe(204);
+      expect(renewed.headers['set-cookie']).toBe(cookie);
+      expect((await start(guest)).statusCode).toBe(200);
+    });
+
+    it('cannot allocate a demo until the browser sends its saved cookie back', async () => {
+      for (const cookie of ['', 'wick_demo=invalid']) {
+        const response = await app.inject({
+          method: 'POST',
+          url: '/api/demo/start',
+          headers: headers(`192.0.2.${testNetwork}`, cookie),
+          payload: { operationKey: randomUUID() },
+        });
+        expect(response.statusCode).toBe(409);
+        expect(response.headers['set-cookie']).toBeUndefined();
+        expect(response.json().error).toContain('Enable cookies');
+      }
+      expect((await pool.query('SELECT count(*)::int n FROM broker_demo_runs')).rows[0].n).toBe(0);
+      expect((await pool.query('SELECT count(*)::int n FROM broker_demo_days')).rows[0].n).toBe(0);
+    });
+
+    it('recovers an admitted run with the pre-saved cookie after losing its start response or changing IP', async () => {
+      const ip = `192.0.2.${testNetwork}`;
+      const registered = await app.inject({
+        method: 'POST',
+        url: '/api/demo/session',
+        headers: headers(ip),
+        payload: {},
+      });
+      const cookie = String(registered.headers['set-cookie']).split(';')[0]!;
+      const started = await start({ ip, cookie });
+      expect(started.statusCode).toBe(200);
+      expect(started.headers['set-cookie']).toBeUndefined();
+      // Only the cookie from registration survives. Reload/another tab does not
+      // need the start response, operation key, or the network's original IP.
+      const recovered = await read({ ip: '203.0.113.204', cookie });
+      expect(recovered.run?.id).toBe(started.json<DemoState>().run!.id);
+      expect((await pool.query('SELECT count(*)::int n FROM broker_demo_runs')).rows[0].n).toBe(1);
+      expect((await read({ ip, cookie: '' })).run).toBeNull();
+      expect(
+        (await read({ ip, cookie: `wick_demo=${randomBytes(32).toString('base64url')}` })).run,
+      ).toBeNull();
+    });
+
+    it('requires the application origin to register a demo browser', async () => {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/demo/session',
+        headers: { ...headers(`192.0.2.${testNetwork}`), origin: 'https://untrusted.invalid' },
+        payload: {},
+      });
+      expect(response.statusCode).toBe(403);
+      expect(response.headers['set-cookie']).toBeUndefined();
+    });
+
+    it('allows shared-network status polling while enforcing its bounded read limit', async () => {
+      // Keep this focused on HTTP throttling; status reads create no resources.
+      ctx.config.liveDemoEnabled = false;
+      const responses = await Promise.all(
+        Array.from({ length: 180 }, () =>
+          app.inject({
+            method: 'GET',
+            url: '/api/demo',
+            headers: headers(`192.0.2.${testNetwork}`),
+          }),
+        ),
+      );
+      expect(responses.every((response) => response.statusCode === 200)).toBe(true);
+      const limited = await app.inject({
+        method: 'GET',
+        url: '/api/demo',
+        headers: headers(`192.0.2.${testNetwork}`),
+      });
+      expect(limited.statusCode).toBe(429);
+      expect(limited.headers['retry-after']).toBeDefined();
+      expect((await pool.query('SELECT count(*)::int n FROM broker_demo_runs')).rows[0].n).toBe(0);
     });
 
     it('does not treat a demo cookie as a signed-in buyer on existing APIs', async () => {
@@ -514,13 +602,130 @@ describe.skipIf(!databaseUrl)(
         (await pool.query('SELECT sum(reserved_cents)::int n FROM broker_demo_days')).rows[0].n,
       ).toBe(50);
       const different = await start(guest);
-      expect(different.statusCode).toBeGreaterThanOrEqual(400);
+      expect(different.statusCode, different.body).toBe(200);
+      expect(different.json<DemoState>().run!.id).toBe([...ids][0]);
       expect((await read(guest)).run!.id).toBe([...ids][0]);
     });
 
-    it('cannot bypass the per-network active run with a fresh cookie or forged forwarding chain', async () => {
+    it('resumes one browser run across concurrent fresh keys and unavailable purchase prerequisites', async () => {
+      const guest = await visitor();
+      const responses = await Promise.all(
+        Array.from({ length: 5 }, (_, i) =>
+          start(guest, randomUUID(), { kind: i % 2 ? 'studio' : 'terminal' }),
+        ),
+      );
+      for (const response of responses) expect(response.statusCode, response.body).toBe(200);
+      const runs = responses.map((response) => response.json<DemoState>().run!);
+      expect(new Set(runs.map((run) => run.id)).size).toBe(1);
+      expect(new Set(runs.map((run) => run.kind)).size).toBe(1);
+      ctx.config.disksEnabled = false;
+      try {
+        const resumed = await start(guest, randomUUID(), { kind: 'studio', demoName: 'Other' });
+        expect(resumed.statusCode, resumed.body).toBe(200);
+        expect(resumed.json<DemoState>().run).toMatchObject({
+          id: runs[0]!.id,
+          kind: runs[0]!.kind,
+          demoName: '',
+        });
+      } finally {
+        ctx.config.disksEnabled = true;
+      }
+      expect((await pool.query('SELECT count(*)::int n FROM broker_demo_runs')).rows[0].n).toBe(1);
+      expect(
+        (await pool.query('SELECT sum(reserved_cents)::int n FROM broker_demo_days')).rows[0].n,
+      ).toBe(50);
+      expect(
+        (
+          await pool.query(
+            'SELECT count(*)::int n FROM broker_inference_grants WHERE buyer_id=$1',
+            [(await row(runs[0]!.id)).buyer_id],
+          )
+        ).rows[0].n,
+      ).toBe(1);
+      expect(commands).not.toHaveBeenCalled();
+    });
+
+    it('durably replays a fresh resume key after cleanup and cooldown without another reservation', async () => {
+      const guest = await visitor();
+      const initial = await start(guest);
+      expect(initial.statusCode, initial.body).toBe(200);
+      const runId = initial.json<DemoState>().run!.id;
+      const resumeKey = randomUUID();
+      const input = { kind: 'studio', demoName: 'Alex' };
+      const resumes = await Promise.all(
+        Array.from({ length: 4 }, () => start(guest, resumeKey, input)),
+      );
+      for (const response of resumes) {
+        expect(response.statusCode, response.body).toBe(200);
+        expect(response.json<DemoState>().run).toMatchObject({
+          id: runId,
+          kind: 'terminal',
+          demoName: '',
+        });
+      }
+      expect((await start(guest, resumeKey, { kind: 'terminal' })).statusCode).toBe(409);
+      expect((await start(guest, resumeKey, { ...input, demoName: 'Other' })).statusCode).toBe(409);
+      expect(
+        (
+          await pool.query('SELECT * FROM broker_demo_start_replays WHERE operation_key=$1', [
+            resumeKey,
+          ])
+        ).rows,
+      ).toMatchObject([{ run_id: runId, requested_kind: 'studio', requested_name: 'Alex' }]);
+      await pool.query(
+        "UPDATE broker_demo_runs SET status='ended',ended_at=clock_timestamp(),vm_cleanup_at=clock_timestamp(),cooldown_until=clock_timestamp()-interval '1 second' WHERE id=$1",
+        [runId],
+      );
+      expect((await read(guest)).available).toBe(true);
+      const replay = await start(guest, resumeKey, input);
+      expect(replay.statusCode, replay.body).toBe(200);
+      expect(replay.json<DemoState>().run).toMatchObject({ id: runId, status: 'ended' });
+      expect((await pool.query('SELECT count(*)::int n FROM broker_demo_runs')).rows[0].n).toBe(1);
+      expect(
+        (await pool.query('SELECT sum(reserved_cents)::int n FROM broker_demo_days')).rows[0].n,
+      ).toBe(50);
+    });
+
+    it('rejects conflicting concurrent resume inputs without changing the existing task', async () => {
+      const guest = await visitor();
+      const initial = await start(guest);
+      expect(initial.statusCode, initial.body).toBe(200);
+      const runId = initial.json<DemoState>().run!.id;
+      const resumeKey = randomUUID();
+      const inputs = [{ kind: 'terminal' }, { kind: 'studio', demoName: 'Alex' }];
+      const responses = await Promise.all(inputs.map((input) => start(guest, resumeKey, input)));
+      expect(responses.map((response) => response.statusCode).sort()).toEqual([200, 409]);
+      const acceptedIndex = responses.findIndex((response) => response.statusCode === 200);
+      const replay = await start(guest, resumeKey, inputs[acceptedIndex]);
+      expect(replay.statusCode, replay.body).toBe(200);
+      expect(replay.json<DemoState>().run).toMatchObject({
+        id: runId,
+        kind: 'terminal',
+        demoName: '',
+      });
+      expect(
+        (await pool.query('SELECT count(*)::int n FROM broker_demo_start_replays')).rows[0].n,
+      ).toBe(1);
+      expect((await pool.query('SELECT count(*)::int n FROM broker_demo_runs')).rows[0].n).toBe(1);
+      expect(
+        (await pool.query('SELECT sum(reserved_cents)::int n FROM broker_demo_days')).rows[0].n,
+      ).toBe(50);
+    });
+
+    it('cannot exceed the network allowance with a fresh cookie or forged forwarding chain', async () => {
       const first = await visitor();
-      expect((await start(first)).statusCode).toBe(200);
+      const ids: string[] = [];
+      for (let i = 0; i < 3; i++) {
+        const client = i === 0 ? first : await visitor(first.ip);
+        const started = await start(client);
+        expect(started.statusCode, started.body).toBe(200);
+        ids.push(started.json<DemoState>().run!.id);
+        if (i < 2)
+          await pool.query(
+            "UPDATE broker_demo_runs SET status='ended',ended_at=clock_timestamp(),vm_cleanup_at=clock_timestamp(),cooldown_until=clock_timestamp()+interval '20 minutes' WHERE id=$1",
+            [ids[i]],
+          );
+      }
       const second = await visitor(first.ip);
       expect(second.cookie).not.toBe(first.cookie);
       const response = await app.inject({
@@ -530,25 +735,75 @@ describe.skipIf(!databaseUrl)(
         payload: { operationKey: randomUUID() },
       });
       expect(response.statusCode).toBeGreaterThanOrEqual(400);
-      expect((await pool.query('SELECT count(*)::int n FROM broker_demo_runs')).rows[0].n).toBe(1);
+      expect((await pool.query('SELECT count(*)::int n FROM broker_demo_runs')).rows[0].n).toBe(3);
+      expect(
+        (await pool.query('SELECT count(DISTINCT ip_digest)::int n FROM broker_demo_runs')).rows[0]
+          .n,
+      ).toBe(1);
       expect((await read(second)).run).toBeNull();
-      expect(JSON.stringify(await read(second))).not.toContain((await read(first)).run!.id);
+      expect(JSON.stringify(await read(second))).not.toContain(ids[2]);
     });
 
-    it('admits only two concurrent runs even when independent visitors race', async () => {
+    it('admits five concurrent runs and holds their slots until cleanup is confirmed', async () => {
       const clients = await Promise.all(
-        ['192.0.2.1', '192.0.2.2', '192.0.2.3', '192.0.2.4'].map((ip) => visitor(ip)),
+        Array.from({ length: 8 }, (_, i) => visitor(`192.0.2.${i + 1}`)),
       );
       const responses = await Promise.all(clients.map((client) => start(client)));
-      expect(responses.filter((r) => r.statusCode === 200)).toHaveLength(2);
-      expect(responses.filter((r) => r.statusCode >= 400)).toHaveLength(2);
+      const accepted = responses.filter((r) => r.statusCode === 200);
+      expect(accepted).toHaveLength(5);
+      const rejected = responses.filter((r) => r.statusCode !== 200);
+      expect(rejected).toHaveLength(3);
+      for (const response of rejected) {
+        expect(response.statusCode, response.body).toBe(429);
+        expect(response.json().error).toBe(
+          'All 5 demo slots are in use. Please try again after a demo ends.',
+        );
+      }
       expect(
         (await pool.query('SELECT count(*)::int n FROM broker_demo_runs WHERE ended_at IS NULL'))
           .rows[0].n,
-      ).toBe(2);
+      ).toBe(5);
       expect(
         (await pool.query('SELECT sum(reserved_cents)::int n FROM broker_demo_days')).rows[0].n,
-      ).toBe(100);
+      ).toBe(250);
+
+      const waiting = clients[responses.findIndex((response) => response.statusCode === 429)]!;
+      const endingRun = accepted[0]!.json<DemoState>().run!.id;
+      await pool.query(
+        "UPDATE broker_demo_runs SET status='ending',stop_requested=true WHERE id=$1",
+        [endingRun],
+      );
+      expect((await read(waiting)).available).toBe(false);
+      expect((await start(waiting)).statusCode).toBe(429);
+      await pool.query(
+        "UPDATE broker_demo_runs SET status='ended',ended_at=clock_timestamp(),vm_cleanup_at=clock_timestamp(),cooldown_until=clock_timestamp()+interval '20 minutes' WHERE id=$1",
+        [endingRun],
+      );
+      expect((await read(waiting)).available).toBe(true);
+      const replacement = await start(waiting);
+      expect(replacement.statusCode, replacement.body).toBe(200);
+      expect(
+        (await pool.query('SELECT count(*)::int n FROM broker_demo_runs WHERE ended_at IS NULL'))
+          .rows[0].n,
+      ).toBe(5);
+      expect(
+        (await pool.query('SELECT sum(reserved_cents)::int n FROM broker_demo_days')).rows[0].n,
+      ).toBe(300);
+    });
+
+    it('keeps the three-run network allowance when five browser sessions race', async () => {
+      const clients = await Promise.all(Array.from({ length: 5 }, () => visitor()));
+      const responses = await Promise.all(clients.map((client) => start(client)));
+      expect(responses.filter((response) => response.statusCode === 200)).toHaveLength(3);
+      const rejected = responses.filter((response) => response.statusCode !== 200);
+      expect(rejected).toHaveLength(2);
+      for (const response of rejected) {
+        expect(response.statusCode, response.body).toBe(429);
+        expect(response.json().error).toContain('This network has used its demo allowance.');
+      }
+      expect(
+        (await pool.query('SELECT sum(reserved_cents)::int n FROM broker_demo_days')).rows[0].n,
+      ).toBe(150);
     });
 
     it('does not admit an eleventh fifty-cent daily reservation', async () => {
@@ -568,26 +823,48 @@ describe.skipIf(!databaseUrl)(
       expect((await pool.query('SELECT count(*)::int n FROM broker_demo_runs')).rows[0].n).toBe(1);
     });
 
-    it('retains one paired cooldown across visitor and network identities', async () => {
-      const guest = await visitor();
-      const result = await start(guest);
-      const runId = result.json<DemoState>().run!.id;
-      const cooldown = new Date(Date.now() + 20 * 60000);
-      await pool.query(
-        "UPDATE broker_demo_runs SET status='ended',ended_at=clock_timestamp(),vm_cleanup_at=clock_timestamp(),cooldown_until=$2 WHERE id=$1",
-        [runId, cooldown],
-      );
-      const current = await read(guest);
-      expect(current.cooldownUntil).toBe(cooldown.toISOString());
+    it('keeps a browser cooldown but lets a shared network run a few demos', async () => {
+      const end = (id: string, cooldown: Date) =>
+        pool.query(
+          "UPDATE broker_demo_runs SET status='ended',ended_at=clock_timestamp(),vm_cleanup_at=clock_timestamp(),cooldown_until=$2 WHERE id=$1",
+          [id, cooldown],
+        );
+      const first = await visitor();
+      const firstRun = (await start(first)).json<DemoState>().run!.id;
+      const firstCooldown = new Date(Date.now() + 10 * 60000);
+      await end(firstRun, firstCooldown);
+      const current = await read(first);
+      expect(current.cooldownUntil).toBe(firstCooldown.toISOString());
       expect(current.available).toBe(false);
-      expect((await start(guest)).statusCode).toBeGreaterThanOrEqual(400);
-      const clearedCookie = await visitor(guest.ip);
-      expect((await start(clearedCookie)).statusCode).toBeGreaterThanOrEqual(400);
+      expect((await start(first)).statusCode).toBeGreaterThanOrEqual(400);
+
+      // Others on the same network, including a browser that cleared its cookie, still start.
+      const second = await visitor(first.ip);
+      expect((await read(second)).available).toBe(true);
+      const secondStart = await start(second);
+      expect(secondStart.statusCode, secondStart.body).toBe(200);
+      await end(secondStart.json<DemoState>().run!.id, new Date(Date.now() + 20 * 60000));
+      const third = await visitor(first.ip);
+      expect((await start(third)).statusCode).toBe(200);
+
+      // The network's allowance is DEMO_NETWORK_RUNS active or cooling-down runs.
+      const fourth = await visitor(first.ip);
+      const blocked = await read(fourth);
+      expect(blocked).toMatchObject({
+        available: false,
+        reason:
+          'This network has used its demo allowance. Please try again after a demo ends or cools down.',
+        cooldownUntil: firstCooldown.toISOString(),
+      });
+      expect((await start(fourth)).statusCode).toBe(429);
+      expect((await visitor('192.0.2.200')).state.available).toBe(true);
+
       await pool.query(
         "UPDATE broker_demo_runs SET cooldown_until=clock_timestamp()-interval '1 second' WHERE id=$1",
-        [runId],
+        [firstRun],
       );
-      expect((await start(guest)).statusCode).toBe(200);
+      const admitted = await start(fourth);
+      expect(admitted.statusCode, admitted.body).toBe(200);
     });
 
     it('fails closed when paid-mode prerequisites or the exact demo compute route are missing', async () => {
@@ -953,7 +1230,12 @@ describe.skipIf(!databaseUrl)(
         expect(
           (await pool.query('SELECT reserved_cents FROM broker_demo_days')).rows[0].reserved_cents,
         ).toBe(50);
-        expect((await start(guest)).statusCode).toBeGreaterThanOrEqual(400);
+        const resumed = await start(guest);
+        expect(resumed.statusCode, resumed.body).toBe(200);
+        expect(resumed.json<DemoState>().run).toMatchObject({ id: current.id, status: 'ending' });
+        expect((await pool.query('SELECT count(*)::int n FROM broker_demo_runs')).rows[0].n).toBe(
+          1,
+        );
       } finally {
         ctx.wick.get = originalGet;
       }

@@ -69,7 +69,11 @@ uncertain upstream outcome. Task completion or failure does not end the VM lease
 
 Both variants share visitor/IP admission, concurrency, daily sponsorship, and
 cooldown. The selected variant and optional name (up to 40 letters, numbers, spaces, periods, apostrophes or hyphens) are fixed for a run. The Hello World verifier checks the exact personalized greeting. Returning from the homepage to
-`/demos` resumes that run; it does not purchase another VM or token pack.
+`/demos` resumes that run; it does not purchase another VM or token pack. A repeated
+start from the same browser also resumes its existing run, even if a reload issued
+a new operation key; the original task and name stay fixed. Accepted resume keys
+remain tied to that run after cleanup and cooldown, so delayed retries cannot buy
+another demo.
 
 ## Fixed demo policy
 
@@ -81,7 +85,7 @@ cooldown. The selected variant and optional name (up to 40 letters, numbers, spa
 | Model requests     | At most two accepted attempts per run; at most 1,024 output tokens per request                                                                              |
 | Disk               | One private disk per run; `hello_muse.py` for terminal, generated `hello_world.py` for guided Studio                                                        |
 | Next run           | Both resources unlock 20 minutes after confirmed VM cleanup; pending cleanup remains blocked                                                                |
-| Concurrent runs    | At most two globally, and one per anonymous identity or observed client IP                                                                                  |
+| Concurrent runs    | At most five globally and one per browser; each network may have three runs active or cooling down                                                         |
 | Daily sponsorship  | $5 per America/New_York calendar day; reserve $0.50 per admitted run                                                                                        |
 
 The one-cent display price does not reduce the provider's accepted gross price,
@@ -99,16 +103,25 @@ admission ceiling, not a measurement of upstream invoices. Operators must verify
 the native route/storage costs against the reserve before public enablement and
 retain their upstream account spending controls.
 
-The anonymous cookie is opaque, HttpOnly and SameSite=Strict (Secure in
-production). It authorizes only this demo and its own terminal, never the normal
+An explicit start first registers the browser at `/api/demo/session`, saving its
+cookie before `/api/demo/start` can allocate resources. Reloading, reopening
+`/demos` in another tab of that browser, or changing networks resumes the same run,
+even if the original start response was lost. Starting again returns the existing
+run without changing its task or purchasing another VM. Modern browsers serialize
+first starts across tabs. Cookies must be enabled; a different browser or a cleared
+cookie does not gain access to another visitor's terminal by sharing its IP.
+
+The anonymous cookie lasts 24 hours and is refreshed before starting. It is opaque,
+HttpOnly and SameSite=Strict (Secure in production). It authorizes only this demo and its own terminal, never the normal
 buyer, Studio, provider, admin, funding, or general API-key workflows. Ordinary
 signup remains disabled. Each visitor receives a distinct internal owner, and
 each run has its own VM, disk, token grant and purchase receipts.
 
-The server also enforces the cooldown against a keyed digest of the observed
-client IP, so clearing cookies does not reset that IP's allowance. Visitors on a
-shared network share that restriction. Raw IP addresses are not stored in demo
-records. IP changes cannot bypass the global concurrency or daily sponsorship
+Each browser gets one run at a time, then its own 20-minute cooldown. The server
+also counts runs against a keyed digest of the observed client IP: one network
+may have up to three runs that are active or cooling down, so several judges on
+one venue Wi-Fi can each start a demo, while clearing cookies still cannot reset
+a network's allowance. Raw IP addresses are not stored in demo records. IP changes cannot bypass the global concurrency or daily sponsorship
 ceiling. Repeated clicks, parallel tabs and retries cannot create extra resources
 for an admitted run.
 
@@ -190,7 +203,7 @@ Use `--self-test` without `APP_URL` for parser checks with no network calls.
 ## Reusable demo disks
 
 Production may enable `LIVE_DEMO_REUSE_DISKS=true`. The demo worker pre-creates
-at most two dedicated disks per integration mode. Both demo choices use this same
+at most five dedicated disks per integration mode, matching the global run limit. Both demo choices use this same
 pool. Existing customer disks are never adopted. Each disk is leased exclusively;
 the next visitor cannot claim it until native VM termination and zero native
 attachments are confirmed. Ending a run closes its token grant and VM but retains

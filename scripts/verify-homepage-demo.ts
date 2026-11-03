@@ -436,7 +436,7 @@ async function verify(origin: string, kind: 'terminal' | 'studio' = 'terminal') 
     }
     let value: unknown;
     try {
-      value = await response.json();
+      value = response.status === 204 ? null : await response.json();
     } catch {
       throw new CheckFailure('http_json_invalid');
     }
@@ -551,11 +551,13 @@ async function verify(origin: string, kind: 'terminal' | 'studio' = 'terminal') 
     const before = await state();
     check(before.enabled && before.available && !before.run && !cookie, 'demo_not_available');
     active();
+    const registered = await request('/api/demo/session', {});
+    check(registered.status === 204 && cookie, 'demo_browser_registration_failed');
     startAttempted = true;
     const operationKey = randomUUID();
     const startBody = { operationKey, ...(kind === 'studio' ? { kind, demoName: name } : {}) };
     const start = await request('/api/demo/start', startBody);
-    if (start.status >= 400 && start.status < 500 && !cookie) startAttempted = false;
+    if (start.status >= 400 && start.status < 500) startAttempted = false;
     check(start.status === 200 && cookie, `demo_start_http_${start.status}`);
     admitted = true;
     const admittedRun = parse(

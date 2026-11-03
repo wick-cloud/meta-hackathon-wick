@@ -28,18 +28,38 @@ describe.skipIf(!url)('dedicated demo disk pool', () => {
   afterAll(async () => {
     await f?.close();
   });
-  it('warms only two dedicated disks and preserves identities across concurrent warmers', async () => {
+  it('allocates no pool disks while reuse is disabled', async () => {
+    f.ctx.config.liveDemoReuseDisks = false;
+    try {
+      await warmDemoDisks(f.ctx);
+      expect(
+        (await f.pool.query('SELECT count(*)::int n FROM broker_demo_disk_pool')).rows[0].n,
+      ).toBe(0);
+    } finally {
+      f.ctx.config.liveDemoReuseDisks = true;
+    }
+  });
+  it('warms only five dedicated disks and preserves identities across concurrent warmers', async () => {
     await Promise.all([warmDemoDisks(f.ctx), warmDemoDisks(f.ctx)]);
     const entries = (await f.pool.query('SELECT * FROM broker_demo_disk_pool ORDER BY slot')).rows;
-    expect(entries).toHaveLength(2);
-    expect(new Set(entries.map((e) => e.disk_id)).size).toBe(2);
+    expect(entries.map((e) => e.slot)).toEqual([1, 2, 3, 4, 5]);
+    expect(new Set(entries.map((e) => e.disk_id)).size).toBe(5);
     for (const e of entries) await reconcileDisk(f.ctx, e.disk_id);
     await warmDemoDisks(f.ctx);
-    expect((await f.pool.query('SELECT count(*)::int n FROM broker_disks')).rows[0].n).toBe(2);
+    expect((await f.pool.query('SELECT count(*)::int n FROM broker_disks')).rows[0].n).toBe(5);
+    expect(
+      (await f.pool.query('SELECT disk_id FROM broker_demo_disk_pool ORDER BY slot')).rows,
+    ).toEqual(entries.map(({ disk_id }) => ({ disk_id })));
+    await expect(
+      f.pool.query(
+        "INSERT INTO broker_demo_disk_pool(source_mode,slot,owner_id) VALUES('fixture',6,$1)",
+        [entries[0].owner_id],
+      ),
+    ).rejects.toMatchObject({ code: '23514', constraint: 'broker_demo_disk_pool_slot_check' });
   });
   it('checks out exclusively for both kinds and blocks stale workers and attached disks', async () => {
     const runs = [];
-    for (const kind of ['terminal', 'studio']) {
+    for (const kind of ['terminal', 'studio', 'terminal', 'studio', 'terminal']) {
       const r = await f.start(demoGuest(), kind);
       expect(r.statusCode, r.body).toBe(200);
       const lease = randomUUID();
@@ -50,8 +70,12 @@ describe.skipIf(!url)('dedicated demo disk pool', () => {
       runs.push(await f.row(r.json().run.id));
     }
     expect(await claimDemoDisk(f.ctx, { ...runs[0], lease_token: randomUUID() })).toBe(false);
-    expect(await claimDemoDisk(f.ctx, runs[0])).toBe(true);
-    expect(await claimDemoDisk(f.ctx, runs[1])).toBe(true);
+    for (const run of runs) expect(await claimDemoDisk(f.ctx, run)).toBe(true);
+    expect(
+      new Set(
+        (await f.pool.query('SELECT disk_id FROM broker_demo_runs')).rows.map((r) => r.disk_id),
+      ).size,
+    ).toBe(5);
     const first = await f.row(runs[0].id),
       second = await f.row(runs[1].id);
     expect(first.disk_id).not.toBe(second.disk_id);
@@ -81,7 +105,7 @@ describe.skipIf(!url)('dedicated demo disk pool', () => {
     ]);
     expect(await claimDemoDisk(f.ctx, next)).toBe(true);
     expect((await f.row(next.id)).disk_id).toBe(first.disk_id);
-    expect((await f.pool.query('SELECT count(*)::int n FROM broker_disks')).rows[0].n).toBe(2);
+    expect((await f.pool.query('SELECT count(*)::int n FROM broker_disks')).rows[0].n).toBe(5);
   });
   it('retains the native disk after full VM cleanup and reuses it for the other demo kind', async () => {
     await f.reset();
@@ -110,7 +134,7 @@ describe.skipIf(!url)('dedicated demo disk pool', () => {
     expect(next.disk_id).toBe(run.disk_id);
     expect(next.buyer_id).not.toBe(run.buyer_id);
     expect((await f.read(guest)).run.disk.status).toBe('retained');
-    expect((await f.pool.query('SELECT count(*)::int n FROM broker_disks')).rows[0].n).toBe(2);
+    expect((await f.pool.query('SELECT count(*)::int n FROM broker_disks')).rows[0].n).toBe(5);
   });
   it('clears prior hidden data and symlinks without touching outside files before both presets', () => {
     for (const kind of ['terminal', 'studio'] as const) {
