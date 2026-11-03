@@ -16,8 +16,9 @@ Real enablement also requires `DISK_QUALIFIED_CATALOG_IDS`, a comma-separated
 operator-reviewed allowlist of approved catalog routes. A route must advertise
 `persistent-drives`. Qualify at least two different provider routes before
 advertising cross-provider shared storage. Neither the public schema nor a
-catalog capability is a substitute for this qualification. No live shared-mount
-provider qualification is asserted by this change.
+catalog capability is a substitute for this qualification. The production pilot
+has exercised `e2b:micro:us` and `modal:micro:auto`; see the observed checks and
+limits in [the production verification record](verification/disks-production-2026-11-02.md).
 
 For each provider pair, create one private drive with `attachmentMode: shared`,
 then start overlapping VMs using `workspaceDrive: { driveId, accessMode: mount }`.
@@ -29,6 +30,25 @@ After both terminate and their drive attachments disappear, attach another VM
 and compare file hashes. Test acknowledged writes surviving abrupt VM loss and
 document the upstream filesystem durability/consistency limits. Keep routes out
 of the allowlist until these checks pass.
+
+Opt-in probes live in `tests/disks-native-live-e2e.ts`,
+`tests/hosted-disk-readiness-e2e.ts`, `tests/hosted-disks-lifecycle-e2e.ts` and
+`tests/hosted-studio-disks-e2e.ts`. The real browser mutation probe is
+`tests/hosted-disk-ui-e2e.ts` (`RUN_HOSTED_DISK_UI_E2E=1`). Run them with `npx tsx` and existing runtime
+credentials supplied securely in the environment. The readiness probe creates
+only authentication sessions. The other probes require their explicit run flag:
+`RUN_NATIVE_DISK_E2E=1`, `RUN_HOSTED_DISK_E2E=1` or
+`RUN_HOSTED_STUDIO_DISK_E2E=1`. Hosted probes use `HOSTED_E2E_BASE_URL` and existing
+buyer credentials; no seeding or funding is performed. Paid probes journal exact
+resource identities under ignored `test-results/` before dispatching requests.
+They cap admissions and prices and clean up their own resources. Preserve their
+journals after interruption and use the cleanup-only switches documented at the
+top of each script; do not start a new run to replace an uncertain allocation.
+
+The local unprivileged sandbox regression is
+`RUN_CODING_BOOTSTRAP_E2E=1 npx tsx tests/coding-bootstrap-local-e2e.ts`.
+It uses a disposable Debian Docker container, requires nested namespace support,
+and never uses Broker/provider credentials or paid resources.
 
 The HTTPS `files` attachment mode leaves `/workspace` temporary and cannot satisfy
 a disk-backed rental. Disk selection is frozen at request creation, bound at VM
