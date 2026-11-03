@@ -8,10 +8,14 @@ test.skip(!process.env.RUN_INFERENCE_E2E, 'Opt in against an isolated loopback f
 test.use({ trace: 'off', screenshot: 'off' });
 
 async function signedIn(browser: Browser, baseURL: string, email: string, password: string) {
-  const context = await browser.newContext({ baseURL, viewport: { width: 1440, height: 1050 } });
+  const context = await browser.newContext({
+    baseURL,
+    extraHTTPHeaders: { Origin: baseURL },
+    viewport: { width: 1440, height: 1050 },
+  });
   const page = await context.newPage();
   const result = await page.request.post('/api/auth/sign-in/email', { data: { email, password } });
-  expect(result.ok()).toBe(true);
+  expect(result.status(), 'Fixture sign-in uses the same-origin auth contract').toBe(200);
   return { context, page };
 }
 async function picture(page: Page, name: string) {
