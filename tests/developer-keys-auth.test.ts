@@ -4,6 +4,60 @@ import type { Pool } from 'pg';
 import { describe, expect, it, vi } from 'vitest';
 import { createRequireActor, type createAuth } from '../src/server/auth.js';
 
+it('shares an account write allowance between API keys and browser sessions', async () => {
+  const id = '44444444-4444-4444-8444-444444444444',
+    secret = 's'.repeat(43);
+  const actor = { id: 'shared-buyer', email: 'buyer@test.invalid', name: 'Buyer', role: 'buyer' };
+  const query = vi.fn(async (sql: string) => ({
+    rows: [
+      sql.includes('FROM broker_api_keys')
+        ? {
+            ...actor,
+            key_id: id,
+            secret_digest: createHash('sha256').update(secret).digest('hex'),
+            scopes: ['orders:write'],
+            limits: {},
+            issued_role: 'buyer',
+            active: true,
+            last_used_at: new Date(),
+          }
+        : actor,
+    ],
+  }));
+  const requireActor = createRequireActor(
+    { api: { getSession: async () => ({ user: actor }) } } as unknown as ReturnType<
+      typeof createAuth
+    >,
+    { query } as unknown as Pool,
+  );
+  const request = (key: boolean) =>
+    ({
+      headers: key ? { authorization: `Bearer wbk_${id}.${secret}` } : {},
+      method: 'POST',
+      routeOptions: { url: '/api/requests' },
+    }) as FastifyRequest;
+  for (let i = 0; i < 60; i++) await requireActor(request(true));
+  for (let i = 0; i < 60; i++) await requireActor(request(false));
+  await expect(requireActor(request(false))).rejects.toMatchObject({ statusCode: 429 });
+});
+
+it('limits browser-session writes once per request while revalidating terminal sessions', async () => {
+  const actor = { id: 'session-buyer', email: 'buyer@test.invalid', name: 'Buyer', role: 'buyer' };
+  const getSession = vi.fn(async () => ({ user: actor }));
+  const query = vi.fn(async () => ({ rows: [actor] }));
+  const requireActor = createRequireActor(
+    { api: { getSession } } as unknown as ReturnType<typeof createAuth>,
+    { query } as unknown as Pool,
+  );
+  const request = () =>
+    ({ headers: {}, method: 'POST', routeOptions: { url: '/api/requests' } }) as FastifyRequest;
+  const reused = request();
+  for (let i = 0; i < 200; i++) await requireActor(reused);
+  for (let i = 0; i < 119; i++) await requireActor(request());
+  await expect(requireActor(request())).rejects.toMatchObject({ statusCode: 429 });
+  expect(getSession).toHaveBeenCalledTimes(320);
+});
+
 // A terminal's repeated lease checks revalidate auth without becoming HTTP requests.
 it('does not charge HTTP rate budgets for internal terminal revalidation', async () => {
   let now = Date.now();

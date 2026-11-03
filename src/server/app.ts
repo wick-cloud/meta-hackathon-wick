@@ -11,7 +11,9 @@ import { existsSync } from 'node:fs';
 import { ZodError } from 'zod';
 import type { Config } from './config.js';
 import { MAX_API_BODY_BYTES } from './http-limits.js';
-import { createPool, migrate } from './db.js';
+import { createPool, migrate, verifyMigrations } from './db.js';
+import { createReadinessProbe, workersReady } from './readiness.js';
+import { registerRequestLimits } from './request-limits.js';
 import { createAuth, createRequireActor, registerAuth, registerBrokerKeyAccess } from './auth.js';
 import { HttpError, type AppContext } from './context.js';
 import { createWickAdapter } from './integrations/wick.js';
@@ -50,13 +52,25 @@ export async function buildApp(
       ],
     },
     bodyLimit: MAX_API_BODY_BYTES,
-    trustProxy: config.nodeEnv === 'production',
+    // Header trust is explicit in request-limits/auth; never accept arbitrary proxy chains.
+    trustProxy: false,
+    requestTimeout: 30000,
+    connectionTimeout: 120000,
     logController: new LogController({ disableRequestLogging: true }),
   });
   const pool = createPool(config.databaseUrl);
   pool.on('error', () => app.log.error('Database connection error'));
-  await migrate(pool);
-  const boss = new PgBoss({ connectionString: config.databaseUrl, schema: 'pgboss', max: 5 });
+  if (config.nodeEnv === 'production') await verifyMigrations(pool);
+  else await migrate(pool);
+  const boss = new PgBoss({
+    connectionString: config.databaseUrl,
+    schema: 'pgboss',
+    max: 5,
+    connectionTimeoutMillis: 5000,
+    options: '-c statement_timeout=15000 -c idle_in_transaction_session_timeout=15000',
+    migrate: config.nodeEnv !== 'production',
+    createSchema: config.nodeEnv !== 'production',
+  });
   boss.on('error', () => app.log.error('Durable queue error'));
   await boss.start();
   const auth = createAuth(config, pool);
@@ -72,8 +86,17 @@ export async function buildApp(
     inference: options.wrapInference ? options.wrapInference(inference) : inference,
     requireActor: createRequireActor(auth, pool),
   };
+  registerRequestLimits(app, config);
   registerBrokerKeyAccess(app, ctx.requireActor);
   let closing = false;
+  let expectedWorkers = new Set<string>();
+  const dependenciesReady = createReadinessProbe(
+    () => pool.query('SELECT 1'),
+    () => boss.getDb().executeSql('SELECT 1'),
+  );
+  app.addHook('preClose', async () => {
+    closing = true;
+  });
   app.addHook('onRequest', async (request, reply) => {
     reply
       .header('X-Request-Id', request.id)
@@ -150,8 +173,10 @@ export async function buildApp(
     modes: { wick: config.wickMode, muse: config.museMode },
   }));
   app.get('/ready', async (_request, reply) => {
+    reply.header('Cache-Control', 'no-store');
     if (closing) return reply.code(503).send({ status: 'stopping' });
-    await pool.query('SELECT 1');
+    if (!workersReady(boss.getWipData(), expectedWorkers) || !(await dependenciesReady()))
+      return reply.code(503).send({ status: 'unavailable' });
     return { status: 'ready', queue: 'running' };
   });
   await app.register(websocket, { options: { maxPayload: 33792, perMessageDeflate: false } });
@@ -210,6 +235,7 @@ export async function buildApp(
   await startCodingWorkers(ctx);
   await startStudioWorkers(ctx);
   await startDemoWorkers(ctx);
+  expectedWorkers = new Set(boss.getWipData().map((worker) => worker.name));
   const clientRoot = resolve(options.clientRoot ?? 'dist/client');
   if (existsSync(resolve(clientRoot, 'index.html'))) {
     await app.register(fastifyStatic, { root: clientRoot, prefix: '/', wildcard: false });

@@ -125,7 +125,7 @@ After deployment, check `/health` and `/ready`, then open **Environment mode** i
 
 ## Redeploys and verification
 
-Pre-deploy runs the compiled, advisory-locked migrations; failure blocks deployment. Startup also checks migrations, preserving normal non-Railway operation. `/ready` responds after database/queue startup, while `/health` is liveness. API and browser assets share the same origin and terminal connections use `wss://` on the public domain.
+Pre-deploy runs the compiled, advisory-locked application migrations and initializes/upgrades the pg-boss schema; failure blocks deployment. Production startup validates application migration digests and queue schema compatibility without applying schema upgrades. Non-Railway production deployments must run the same migration command before startup. `/ready` checks both database connections and worker polling, while `/health` is liveness. API and browser assets share the same origin and terminal connections use `wss://` on the public domain. Follow the [operation and recovery runbook](production-operations.md) for checksum baselining, alerting, backups, and rollback limits.
 
 Keep PostgreSQL, the auth secret and adapter modes consistent across deploys. A brief Railway process overlap does not clear active VM leases: another process defers the lifecycle job until its lease expires. Crash recovery can wait for the remaining portion of the 90-second lease and reuses the original create key and expiry. SIGTERM drains jobs with a 25-second application shutdown bound inside Railway's 30-second draining window. Existing terminal connections may reconnect to the same rental after a deploy.
 

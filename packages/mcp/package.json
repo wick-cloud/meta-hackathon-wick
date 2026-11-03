@@ -4,7 +4,7 @@
   "engines": {
     "node": ">=22.12.0"
   },
-  "license": "UNLICENSED",
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/wick-cloud/meta-hackathon-wick.git"

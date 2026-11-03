@@ -7,6 +7,7 @@ import { packKeyRoute, publicRoute } from '../shared/developer.js';
 import type { Config } from './config.js';
 import type { Actor, Role } from '../shared/types.js';
 import { HttpError } from './context.js';
+import { clientAddress } from './request-limits.js';
 export function createAuth(config: Config, pool: Pool) {
   return betterAuth({
     database: pool,
@@ -37,9 +38,8 @@ export function createAuth(config: Config, pool: Pool) {
     advanced: {
       useSecureCookies: config.nodeEnv === 'production',
       defaultCookieAttributes: { sameSite: 'lax', httpOnly: true },
-      // Railway's public HTTP edge overwrites X-Real-IP. Enable only when auth
-      // traffic uses that ingress; private/internal or TCP ingress has no such guarantee.
-      ...(config.authTrustRailwayProxy ? { ipAddress: { ipAddressHeaders: ['x-real-ip'] } } : {}),
+      // registerAuth supplies this header from our explicit ingress trust policy.
+      ipAddress: { ipAddressHeaders: ['x-real-ip'] },
     },
   });
 }
@@ -134,8 +134,6 @@ export function createRequireActor(auth: ReturnType<typeof createAuth>, pool: Po
         throw new HttpError(403, 'This Broker API key does not permit this action.');
       if (!chargedRequests.has(request)) {
         budget(`key:${row.key_id}`, 300, 60, route?.mutation === true);
-        budget(`user:${row.id}`, 600, 120, route?.mutation === true);
-        chargedRequests.add(request);
       }
       actor = {
         id: row.id,
@@ -166,6 +164,10 @@ export function createRequireActor(auth: ReturnType<typeof createAuth>, pool: Po
       );
       actor = rows[0] as Actor;
       if (!actor) throw new HttpError(401, 'This account is no longer active.');
+    }
+    if (!chargedRequests.has(request)) {
+      budget(`user:${actor.id}`, 600, 120, !['GET', 'HEAD', 'OPTIONS'].includes(request.method));
+      chargedRequests.add(request);
     }
     if (roles && !roles.includes(actor.role))
       throw new HttpError(403, 'This action is not available for your role.');
@@ -221,6 +223,8 @@ export async function registerAuth(
     async handler(request, reply) {
       const url = new URL(request.raw.url!, config.appUrl);
       const headers = fromNodeHeaders(request.headers);
+      headers.set('x-real-ip', clientAddress(request, config));
+      headers.delete('x-forwarded-for');
       const response = await auth.handler(
         new Request(url, {
           method: request.method,

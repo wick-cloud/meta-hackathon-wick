@@ -4,6 +4,8 @@ Target: the existing Railway production Broker at
 `https://meta-hackathon-wick-production.up.railway.app`.
 The merged feature was deployed from `78f413b`. No seed or account reset was run.
 This record distinguishes actual native and hosted checks from offline fixtures.
+Deployment and resource identifiers are retained in the private run journals;
+the public record preserves source revisions, tested behavior, and outcomes.
 
 ## Problems found and corrected
 
@@ -19,12 +21,12 @@ This record distinguishes actual native and hosted checks from offline fixtures.
 
 The corrected source is in PR #41. Local focused disk, DB and auction tests
 passed (34 tests), as did typecheck and build. The corrected build was uploaded
-to the existing service as deployment `e99ac71d-58aa-49ed-b18e-b6cc34fc5edc`;
+to the existing service as the initial corrected deployment;
 migrations and readiness succeeded. GitHub source remains `main`.
 
 ## Native shared-mount observations
 
-Run `5d27631d-9f09-4154-aa7c-24e8deabac1b` used one private shared drive and
+The native shared-mount run used one private shared drive and
 three bounded, ten-minute VM admissions: E2B micro, Modal micro, then E2B micro.
 Observed results:
 
@@ -60,7 +62,7 @@ remain outside the disk qualification allowlist.
 
 ## Hosted Broker lifecycle
 
-Run `8d60307b-3bf1-47bb-b6f2-175efe4bb1f3` passed all seven stages against
+The hosted lifecycle run passed all seven stages against
 the corrected production build. It created one disk, replayed creation without
 duplication, waited for readiness, and renamed it. Two actual Broker auctions
 allocated E2B micro and Modal micro VMs on that disk (5 and 8 cents quoted).
@@ -87,7 +89,7 @@ edge-IP rate-limit buckets and rejection of a spoofed XFF bucket reset.
 
 ## Studio sandbox startup
 
-The first real task (`4f86931e-386f-4bce-b739-dfd1764a2d9e`) reached a mounted,
+The first real task reached a mounted,
 ready E2B VM but failed before repository execution. A bounded native diagnostic
 confirmed Debian 12 commands run as UID 1000 with `NoNewPrivs=1`; `sudo` cannot
 install the missing bubblewrap package. That task, its VM and its disk were
@@ -106,13 +108,11 @@ process, hidden host root/workspace/tmp, and denied external network. System
 bubblewrap remained absent. Seven focused command, workspace and guest tests
 and the production build also passed.
 
-The corrected source was deployed as
-`d4cc2f82-c9dc-4db6-86f6-875c15fef109`. Readiness and all eight hosted checks
+The corrected source was deployed in the follow-up release. Readiness and all eight hosted checks
 passed on this build. Subsequent authentication requests produced no client-IP
 resolution warning in the deployment logs.
 
-The actual browser mutation run `7dbbc016-b2d2-49c0-8b89-333f21a0bf31` also
-passed: sign in, create disk, wait for Ready, rename, confirm deletion, observe
+The actual browser mutation run also passed: sign in, create disk, wait for Ready, rename, confirm deletion, observe
 Deleted, and verify absence from the owner's inventory. Screenshots were
 captured after leaving the credential form, with no API interception. Its
 run-owned disk was confirmed deleted.

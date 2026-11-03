@@ -81,7 +81,7 @@ Read [Wick contract evidence](docs/WICK_CONTRACT.md) and [Muse contract evidence
 
 Deploy **`main`** as **one always-on Railway app and PostgreSQL**. The Dockerfile builds Node 24 without runtime credentials and includes production migration/seed/setup commands. [Railway configuration](.railway/railway.ts) declares the branch, database reference, migration hook, readiness check and one replica. Follow the [Railway deployment guide](docs/RAILWAY.md) for service variables, first-time accounts and real Wick setup. Existing account capacities are preserved; new staged accounts default to one configured slot. All accounts share the unchanged 20-VM admission limit.
 
-Migrations run separately before deployment and remain advisory-locked at startup. Active VM leases survive brief process overlap during redeploys; SIGTERM drains jobs. Account seeding and provider setup are explicit operator actions and never run on a normal deployment. Keep the permanent pre-deploy command migration-only.
+Migrations run under an advisory lock before deployment. Production startup validates migration digests and queue schema compatibility; it does not apply schema upgrades. Active VM leases survive brief process overlap during redeploys; SIGTERM drains jobs. Account seeding and provider setup are explicit operator actions and never run on a normal deployment. Keep the permanent pre-deploy command migration-only. See [production operation and recovery](docs/production-operations.md).
 
 ## Verification
 
@@ -97,5 +97,7 @@ Set `TEST_DATABASE_URL` to a dedicated test database for PostgreSQL concurrency/
 For an additional local process-restart check, stop the preview and run `npm run test:recovery`. It requires a built, seeded fixture app and loopback database, manages one app process at a time, and stops it when finished. Restart the preview with `npm start` afterward.
 
 CI explicitly selects fixture adapters and never allocates real compute or uses paid APIs. See [testing notes](docs/testing.md) and [HANDOFF.md](HANDOFF.md) for checks actually run and remaining limits.
+
+Run `npm run security:secrets` after building to scan Git history, current source, release archives, and built assets. Read the [security policy](SECURITY.md), [scanner coverage](docs/security-scanning.md), and [contribution guide](CONTRIBUTING.md) before publishing changes. Current source and newly built packages use [MIT](LICENSE); historical client archives retain their original metadata.
 
 Deferred: SSH, file browser, public port previews, snapshots, pause/resume, unbounded runtime extensions, longer standalone instant rentals, supplier setup code, and external payments.

@@ -28,6 +28,7 @@ import {
 } from './contracts.js';
 import { guestStep } from './guest.js';
 import { studioAuthority, type StudioSource } from './studio-budget.js';
+import { withRepositoryPreparation } from './preparation.js';
 
 export const CODING_QUEUE = 'broker-coding-job';
 const terminal = ['ready', 'failed', 'stopped'];
@@ -126,7 +127,9 @@ export async function createCodingJob(
       409,
       'Choose an owned running VM and an active funded agent with at least 30 seconds remaining.',
     );
-  const verified = await verify(repo.url, input.baseRef);
+  const verified = await withRepositoryPreparation(ctx.pool, actor.id, 'coding', () =>
+    verify(repo.url, input.baseRef),
+  );
   const job = await transaction(ctx.pool, async (db) => {
     await authority(db, actor);
     const grant = await lockedGrant(db, actor, input.grantId, true);
