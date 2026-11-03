@@ -21,7 +21,7 @@ export function Credits() {
       <PageHeader
         eyebrow="BROKER PILOT WALLET"
         title="Broker wallet"
-        description="USD credit for agent and Studio task budgets. Token packs track your AI usage separately."
+        description="Buy AI tokens directly or fund agent and Studio task budgets. Purchased tokens track usage separately."
       >
         <Link href="/agents" className="button secondary">
           Manage agent budgets <ArrowRight size={15} />
@@ -37,7 +37,7 @@ export function Credits() {
       {wallet.data && (
         <div className="stats-grid">
           <StatCard
-            label="Available to reserve"
+            label="Available to spend"
             value={money(wallet.data.availableCents)}
             note="Unreserved Broker pilot credit"
             icon={<Wallet size={18} />}
@@ -45,7 +45,7 @@ export function Credits() {
           <StatCard
             label="Reserved credit"
             value={money(wallet.data.reservedCents)}
-            note="Existing committed budgets"
+            note="Purchase holds and committed budgets"
             icon={<ShieldCheck size={18} />}
           />
           <StatCard
@@ -59,8 +59,8 @@ export function Credits() {
       <div className="market-notice">
         <Wallet size={19} />
         <p>
-          Use wallet credit to fund an agent or Studio task budget. Your agent spends its budget on
-          prepaid token packs; inference then consumes those tokens. This pilot uses
+          Buy prepaid token packs directly with wallet credit, or reserve a budget for an agent or
+          Studio task. Using purchased tokens consumes quota without another charge. This pilot uses
           administrator-funded credit. Studio task budgets cover compute and model purchases;
           standalone VM rentals keep their existing billing.
         </p>
@@ -93,7 +93,13 @@ export function Credits() {
                 {history.data.items.map((e) => (
                   <tr key={e.id}>
                     <td>
-                      <strong>{e.kind.replaceAll('_', ' ')}</strong>
+                      <strong>
+                        {e.kind === 'agent_fund'
+                          ? 'Credit reserved'
+                          : e.kind === 'agent_release'
+                            ? 'Credit released'
+                            : e.kind.replaceAll('_', ' ')}
+                      </strong>
                       <div className="market-meta">{e.description}</div>
                       {e.agreementId && (
                         <Link className="text-link" href={`/orders/${e.agreementId}`}>
@@ -118,7 +124,7 @@ export function Credits() {
         ) : (
           <TableState
             title="No credit entries yet"
-            description="Credit grants, agent funding and task purchases will appear here."
+            description="Credit grants, token purchases, agent funding and task purchases will appear here."
           />
         )}
         <TableFooter count={history.data?.items.length} noun="entries">

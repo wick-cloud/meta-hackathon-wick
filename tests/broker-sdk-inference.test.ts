@@ -263,6 +263,25 @@ describe('Broker prepaid inference clients', () => {
     expect(validatePurchase({ ...purchase, quoteId: 'a'.repeat(4001) })).toBe(false);
     expect(validatePurchase({ ...purchase, inputTokens: 10000001 })).toBe(false);
     expect(validatePurchase({ ...purchase, outputTokens: 1000001 })).toBe(false);
+    const validateQuote = ajv.compile(BROKER_API_SCHEMAS.TokenQuote);
+    const quote = {
+      quoteId: 'signed-token-quote',
+      grantId: null,
+      fundingSource: 'wallet',
+      packExpiresAt: '2026-11-02T12:00:00.000Z',
+      provider: 'modal',
+      modelId: INFERENCE_MODEL_ID,
+      inputTokens: 10000,
+      outputTokens: 1000,
+      priceCents: 123.45,
+      costFloorCents: 100,
+      expiresAt: '2026-11-02T10:01:00.000Z',
+      mode: 'fixture',
+    };
+    expect(validateQuote(quote)).toBe(true);
+    expect(validateQuote({ ...quote, fundingSource: 'other' })).toBe(false);
+    const { fundingSource: _funding, packExpiresAt: _expiry, ...legacyQuote } = quote;
+    expect(validateQuote({ ...legacyQuote, grantId: 'agent-grant-id' })).toBe(true);
     const validateCredit = ajv.compile(BROKER_API_SCHEMAS.CreditEntry);
     expect(
       validateCredit({

@@ -199,7 +199,11 @@ export function TokenInventory({ search }: { search: string }) {
                               />
                               <div className="token-inventory-links">
                                 <Link href={`/token-orders/${pack.orderId}`}>View purchase</Link>
-                                <Link href={`/agents/${pack.grantId}`}>Agent budget</Link>
+                                {pack.fundingSource === 'wallet' ? (
+                                  <span>Wallet purchase</span>
+                                ) : (
+                                  <Link href={`/agents/${pack.grantId}`}>Agent budget</Link>
+                                )}
                               </div>
                             </td>
                             <td className="numeric-cell">
@@ -433,14 +437,16 @@ function ConnectBatch({ id, onClose }: { id: string; onClose: () => void }) {
             {count(pack.availableOutputTokens)} output available · {timeLeft(pack.expiresAt, now)}
           </p>
           <p>
-            Use this key inside your VM to redeem only this batch’s prepaid quota. It cannot buy
-            tokens, add funding or access VM controls.
+            Use this key in your app, script, VM or agent to redeem only this batch’s prepaid quota.
+            It cannot buy tokens, add funding or access VM controls.
           </p>
-          <p className="token-connect-note">
-            To combine remaining quota from compatible batches, use your{' '}
-            <Link href={`/agents/${pack.grantId}`}>agent’s API key</Link>. A batch key stays limited
-            to this batch.
-          </p>
+          {pack.fundingSource !== 'wallet' && (
+            <p className="token-connect-note">
+              To combine remaining quota from compatible batches, use your{' '}
+              <Link href={`/agents/${pack.grantId}`}>agent’s API key</Link>. A batch key stays
+              limited to this batch.
+            </p>
+          )}
           <label className="field">
             <span>OpenAI-compatible base URL</span>
             <input readOnly value={baseUrl} />
@@ -480,7 +486,7 @@ function ConnectBatch({ id, onClose }: { id: string; onClose: () => void }) {
                 allowance.
               </p>
               <details className="token-connect-code" open>
-                <summary>Use inside your VM</summary>
+                <summary>Use in your app or terminal</summary>
                 <pre tabIndex={0}>{setup}</pre>
                 <CopyValue value={setup} label="Copy setup example" />
               </details>
@@ -488,8 +494,8 @@ function ConnectBatch({ id, onClose }: { id: string; onClose: () => void }) {
           ) : (
             <>
               <p className="token-connect-note">
-                Creating a replacement revokes the existing key for this batch. Other batches and
-                your purchasing key keep their access.
+                Creating a replacement revokes the existing key for this batch. Other batches keep
+                their access.
               </p>
               {uncertain && (
                 <p role="status">

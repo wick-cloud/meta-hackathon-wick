@@ -96,15 +96,15 @@ export function PurchaseCards({ compact = false }: { compact?: boolean }) {
         <h2 id={compact ? 'quick-tokens-title' : 'tokens-choice-title'}>Buy AI tokens</h2>
         <p>
           {compact
-            ? 'Auction prepaid input and output tokens for your agent, or review an instant price.'
-            : 'Prepaid model usage for your agent. Buy input and output tokens within a budget you control.'}
+            ? 'Buy prepaid input and output tokens from your wallet. Auction or instant price.'
+            : 'Prepaid model usage for your app, script or agent. Buy directly from your wallet, with no agent setup.'}
         </p>
         {!compact && (
           <>
             <div className="purchase-illustration purchase-token-diagram" aria-hidden="true">
               <span>
                 <Bot size={18} />
-                <small>Your agent</small>
+                <small>Your app</small>
               </span>
               <ArrowRight size={15} />
               <span className="purchase-token-model">
@@ -125,7 +125,7 @@ export function PurchaseCards({ compact = false }: { compact?: boolean }) {
                 <Check size={14} /> 30-second auction or an instant price
               </li>
               <li>
-                <Check size={14} /> A budget-limited API key for your agent
+                <Check size={14} /> A private API key limited to your token batch
               </li>
             </ul>
           </>
@@ -136,7 +136,7 @@ export function PurchaseCards({ compact = false }: { compact?: boolean }) {
           </Link>
           {!compact && (
             <Link href="/agents" className="purchase-secondary-link">
-              <Bot size={14} /> Manage agent budgets
+              <Bot size={14} /> Optional agent budgets
             </Link>
           )}
         </div>
@@ -151,7 +151,7 @@ export function PurchaseChooser() {
       <PageHeader
         eyebrow="NEW PURCHASE"
         title="What do you need?"
-        description="Compute for your code, or model tokens for your agent. Choose where to start."
+        description="Compute for your code, or model tokens for your app. Choose where to start."
       >
         <Link href="/orders" className="button secondary">
           View orders <ArrowRight size={15} />
@@ -165,8 +165,8 @@ export function PurchaseChooser() {
         <div>
           <h2 id="purchase-wallet-title">Wallet credits and token packs do different jobs.</h2>
           <p>
-            Wallet credits fund agent and Studio task budgets. A token pack gives an agent prepaid
-            AI usage. Your orders keep a record of every purchase.
+            Wallet credits buy token packs directly or fund agent and Studio task budgets. Token
+            packs give your apps prepaid AI usage. Your orders keep a record of every purchase.
           </p>
         </div>
         <Link href="/credits">
@@ -177,19 +177,16 @@ export function PurchaseChooser() {
   );
 }
 
-export function TokenPurchaseSteps({ hasAgent }: { hasAgent: boolean }) {
+export function TokenPurchaseSteps() {
   return (
     <ol className="purchase-steps" aria-label="AI token setup">
-      <li
-        className={hasAgent ? 'is-complete' : 'is-current'}
-        aria-current={!hasAgent ? 'step' : undefined}
-      >
-        <span>{hasAgent ? <Check size={13} /> : '1'}</span>
+      <li className="is-current" aria-current="step">
+        <span>1</span>
         <div>
-          Set an agent budget<small>Reserve wallet credit</small>
+          Choose your pack<small>Input and output tokens</small>
         </div>
       </li>
-      <li className={hasAgent ? 'is-current' : ''} aria-current={hasAgent ? 'step' : undefined}>
+      <li>
         <span>2</span>
         <div>
           Buy a token pack<small>Auction or instant price</small>
@@ -198,7 +195,7 @@ export function TokenPurchaseSteps({ hasAgent }: { hasAgent: boolean }) {
       <li>
         <span>3</span>
         <div>
-          Connect your agent<small>Use its private API key</small>
+          Connect your app<small>Create a batch API key</small>
         </div>
       </li>
     </ol>

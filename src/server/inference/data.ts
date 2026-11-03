@@ -119,6 +119,7 @@ export async function event(
 }
 export const grantView = (r: Row): InferenceGrant => ({
   id: r.id,
+  fundingSource: r.funding_source ?? 'agent',
   name: r.name,
   status: r.status,
   mode: r.source_mode,
@@ -136,6 +137,7 @@ export const grantView = (r: Row): InferenceGrant => ({
 });
 export const orderView = (r: Row): TokenOrder => ({
   id: r.id,
+  fundingSource: r.funding_source ?? 'agent',
   grantId: r.grant_id,
   mode: r.mode,
   sourceMode: r.source_mode,
@@ -153,6 +155,7 @@ export const orderView = (r: Row): TokenOrder => ({
 });
 export const packView = (r: Row): TokenPack => ({
   id: r.id,
+  fundingSource: r.funding_source ?? 'agent',
   orderId: r.order_id,
   grantId: r.grant_id,
   provider: r.provider,
@@ -177,7 +180,7 @@ export const packView = (r: Row): TokenPack => ({
   revenueShare: revenueShare(subtractCents(r.price_cents, r.refund_cents)),
 });
 /** Public inventory projection; do not load private accounting snapshots for table rows. */
-export const PACK_VIEW_COLUMNS = `id,order_id,grant_id,provider,source_mode,status,input_tokens,output_tokens,
+export const PACK_VIEW_COLUMNS = `id,order_id,grant_id,funding_source,provider,source_mode,status,input_tokens,output_tokens,
 available_input,available_output,held_input,held_output,consumed_input,consumed_output,retired_input,retired_output,
 price_cents,refund_cents,expires_at,created_at,retirement_reason`;
 // Expiry alone cannot hide quota held for an in-flight or unresolved request.
