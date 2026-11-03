@@ -1365,3 +1365,47 @@ test('provider reviews Muse rates, publishes a selling window, and switches to c
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
+
+for (const width of [375, 768, 1440]) {
+  test(`token review and agent connection remain usable at ${width}px`, async ({ page }, info) => {
+    const f = await fixture(page);
+    await page.setViewportSize({ width, height: 1000 });
+    await page.goto('/token-orders/new');
+    await expect(page.getByRole('heading', { name: 'Buy AI tokens', exact: true })).toBeVisible();
+    await expect(page.getByText('Fixture marketplace · no real model calls')).toBeVisible();
+    const availability = page.locator('details').filter({ hasText: 'Fixture marketplace' });
+    await expect(availability).not.toHaveAttribute('open', '');
+    await expect(
+      page.getByRole('checkbox', { name: /I understand that purchased tokens/ }),
+    ).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Start 30-second auction' })).toBeDisabled();
+    await page.getByLabel('Maximum total price').fill('1.2345');
+    await expect(page.getByText('$1.2345', { exact: true })).toBeVisible();
+    await page.getByLabel('Maximum total price').focus();
+    if (width < 900)
+      expect(
+        await page
+          .getByLabel('Maximum total price')
+          .evaluate((el) => getComputedStyle(el).fontSize),
+      ).toBe('16px');
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(
+      true,
+    );
+    await page.getByLabel('Maximum total price').blur();
+    await page.evaluate(() => scrollTo(0, 0));
+    await page.screenshot({ path: info.outputPath(`token-compose-${width}.png`), fullPage: true });
+    await page.goto(`/agents/${grantId}?tab=connection`);
+    await expect(
+      page.getByRole('heading', { name: 'Connect this agent', exact: true }),
+    ).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Create or replace API key' })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(
+      true,
+    );
+    await page.screenshot({
+      path: info.outputPath(`agent-connection-${width}.png`),
+      fullPage: true,
+    });
+    expect(f.writes).toHaveLength(0);
+  });
+}

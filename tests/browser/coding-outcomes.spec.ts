@@ -173,17 +173,20 @@ test('a passing run before a later edit is explicitly marked as needing fresh ve
   await expect(page.getByText('Passed after last edit', { exact: true })).toHaveCount(0);
 });
 
-test('completed execution remains readable on a phone', async ({ page }, info) => {
-  await page.setViewportSize({ width: 390, height: 844 });
-  await fixture(page, completedCodingDetail);
-  await page.getByRole('tab', { name: 'Test output', exact: true }).click();
-  await expect(page.getByText('Ran 3 tests\nOK', { exact: true })).toBeVisible();
-  expect(
-    await page.evaluate(() => document.documentElement.scrollWidth - innerWidth),
-  ).toBeLessThanOrEqual(1);
-  if (process.env.CODING_UI_REVIEW === '1')
-    await page.screenshot({ path: info.outputPath('coding-phone.png'), fullPage: true });
-});
+for (const width of [375, 768, 1440])
+  test(`completed execution remains readable at ${width}px`, async ({ page }, info) => {
+    await page.setViewportSize({ width, height: width === 375 ? 812 : 1000 });
+    await fixture(page, completedCodingDetail);
+    await page.getByRole('tab', { name: 'Test output', exact: true }).click();
+    await expect(page.getByText('Ran 3 tests\nOK', { exact: true })).toBeVisible();
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth - innerWidth),
+    ).toBeLessThanOrEqual(1);
+    await page.screenshot({
+      path: info.outputPath(`coding-execution-${width}.png`),
+      fullPage: true,
+    });
+  });
 
 test('an inspection error offers a read-only refresh and never starts a replacement job', async ({
   page,

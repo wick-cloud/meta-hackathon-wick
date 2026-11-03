@@ -19,6 +19,7 @@ import {
   useNow,
   useResource,
 } from './components';
+import { FormDisclosure, FormLayout, FormSection } from './form-layout';
 import './buying.css';
 
 const modes = {
@@ -397,145 +398,154 @@ export function AgentBuying({
         </div>
       )}
       {tab === 'policy' && active && draft && (
-        <div className="buying-grid">
-          <form
-            className="card buying-form"
-            onSubmit={(e: FormEvent) => {
-              e.preventDefault();
-              setReview(true);
-            }}
+        <div className="form-page buying-policy-page">
+          <FormLayout
+            aside={
+              <div className="buying-stack">
+                {currentPolicy}
+                <FormDisclosure title="Enforced before every purchase">
+                  <ul className="buying-rules">
+                    <li>Grant budget, per-purchase limit, and fixed expiry.</li>
+                    <li>Qualified route and usable input/output allowance.</li>
+                    <li>One pending purchase; no replacement of uncertain inference.</li>
+                    <li>No automatic funding or VM permissions.</li>
+                  </ul>
+                  <p className="buying-note">
+                    Your agent keeps running in its own environment. Broker manages purchasing and
+                    prepaid inference.
+                  </p>
+                </FormDisclosure>
+              </div>
+            }
           >
-            <div className="buying-section-heading">
-              <h2>Purchase controls</h2>
-              <span className="buying-badge">
-                {dirty ? 'Unsaved changes' : policy ? 'Saved' : 'Not configured'}
-              </span>
-            </div>
-            {stale && (
-              <div className="buying-warning">
-                The policy changed while you were editing.{' '}
-                <button
-                  type="button"
-                  className="text-button"
-                  onClick={() => {
-                    setDraft(null);
-                    setReview(false);
-                  }}
-                >
-                  Reload policy
-                </button>
-              </div>
-            )}
-            <fieldset disabled={busy || !active || stale}>
-              <legend>How should purchases happen?</legend>
-              <div className="buying-choices">
-                {(['suggest', 'review', 'automatic'] as const).map((mode) => (
-                  <label className="buying-choice" key={mode}>
-                    <input
-                      type="radio"
-                      name="buying-mode"
-                      checked={draft.mode === mode}
-                      onChange={() => change('mode', mode)}
-                    />
-                    <span>
-                      {modes[mode]}
-                      <small>
-                        {mode === 'automatic'
-                          ? 'The worker may purchase within these owner-approved limits.'
-                          : mode === 'review'
-                            ? 'Review the exact allowance and price ceiling before committing.'
-                            : 'Muse recommends; you choose when to purchase.'}
-                      </small>
-                    </span>
-                  </label>
-                ))}
-              </div>
-              <div className="buying-form-grid">
-                <MoneyInput
-                  id="buying-ceiling"
-                  label="Maximum per purchase"
-                  value={draft.maxPurchaseCents}
-                  min={0.01}
-                  onChange={(v) => change('maxPurchaseCents', v)}
-                />
-                <label className="field">
-                  <span>Output limit per request</span>
-                  <input
-                    type="number"
-                    min={1}
-                    max={8192}
-                    required
-                    value={draft.outputPerCall}
-                    onChange={(e) => change('outputPerCall', Number(e.target.value))}
-                  />
-                </label>
-                <label className="field">
-                  <span>Buy up to this many calls</span>
-                  <input
-                    type="number"
-                    min={1}
-                    max={8}
-                    required
-                    value={draft.targetCalls}
-                    onChange={(e) => change('targetCalls', Number(e.target.value))}
-                  />
-                </label>
-                <label className="field">
-                  <span>Refill at calls remaining</span>
-                  <input
-                    type="number"
-                    min={0}
-                    max={8}
-                    required
-                    value={draft.refillAtCalls}
-                    onChange={(e) => change('refillAtCalls', Number(e.target.value))}
-                  />
-                </label>
-              </div>
-              <label className="buying-check">
-                <input
-                  type="checkbox"
-                  checked={draft.allowInstant}
-                  disabled={!grant.allowInstant}
-                  onChange={(e) => change('allowInstant', e.target.checked)}
-                />
-                <span>
-                  Allow an instant purchase when no usable call remains
-                  <small>Requires original grant permission and the same spending ceiling.</small>
+            <form
+              className="form-panel buying-form"
+              onSubmit={(e: FormEvent) => {
+                e.preventDefault();
+                setReview(true);
+              }}
+            >
+              <div className="buying-section-heading">
+                <h2>Purchase controls</h2>
+                <span className="buying-badge">
+                  {dirty ? 'Unsaved changes' : policy ? 'Saved' : 'Not configured'}
                 </span>
-              </label>
-              <label className="buying-check">
-                <input
-                  type="checkbox"
-                  checked={draft.paused}
-                  onChange={(e) => change('paused', e.target.checked)}
-                />{' '}
-                Pause new recommendations and automatic purchases
-              </label>
-              <div className="buying-form-footer">
-                <small>Only the owner can change these controls.</small>
-                <button className="button primary">
-                  Review changes <ArrowRight size={15} />
-                </button>
               </div>
-            </fieldset>
-          </form>
-          <aside className="buying-stack">
-            {currentPolicy}
-            <section className="card">
-              <h2>Enforced before every purchase</h2>
-              <ul className="buying-rules">
-                <li>Grant budget, per-purchase limit, and fixed expiry.</li>
-                <li>Qualified route and usable input/output allowance.</li>
-                <li>One pending purchase; no replacement of uncertain inference.</li>
-                <li>No automatic funding or VM permissions.</li>
-              </ul>
-              <p className="buying-note">
-                Your agent keeps running in its own environment. Broker manages purchasing and
-                prepaid inference.
-              </p>
-            </section>
-          </aside>
+              {stale && (
+                <div className="buying-warning">
+                  The policy changed while you were editing.{' '}
+                  <button
+                    type="button"
+                    className="text-button"
+                    onClick={() => {
+                      setDraft(null);
+                      setReview(false);
+                    }}
+                  >
+                    Reload policy
+                  </button>
+                </div>
+              )}
+              <fieldset disabled={busy || !active || stale}>
+                <legend>How should purchases happen?</legend>
+                <div className="buying-choices">
+                  {(['suggest', 'review', 'automatic'] as const).map((mode) => (
+                    <label className="buying-choice" key={mode}>
+                      <input
+                        type="radio"
+                        name="buying-mode"
+                        checked={draft.mode === mode}
+                        onChange={() => change('mode', mode)}
+                      />
+                      <span>
+                        {modes[mode]}
+                        <small>
+                          {mode === 'automatic'
+                            ? 'The worker may purchase within these owner-approved limits.'
+                            : mode === 'review'
+                              ? 'Review the exact allowance and price ceiling before committing.'
+                              : 'Muse recommends; you choose when to purchase.'}
+                        </small>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+                <FormSection
+                  title="Spending and usage limits"
+                  description="Keep each purchase within the funded agent budget."
+                >
+                  <div className="buying-form-grid">
+                    <MoneyInput
+                      id="buying-ceiling"
+                      label="Maximum per purchase"
+                      value={draft.maxPurchaseCents}
+                      min={0.01}
+                      onChange={(v) => change('maxPurchaseCents', v)}
+                    />
+                    <label className="field">
+                      <span>Output limit per request</span>
+                      <input
+                        type="number"
+                        min={1}
+                        max={8192}
+                        required
+                        value={draft.outputPerCall}
+                        onChange={(e) => change('outputPerCall', Number(e.target.value))}
+                      />
+                    </label>
+                    <label className="field">
+                      <span>Buy up to this many calls</span>
+                      <input
+                        type="number"
+                        min={1}
+                        max={8}
+                        required
+                        value={draft.targetCalls}
+                        onChange={(e) => change('targetCalls', Number(e.target.value))}
+                      />
+                    </label>
+                    <label className="field">
+                      <span>Refill at calls remaining</span>
+                      <input
+                        type="number"
+                        min={0}
+                        max={8}
+                        required
+                        value={draft.refillAtCalls}
+                        onChange={(e) => change('refillAtCalls', Number(e.target.value))}
+                      />
+                    </label>
+                  </div>
+                </FormSection>
+                <label className="buying-check">
+                  <input
+                    type="checkbox"
+                    checked={draft.allowInstant}
+                    disabled={!grant.allowInstant}
+                    onChange={(e) => change('allowInstant', e.target.checked)}
+                  />
+                  <span>
+                    Allow an instant purchase when no usable call remains
+                    <small>Requires original grant permission and the same spending ceiling.</small>
+                  </span>
+                </label>
+                <label className="buying-check">
+                  <input
+                    type="checkbox"
+                    checked={draft.paused}
+                    onChange={(e) => change('paused', e.target.checked)}
+                  />{' '}
+                  Pause new recommendations and automatic purchases
+                </label>
+                <div className="buying-form-footer">
+                  <small>Only the owner can change these controls.</small>
+                  <button className="button primary">
+                    Review changes <ArrowRight size={15} />
+                  </button>
+                </div>
+              </fieldset>
+            </form>
+          </FormLayout>
         </div>
       )}
       {tab === 'activity' && data && <DecisionHistory decisions={data.decisions} />}

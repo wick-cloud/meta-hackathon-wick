@@ -184,21 +184,16 @@ test('Orders preserves server order across identical source IDs and URL filters;
     'Auction second',
   ]);
   await expect(page.getByText('Legacy record', { exact: true })).toBeVisible();
-  // Purchase entry points remain available alongside a populated, filtered history.
-  const purchases = page.getByLabel('Choose what to buy');
-  await expect(purchases.getByRole('link', { name: 'Configure VM', exact: true })).toHaveAttribute(
-    'href',
-    '/new/vm',
-  );
-  await expect(
-    purchases.getByRole('link', { name: 'Buy a token pack', exact: true }),
-  ).toHaveAttribute('href', '/token-orders/new');
-  await expect(purchases).toContainText('30-second auction');
+  // The header keeps purchase entry available alongside a populated, filtered history.
+  const purchase = page
+    .locator('.orders-workspace > .page-heading')
+    .getByRole('link', { name: 'New purchase', exact: true });
+  await expect(purchase).toHaveAttribute('href', '/new');
   await page.getByLabel('Order type', { exact: true }).selectOption('auction');
   await expect(page).toHaveURL(/kind=auction/);
   await page.getByRole('button', { name: 'Older orders' }).click();
   await expect(page).toHaveURL(/cursor=opaque-cursor/);
-  await expect(purchases).toBeVisible();
+  await expect(purchase).toBeVisible();
   await page.goBack();
   await expect(page).not.toHaveURL(/cursor=/);
   await page.getByRole('button', { name: 'Clear filters', exact: true }).click();

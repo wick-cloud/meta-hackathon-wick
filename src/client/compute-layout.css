@@ -1,0 +1,148 @@
+/* Operational compute views share the form shell and surface tokens. */
+.compute-page .compute-loading {
+  padding: 24px;
+}
+.compute-page .page-heading > div:first-child {
+  min-width: 0;
+}
+.compute-page .page-heading h1,
+.compute-page .page-heading p,
+.compute-page .request-description {
+  overflow-wrap: anywhere;
+}
+.compute-auction-layout > div,
+.compute-auction-layout > aside {
+  min-width: 0;
+}
+.compute-page .auction-card {
+  padding: 24px;
+}
+.compute-page .auction-vm {
+  border-radius: 10px;
+}
+.compute-page .compute-request-summary .form-notice {
+  margin: 18px 0;
+}
+.compute-page .request-description {
+  margin: 0 0 20px;
+}
+.compute-page .compute-strip {
+  padding: 18px 24px;
+  margin-bottom: 12px;
+}
+.compute-strip .form-summary-rows {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px 24px;
+  margin: 0;
+}
+.compute-strip .form-summary-rows > div {
+  display: block;
+  min-width: 0;
+}
+.compute-strip .form-summary-rows dd {
+  margin: 6px 0 0;
+  text-align: left;
+  font-size: 16px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.compute-strip .field-hint {
+  margin: 14px 0 0;
+}
+.compute-billing-note {
+  display: block;
+}
+.compute-page .compute-warning {
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  padding: 14px 18px;
+  color: var(--ink);
+  background: var(--accent-soft);
+}
+.compute-page .compute-billing-notice {
+  margin-bottom: 20px;
+}
+.compute-page .compute-billing-notice strong {
+  color: var(--ink);
+}
+.compute-page .vm-detail-bottom {
+  display: block;
+  margin-top: 20px;
+}
+.compute-page .vm-detail-bottom .form-disclosure {
+  margin-top: 12px;
+}
+.compute-page .rental-guide .form-disclosure-content > div {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  margin: 14px 0;
+}
+.compute-page .rental-guide .form-disclosure-content p {
+  margin: 0;
+}
+.compute-page .table-panel + .form-disclosure {
+  margin-top: 20px;
+}
+@media (max-width: 900px) {
+  .compute-page .auction-card {
+    padding: 20px;
+  }
+  .compute-page .compute-strip {
+    padding: 18px 20px;
+  }
+}
+@media (max-width: 560px) {
+  .compute-strip .form-summary-rows {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 14px;
+  }
+  .compute-strip .form-summary-rows > div {
+    display: flex;
+    align-items: baseline;
+    gap: 16px;
+  }
+  .compute-strip .form-summary-rows dd {
+    margin: 0 0 0 auto;
+    max-width: 60%;
+    text-align: right;
+    font-size: 14px;
+  }
+  .compute-page .auction-vm {
+    flex-wrap: wrap;
+  }
+  .compute-page .auction-vm > .button {
+    width: 100%;
+    margin: 0;
+  }
+}
+.compute-page > .form-notice {
+  margin: 12px 0 20px;
+}
+.compute-page .compute-strip .form-summary-rows > div {
+  display: block;
+}
+.compute-page .compute-strip .form-summary-rows dd {
+  text-align: left;
+  margin: 6px 0 0;
+}
+@media (max-width: 560px) {
+  .form-page.compute-page > .page-heading {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 16px;
+  }
+  .form-page.compute-page > .page-heading .page-heading-actions {
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+  .compute-page .compute-strip .form-summary-rows > div {
+    display: flex;
+  }
+  .compute-page .compute-strip .form-summary-rows dd {
+    text-align: right;
+    margin: 0 0 0 auto;
+  }
+}

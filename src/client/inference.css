@@ -371,7 +371,7 @@
   color: var(--accent);
 }
 .inference-fixed-model strong {
-  color: var(--text);
+  color: var(--ink);
   font-size: 13px;
 }
 .inference-fixed-model code {
@@ -522,5 +522,132 @@
   }
   .inference-card-footer {
     flex-wrap: wrap;
+  }
+}
+
+/* Token purchases share the resource form foundation; operational workspaces stay wide. */
+.inference-workspace > * {
+  margin-bottom: var(--space-section);
+}
+.inference-workspace h2 {
+  font-size: var(--font-section-title);
+}
+.inference-workspace .form-section-heading h2,
+.inference-workspace .form-summary-heading h2 {
+  margin-bottom: 0;
+}
+.inference-workspace .form-section-heading p,
+.inference-workspace .form-summary-heading p {
+  font-size: 12px;
+  line-height: 1.6;
+}
+.token-pack-quantity {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin: 20px 0;
+  font-size: 24px;
+  line-height: 1.4;
+  font-weight: 600;
+  letter-spacing: -0.6px;
+  font-variant-numeric: tabular-nums;
+}
+.token-pack-quantity > span {
+  color: var(--muted);
+  font-size: 18px;
+  font-weight: 400;
+}
+.token-purchase-summary .inference-definitions {
+  margin-bottom: 20px;
+}
+.token-purchase-summary .inference-checkbox {
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--control-radius);
+  background: var(--bg);
+}
+.token-purchase-summary .form-actions > .button {
+  width: 100%;
+  white-space: normal;
+}
+.token-compose-page .inference-fixed-model {
+  margin-top: 0;
+}
+.token-compose-page .inference-buy-modes {
+  margin-top: 0;
+}
+.inference-availability-details {
+  border: 1px solid var(--line);
+  border-radius: var(--panel-radius);
+  background: var(--card);
+}
+.inference-availability-details > summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 16px 20px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+}
+.inference-availability-details > summary > span:not(.form-disclosure-icon) {
+  flex: 1;
+}
+.inference-availability-details .form-disclosure-content {
+  padding: 0 20px 20px;
+  color: var(--muted);
+}
+.inference-availability-details .form-disclosure-content > p {
+  margin: 0;
+}
+.provider-inference-page > form.form-panel {
+  padding: var(--panel-padding);
+}
+.provider-inference-page > form.form-panel > h2 {
+  margin-bottom: 8px;
+}
+.provider-inference-page > form.form-panel > p {
+  margin-bottom: 20px;
+}
+.inference-pack,
+.inference-readiness,
+.inference-intro,
+.inference-endpoint,
+.inference-code-details pre {
+  border-radius: var(--panel-radius);
+}
+.inference-detail-grid {
+  grid-template-columns: minmax(0, 1fr) var(--summary-width);
+  gap: var(--space-section);
+}
+@media (max-width: 1200px) {
+  .inference-detail-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+@media (max-width: 900px) {
+  .token-compose-page > .page-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .token-compose-page > .page-heading .page-heading-actions {
+    width: 100%;
+  }
+  .inference-workspace input[type='checkbox'],
+  .inference-workspace input[type='radio'] {
+    width: 18px;
+    height: 18px;
+    min-height: 18px;
+  }
+}
+@media (max-width: 560px) {
+  .provider-inference-page {
+    --panel-padding: 18px;
+  }
+  .inference-dialog-actions {
+    flex-direction: column-reverse;
+  }
+  .inference-dialog-actions > .button {
+    width: 100%;
   }
 }

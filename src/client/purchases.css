@@ -1,12 +1,12 @@
 .purchase-workspace {
-  max-width: 1160px;
+  max-width: var(--page-width-form, 1100px);
   margin: 0 auto;
 }
 .purchase-workspace .page-heading {
-  margin-bottom: 28px;
+  margin-bottom: var(--space-section, 24px);
 }
 .purchase-workspace .page-heading h1 {
-  font-size: 30px;
+  font-size: var(--font-page-title, 28px);
   letter-spacing: -1px;
 }
 .purchase-choices {
@@ -20,8 +20,8 @@
   min-width: 0;
   background: var(--card);
   border: 1px solid var(--line);
-  border-radius: 12px;
-  padding: 26px;
+  border-radius: var(--panel-radius, 10px);
+  padding: var(--panel-padding, 24px);
   transition: border-color 150ms ease;
 }
 .purchase-choice:hover {
@@ -170,7 +170,7 @@
 }
 .purchase-choice-actions .button {
   justify-content: space-between;
-  min-height: 42px;
+  min-height: var(--control-height, 42px);
   padding: 10px 13px;
 }
 .purchase-secondary-link {
@@ -178,7 +178,7 @@
   align-items: center;
   justify-content: center;
   gap: 6px;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--muted);
 }
 .purchase-secondary-link:hover {
@@ -207,13 +207,13 @@
   margin-bottom: 4px;
 }
 .purchase-wallet-guide p {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--muted);
   max-width: 650px;
   line-height: 1.7;
 }
 .purchase-wallet-guide > a {
-  font-size: 11px;
+  font-size: 12px;
   display: inline-flex;
   align-items: center;
   gap: 7px;
@@ -269,7 +269,7 @@
 }
 .is-compact .purchase-choice-actions .button {
   min-height: 34px;
-  font-size: 11px;
+  font-size: 12px;
   gap: 12px;
   background: var(--surface-hover);
   color: var(--ink);
@@ -291,14 +291,14 @@
 }
 .purchase-history-heading p {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
 }
 .purchase-context {
   display: flex;
   align-items: center;
   gap: 13px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
   margin: 0 0 24px;
 }
 .purchase-context a,
@@ -491,5 +491,25 @@
 @media (min-width: 701px) and (max-width: 1050px) {
   .purchase-choices:not(.is-compact) {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 560px) {
+  .purchase-choice {
+    padding: 20px;
+  }
+  .purchase-choice-actions .button {
+    min-height: 44px;
+  }
+  .purchase-choice-badge {
+    display: none;
+  }
+  .purchase-wallet-guide h2 {
+    font-size: 13px;
+    line-height: 1.5;
+  }
+  .purchase-wallet-guide > a,
+  .purchase-secondary-link {
+    min-height: 44px;
   }
 }

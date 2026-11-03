@@ -1,3 +1,5 @@
+@import './theme.css';
+@import './form-layout.css';
 @import './auction-review.css';
 
 :root {
@@ -150,7 +152,7 @@ svg {
   gap: 7px;
   min-height: 36px;
   padding: 7px 13px;
-  border-radius: 6px;
+  border-radius: var(--control-radius);
   border: 1px solid transparent;
   font-weight: 550;
   font-size: 13px;
@@ -294,8 +296,8 @@ svg {
 .card {
   background: var(--card);
   border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 20px;
+  border-radius: var(--panel-radius);
+  padding: var(--panel-padding);
   box-shadow: none;
 }
 .card > h2 {
@@ -400,13 +402,13 @@ svg {
 .field select,
 .field textarea {
   width: 100%;
-  min-height: 36px;
+  min-height: var(--control-height);
   border: 1px solid var(--line);
-  border-radius: 6px;
+  border-radius: var(--control-radius);
   background: var(--bg);
   padding: 7px 11px;
   color: var(--ink);
-  font-size: 13px;
+  font-size: var(--font-input);
   line-height: 1.5;
   transition:
     box-shadow 0.15s,
@@ -4529,4 +4531,58 @@ td .quiet-badge {
 }
 .provider-revenue-split .field-hint {
   margin-bottom: 0;
+}
+
+/* Shared field feedback and touch defaults across form, dialog and workspace variants. */
+.field .field-error {
+  color: var(--danger);
+}
+@media (max-width: 900px) {
+  .app-shell .field input,
+  .app-shell .field select,
+  .app-shell .field textarea,
+  .market-dialog .field input,
+  .market-dialog .field select,
+  .market-dialog .field textarea {
+    min-height: 44px;
+    font-size: 16px;
+  }
+  .app-shell .button,
+  .market-dialog .button {
+    min-height: 44px;
+  }
+  .app-shell .icon-button,
+  .market-dialog .icon-button {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}
+
+/* Detail workspaces use the same surfaces with room for operational records. */
+.detail-page {
+  width: 100%;
+  min-width: 0;
+  max-width: var(--page-width-workspace);
+  margin: 0 auto;
+}
+.detail-page > .page-heading > div:first-child {
+  min-width: 0;
+}
+.detail-page > .page-heading h1 {
+  overflow-wrap: anywhere;
+}
+.detail-page > .page-heading .button {
+  min-height: var(--control-height);
+}
+@media (max-width: 900px) {
+  .detail-page > .page-heading {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .detail-page > .page-heading .page-heading-actions {
+    width: 100%;
+  }
+  .detail-page > .page-heading .button {
+    min-height: 44px;
+  }
 }

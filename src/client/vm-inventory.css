@@ -1,40 +1,6 @@
 .vm-workspace {
   min-width: 0;
 }
-.vm-page-header {
-  display: flex;
-  justify-content: space-between;
-  gap: 20px;
-  align-items: center;
-  margin: 5px 0 24px;
-}
-.vm-title-line {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-.vm-title-line h1 {
-  font-size: 28px;
-  letter-spacing: -0.8px;
-  font-weight: 600;
-}
-.vm-page-header p {
-  font-size: 13px;
-  color: var(--muted);
-  margin-top: 7px;
-}
-.vm-page-count {
-  border: 1px solid var(--line);
-  border-radius: 5px;
-  color: var(--muted);
-  font-size: 11px;
-  padding: 3px 7px;
-}
-.vm-header-actions {
-  display: flex;
-  gap: 9px;
-  align-items: center;
-}
 .vm-search {
   display: flex;
   align-items: center;
@@ -55,7 +21,7 @@
   border: 0;
   background: transparent;
   outline: none;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--ink);
 }
 .vm-search button {
@@ -67,10 +33,11 @@
   cursor: pointer;
 }
 .vm-search .vm-search-submit {
-  padding: 4px 7px;
+  min-height: 32px;
+  padding: 6px 9px;
   border-radius: 4px;
   background: var(--card);
-  font-size: 10.5px;
+  font-size: 12px;
   color: var(--soft);
 }
 .vm-search:focus-within {
@@ -88,7 +55,7 @@
   background: var(--card);
   color: var(--soft);
   padding: 8px 24px 8px 9px;
-  font-size: 11px;
+  font-size: 13px;
   max-width: 180px;
 }
 .vm-table {
@@ -133,12 +100,12 @@
   align-items: center;
   flex-wrap: wrap;
   color: var(--muted);
-  font-size: 10px;
+  font-size: 11px;
   margin-top: 5px;
   line-height: 1.4;
 }
 .vm-id-line code {
-  font-size: 10px;
+  font-size: 11px;
 }
 .vm-id-line time {
   white-space: nowrap;
@@ -147,7 +114,7 @@
   border: 1px solid var(--line);
   padding: 0 4px;
   border-radius: 3px;
-  font-size: 9px;
+  font-size: 10px;
 }
 .vm-copy-id {
   display: grid;
@@ -155,7 +122,10 @@
   border: 0;
   background: none;
   color: var(--muted);
-  padding: 0;
+  min-width: 28px;
+  min-height: 28px;
+  border-radius: 4px;
+  padding: 4px;
   cursor: pointer;
 }
 .vm-copy-id:hover {
@@ -172,7 +142,7 @@
   display: block;
   margin-top: 4px;
   color: var(--muted);
-  font-size: 10.5px;
+  font-size: 12px;
   overflow-wrap: anywhere;
 }
 .vm-resource-value,
@@ -215,9 +185,9 @@
 }
 .vm-terminate {
   color: var(--muted);
-  width: 25px;
-  height: 27px;
-  min-width: 25px;
+  width: 36px;
+  height: 36px;
+  min-width: 36px;
 }
 .vm-terminate:hover {
   color: var(--danger);
@@ -235,25 +205,7 @@
   gap: 10px;
   margin-top: 20px;
 }
-@media (hover: hover) {
-  .vm-terminate {
-    opacity: 0;
-  }
-  .vm-table tr:is(:hover, :focus-within) .vm-terminate {
-    opacity: 1;
-  }
-}
 @media (max-width: 700px) {
-  .vm-page-header {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-  .vm-header-actions {
-    width: 100%;
-  }
-  .vm-header-actions > a {
-    flex: 1;
-  }
   .vm-search {
     max-width: none;
     width: 100%;
@@ -267,5 +219,21 @@
     flex: 1 1 calc(50% - 4px);
     min-width: 0;
     max-width: none;
+  }
+}
+
+@media (max-width: 600px) {
+  .vm-table-filters select {
+    font-size: 16px;
+  }
+  .vm-copy-id,
+  .vm-terminate,
+  .vm-search button {
+    min-width: 44px;
+    min-height: 44px;
+  }
+  .vm-search .vm-search-submit {
+    min-width: auto;
+    font-size: 12px;
   }
 }

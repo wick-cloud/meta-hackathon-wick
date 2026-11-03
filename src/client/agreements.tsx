@@ -1,8 +1,7 @@
-import { ArrowLeft, ArrowRight, Archive, Layers3, Server, Wallet } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Archive, Layers3, Wallet } from 'lucide-react';
 import type { AgreementDetail as AgreementDetailDTO } from '../shared/agreements';
 import { dateTime, money } from './api';
 import {
-  EmptyState,
   ErrorBox,
   Link,
   PageHeader,
@@ -12,6 +11,7 @@ import {
   useResource,
 } from './components';
 import { TableViewport, TablePanel, TableTabs, TableFooter, TableState } from './table';
+import { FormActions, FormPage, FormPanel, FormSection } from './form-layout';
 import './market.css';
 
 export const hourly = (cents: number) => `${money(cents)} / VM-hour`;
@@ -27,27 +27,27 @@ export const zonedTime = (date: string, timeZone: string) =>
 
 export function RetiredScheduledVMs({ provider = false }: { provider?: boolean }) {
   return (
-    <>
-      <PageHeader
-        eyebrow="VIRTUAL MACHINES"
-        title="Scheduled VMs have been removed"
-        description="VM rentals now use the instant 30-second auction. Existing billing records remain available."
-      />
-      <section className="card market-panel">
-        <EmptyState
-          icon={<Server size={26} />}
+    <FormPage
+      eyebrow="VIRTUAL MACHINES"
+      title="Scheduled VMs have been removed"
+      description="VM rentals now use the instant 30-second auction. Existing billing records remain available."
+    >
+      <FormPanel>
+        <FormSection
           title="Choose an instant VM rental"
           description="Set the resources and rental time, then let available providers compete."
         >
-          <Link href={provider ? '/provider/offerings' : '/new/vm'} className="button primary">
-            {provider ? 'Manage VM offers' : 'Launch a VM'} <ArrowRight size={15} />
-          </Link>
-          <Link href={provider ? '/provider/earnings' : '/orders'} className="button secondary">
-            {provider ? 'View earnings' : 'View orders'}
-          </Link>
-        </EmptyState>
-      </section>
-    </>
+          <FormActions>
+            <Link href={provider ? '/provider/offerings' : '/new/vm'} className="button primary">
+              {provider ? 'Manage VM offers' : 'Launch a VM'} <ArrowRight size={15} />
+            </Link>
+            <Link href={provider ? '/provider/earnings' : '/orders'} className="button secondary">
+              {provider ? 'View earnings' : 'View orders'}
+            </Link>
+          </FormActions>
+        </FormSection>
+      </FormPanel>
+    </FormPage>
   );
 }
 
@@ -61,7 +61,7 @@ export function AgreementDetail({ id }: { id: string }) {
     );
   const { agreement: a, bookings, activations } = detail.data;
   return (
-    <>
+    <div className="inventory-page agreement-history">
       <Link href="/orders" className="back-link">
         <ArrowLeft size={15} /> Back to Orders
       </Link>
@@ -206,6 +206,6 @@ export function AgreementDetail({ id }: { id: string }) {
           <TableFooter count={activations.length} noun="environments" />
         </TablePanel>
       )}
-    </>
+    </div>
   );
 }

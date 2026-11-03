@@ -3,6 +3,7 @@ import { Sparkles } from 'lucide-react';
 import type { TokenOffering, TokenOfferingInput } from '../shared/inference';
 import { dateTime, money, post } from './api';
 import { DetailRow, ErrorBox, Spinner } from './components';
+import { FormPanel, FormSection } from './form-layout';
 import './buying.css';
 
 interface SupplyProposal {
@@ -54,97 +55,105 @@ export function ProviderSupply({
             committed =
               kind === 'input' ? offering.outstandingInputTokens : offering.outstandingOutputTokens;
           return (
-            <section className="card" key={kind}>
-              <div className="buying-section-heading">
-                <h2>{kind === 'input' ? 'Input' : 'Output'} token allocation</h2>
-                <span className="buying-badge">Configured supply</span>
-              </div>
-              <DetailRow label="Committed">{count(committed)}</DetailRow>
-              <div
-                className="supply-meter"
-                role="meter"
-                aria-label={`${kind} token commitments`}
-                aria-valuenow={committed}
-                aria-valuemin={0}
-                aria-valuemax={total}
-              >
-                <span style={{ width: `${Math.min(100, (committed / total) * 100)}%` }} />
-              </div>
-              <DetailRow label="Uncommitted">{count(Math.max(0, total - committed))}</DetailRow>
-              <DetailRow label="Maximum outstanding">{count(total)}</DetailRow>
-              <p className="buying-note">
-                Configured sale limits, not a measurement of spare upstream GPU capacity.
-              </p>
-            </section>
+            <FormPanel key={kind}>
+              <FormSection>
+                <div className="section-heading">
+                  <h2>{kind === 'input' ? 'Input' : 'Output'} token allocation</h2>
+                  <span className="quiet-badge">Configured supply</span>
+                </div>
+                <DetailRow label="Committed">{count(committed)}</DetailRow>
+                <div
+                  className="supply-meter"
+                  role="meter"
+                  aria-label={`${kind} token commitments`}
+                  aria-valuenow={committed}
+                  aria-valuemin={0}
+                  aria-valuemax={total}
+                >
+                  <span style={{ width: `${Math.min(100, (committed / total) * 100)}%` }} />
+                </div>
+                <DetailRow label="Uncommitted">{count(Math.max(0, total - committed))}</DetailRow>
+                <DetailRow label="Maximum outstanding">{count(total)}</DetailRow>
+                <p className="field-hint">
+                  Configured sale limits, not a measurement of spare upstream GPU capacity.
+                </p>
+              </FormSection>
+            </FormPanel>
           );
         })}
       </div>
-      <section className="card buying-recommendation">
-        <div className="buying-section-heading">
-          <span className="buying-muse">
-            <Sparkles size={16} /> Muse supply assistant
-          </span>
-          <span className="buying-badge">Review before publishing</span>
-        </div>
-        <h2>Offer capacity within your own limits.</h2>
-        <p>
-          Muse selects a server-priced option using your rates and uncommitted allowance. Every rate
-          covers the configured compute cost after Broker’s 15% fee.
-        </p>
-        <ErrorBox error={error} />
-        <div className="buying-actions">
-          <button
-            className="button primary"
-            disabled={busy || !offering.route.qualified}
-            onClick={() => void propose()}
-          >
-            {busy ? (
-              <Spinner label="Preparing supply suggestion" />
-            ) : (
-              <>
-                <Sparkles size={15} /> Draft with Muse
-              </>
-            )}
-          </button>
-        </div>
-        {proposal && (
-          <div className="supply-proposal">
-            <h3>
-              {proposal.mode === 'fixture' ? 'Fixture supply proposal' : 'Muse supply proposal'}
-            </h3>
-            <p>{proposal.explanation}</p>
-            {proposal.proposal && (
-              <>
-                <DetailRow label="Example pack">
-                  {count(proposal.proposal.inputTokens)} input ·{' '}
-                  {count(proposal.proposal.outputTokens)} output
-                </DetailRow>
-                <DetailRow label="Gross pack price">
-                  {money(proposal.proposal.estimatedPriceCents)}
-                </DetailRow>
-                <DetailRow label="Packs within free allocation">
-                  {proposal.proposal.calls}
-                </DetailRow>
-                <div className="buying-actions">
-                  <button
-                    className="button secondary"
-                    disabled={proposal.expectedRevision !== offering.revision}
-                    onClick={() => {
-                      onApply(proposal.proposal!);
-                      setProposal(null);
-                    }}
-                  >
-                    Apply rates to draft
-                  </button>
-                </div>
-                {proposal.expectedRevision !== offering.revision && (
-                  <p className="buying-warning">The offering changed. Request a fresh proposal.</p>
-                )}
-              </>
-            )}
+      <FormPanel className="provider-supply-recommendation">
+        <FormSection>
+          <div className="section-heading">
+            <span className="buying-muse">
+              <Sparkles size={16} /> Muse supply assistant
+            </span>
+            <span className="quiet-badge">Review before publishing</span>
           </div>
-        )}
-      </section>
+          <div className="form-section-heading">
+            <h2>Offer capacity within your own limits.</h2>
+            <p>
+              Muse selects a server-priced option using your rates and uncommitted allowance. Every
+              rate covers the configured compute cost after Broker’s 15% fee.
+            </p>
+          </div>
+          <ErrorBox error={error} />
+          <div className="form-actions">
+            <button
+              className="button primary"
+              disabled={busy || !offering.route.qualified}
+              onClick={() => void propose()}
+            >
+              {busy ? (
+                <Spinner label="Preparing supply suggestion" />
+              ) : (
+                <>
+                  <Sparkles size={15} /> Draft with Muse
+                </>
+              )}
+            </button>
+          </div>
+          {proposal && (
+            <div className="supply-proposal">
+              <h3>
+                {proposal.mode === 'fixture' ? 'Fixture supply proposal' : 'Muse supply proposal'}
+              </h3>
+              <p>{proposal.explanation}</p>
+              {proposal.proposal && (
+                <>
+                  <DetailRow label="Example pack">
+                    {count(proposal.proposal.inputTokens)} input ·{' '}
+                    {count(proposal.proposal.outputTokens)} output
+                  </DetailRow>
+                  <DetailRow label="Gross pack price">
+                    {money(proposal.proposal.estimatedPriceCents)}
+                  </DetailRow>
+                  <DetailRow label="Packs within free allocation">
+                    {proposal.proposal.calls}
+                  </DetailRow>
+                  <div className="form-actions">
+                    <button
+                      className="button secondary"
+                      disabled={proposal.expectedRevision !== offering.revision}
+                      onClick={() => {
+                        onApply(proposal.proposal!);
+                        setProposal(null);
+                      }}
+                    >
+                      Apply rates to draft
+                    </button>
+                  </div>
+                  {proposal.expectedRevision !== offering.revision && (
+                    <p className="buying-warning">
+                      The offering changed. Request a fresh proposal.
+                    </p>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+        </FormSection>
+      </FormPanel>
     </>
   );
 }
@@ -164,11 +173,11 @@ export function SupplyWindow({
   return (
     <div className="supply-window">
       <h3>Selling window</h3>
-      <p className="buying-note">
+      <p className="field-hint">
         Optional dated window for new sales. Existing purchased packs retain their full expiry.
         Times use {Intl.DateTimeFormat().resolvedOptions().timeZone}.
       </p>
-      <div className="inference-form-grid">
+      <div className="field-grid">
         <label className="field">
           <span>Start accepting sales</span>
           <input

@@ -209,16 +209,23 @@ test('an owner can restrict Studio auctions to one model provider', async ({ pag
   await page
     .getByLabel('Public repository', { exact: true })
     .fill('https://github.com/example/public');
-  await page.getByLabel('Maximum total spend · USD').fill('1.00');
+  await page.getByLabel('Maximum total spend · USD').fill('1.2345');
+  await page.getByRole('combobox', { name: 'Time limit', exact: true }).selectOption('60');
+  await page
+    .getByRole('checkbox', { name: 'Use instant model pricing if an auction has no offers' })
+    .uncheck();
   await page.getByText('Advanced · completion checks').click();
   await page.getByRole('combobox', { name: 'Model provider', exact: true }).selectOption('modal');
-  await page.getByRole('button', { name: 'Start task · $1.00 maximum' }).click();
+  await page.getByRole('button', { name: 'Review task · $1.2345 maximum' }).click();
+  expect(submitted).toBeUndefined();
   const dialog = page.getByRole('dialog');
   await expect(dialog.getByText('Modal only', { exact: true })).toBeVisible();
-  await dialog.getByRole('button', { name: 'Start within $1.00' }).click();
+  await dialog.getByRole('button', { name: 'Start within $1.2345' }).click();
   await expect(page).toHaveURL(new RegExp('/studio/tasks/' + id));
   expect(submitted?.allowedProviders).toEqual(['modal']);
-  expect(submitted?.budgetCents).toBe(100);
+  expect(submitted?.budgetCents).toBe(123.45);
+  expect(submitted?.durationMinutes).toBe(60);
+  expect(submitted?.allowInstant).toBe(false);
 });
 test('learned diagnostics and unresolved usage remain readable on a phone', async ({
   page,
@@ -366,4 +373,103 @@ test('a saved response offers recovery before another paid generation', async ({
   await expect(
     page.getByRole('button', { name: 'Retry planning with existing quota', exact: true }),
   ).toHaveCount(0);
+});
+
+async function composerFixture(page: Page) {
+  const writes: string[] = [];
+  await page.route('**/api/**', async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (route.request().method() !== 'GET') writes.push(path);
+    if (path === '/api/me')
+      return route.fulfill({
+        json: {
+          user: { id: 'buyer', role: 'buyer', name: 'Alex Morgan' },
+          modes: { wick: 'fixture', muse: 'fixture' },
+          catalog: [],
+        },
+      });
+    if (path === '/api/studio/options')
+      return route.fulfill({ json: { available: true, mode: 'fixture', reason: '' } });
+    if (path === '/api/credits') return route.fulfill({ json: { availableCents: 1000 } });
+    if (path === '/api/disks/options')
+      return route.fulfill({ json: { enabled: false, eligibleCatalogIds: [] } });
+    if (path === '/api/studio/tasks')
+      return route.fulfill({ json: { items: [], nextCursor: null } });
+    if (path === '/api/studio/tasks/' + id) return route.fulfill({ json: detail() });
+    return route.fulfill({
+      status: 500,
+      json: { error: 'Unexpected presentation fixture request.' },
+    });
+  });
+  await page.goto('/studio?new=1');
+  return writes;
+}
+
+for (const width of [375, 768, 1440])
+  test(`Studio composer and saved result share readable panels at ${width}px`, async ({
+    page,
+  }, info) => {
+    await page.setViewportSize({ width, height: width === 375 ? 812 : 1000 });
+    const writes = await composerFixture(page);
+    await page
+      .getByRole('textbox', { name: 'Task', exact: true })
+      .fill('Fix the parser and verify the regression tests.');
+    await page
+      .getByRole('textbox', { name: 'Public repository', exact: true })
+      .fill('https://github.com/example/project');
+    await page.getByLabel('Maximum total spend · USD', { exact: true }).fill('2.3456');
+    await expect(page.locator('main .button.primary:visible')).toHaveCount(1);
+    const actionBounds = await page.getByRole('button', { name: /^Review task/ }).boundingBox();
+    expect(actionBounds!.height).toBeGreaterThanOrEqual(42);
+    expect(actionBounds!.height).toBeLessThanOrEqual(52);
+    await expect(page.getByRole('region', { name: 'Before you start', exact: true })).toContainText(
+      '$2.3456',
+    );
+    await expect(
+      page.getByRole('link', { name: 'Use existing resources (advanced)', exact: true }),
+    ).toHaveAttribute('href', '/studio/legacy');
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth - innerWidth),
+    ).toBeLessThanOrEqual(1);
+    await page.evaluate(() => {
+      (document.activeElement as HTMLElement)?.blur();
+      window.scrollTo(0, 0);
+    });
+    await page.screenshot({
+      path: info.outputPath(`studio-composer-${width}.png`),
+      fullPage: true,
+    });
+    await page.goto('/studio/tasks/' + id);
+    await expect(page.getByRole('heading', { level: 1 })).toContainText('Add a greeting utility');
+    await expect(page.locator('.page-heading [role="status"]')).toHaveText('Completed');
+    await expect(page.getByText('Preparing the task', { exact: true })).toHaveCount(0);
+    await expect(page.getByText('Implemented and tested.', { exact: true })).toBeVisible();
+    await expect(page.getByRole('region', { name: 'Task budget', exact: true })).toContainText(
+      'Returned',
+    );
+    await expect(
+      page.getByRole('region', { name: 'Model usage estimate', exact: true }),
+    ).toBeVisible();
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth - innerWidth),
+    ).toBeLessThanOrEqual(1);
+    await page.screenshot({ path: info.outputPath(`studio-task-${width}.png`), fullPage: true });
+    expect(writes).toEqual([]);
+  });
+
+test('Studio rejects an over-budget draft before any purchase authorization', async ({ page }) => {
+  const writes = await composerFixture(page);
+  await page
+    .getByRole('textbox', { name: 'Task', exact: true })
+    .fill('Fix the parser and verify the regression tests.');
+  await page
+    .getByRole('textbox', { name: 'Public repository', exact: true })
+    .fill('https://github.com/example/project');
+  await page.getByLabel('Maximum total spend · USD', { exact: true }).fill('10.0001');
+  await page.getByRole('button', { name: 'Review task · $10.0001 maximum', exact: true }).click();
+  await expect(page.getByRole('alert')).toContainText(
+    'Add available Broker credit before starting this task.',
+  );
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  expect(writes).toEqual([]);
 });

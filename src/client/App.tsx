@@ -34,7 +34,9 @@ import {
 } from './api';
 import { ErrorBox, Link, NavigationContext, SessionContext, Spinner } from './components';
 import { Brand } from './brand';
+import { FormPanel } from './form-layout';
 import { HomePage } from './homepage';
+import './auth.css';
 import { NewEnvironment, RequestReview, AuctionPage, VMDetail, Invoices } from './buyer';
 import { MyVMs } from './vm-inventory';
 import { Disks, DiskDetail } from './disks';
@@ -119,7 +121,7 @@ function Login({
           <ArrowLeft size={14} /> Back to marketplace
         </Link>
       </header>
-      <main className="broker-auth-main">
+      <main className="form-page broker-auth-main">
         <section className="broker-auth-story" aria-labelledby="login-story-title">
           <span className="home-eyebrow">
             {seller
@@ -160,7 +162,7 @@ function Login({
             ))}
           </ul>
         </section>
-        <section className="broker-auth-form" aria-labelledby="login-form-title">
+        <FormPanel className="broker-auth-form" aria-labelledby="login-form-title">
           <h2 id="login-form-title">
             {seller
               ? 'Sign in to sell capacity.'
@@ -223,7 +225,7 @@ function Login({
               </p>
             </div>
           )}
-        </section>
+        </FormPanel>
       </main>
     </div>
   );
@@ -441,13 +443,19 @@ export default function App() {
     navigation.find((item) => path === item.path || path.startsWith(item.path + '/'))?.label ||
     (path === '/new' && !new URLSearchParams(search).has('copy')
       ? 'New purchase'
-      : path === '/requests/review' || path === '/new'
+      : path === '/requests/review' || path === '/new/vm' || path === '/new'
         ? 'Launch a VM'
-        : path.startsWith('/requests/') ||
-            path.startsWith('/agreements/') ||
-            path.startsWith('/token-orders/')
-          ? 'Orders'
-          : navigation[0]?.label);
+        : path === '/token-orders/new'
+          ? 'Buy AI tokens'
+          : path === '/alternatives' || path.startsWith('/alternatives/')
+            ? 'Alternatives'
+            : path === '/agreements/new' || path === '/provider/scheduled'
+              ? 'Historical orders'
+              : path.startsWith('/requests/') ||
+                  path.startsWith('/agreements/') ||
+                  path.startsWith('/token-orders/')
+                ? 'Orders'
+                : navigation[0]?.label);
   const isNavActive = (to: string) =>
     path === to ||
     path.startsWith(to + '/') ||

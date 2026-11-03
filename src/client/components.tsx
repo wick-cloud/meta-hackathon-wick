@@ -318,11 +318,15 @@ export function MarketDialog({
   onClose,
   busy,
   children,
+  variant = 'modal',
+  size = 'default',
 }: {
   titleId: string;
   onClose: () => void;
   busy?: boolean;
   children: ReactNode;
+  variant?: 'modal' | 'drawer';
+  size?: 'default' | 'wide';
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   const close = useRef(onClose);
@@ -335,7 +339,7 @@ export function MarketDialog({
   return (
     <dialog
       ref={ref}
-      className="market-dialog"
+      className={`market-dialog market-dialog-${variant}${size === 'wide' ? ' market-dialog-wide' : ''}`}
       aria-labelledby={titleId}
       onCancel={(event) => {
         event.preventDefault();
@@ -491,6 +495,8 @@ export function MoneyInput({
   const [text, setText] = useState(() => centsToUsd(value));
   const acceptedValue = useRef(value),
     input = useRef<HTMLInputElement>(null);
+  const labelId = `${id}-label`,
+    errorId = `${id}-error`;
   const amount = usdToCents(text);
   const validationMessage = !text
     ? ''
@@ -512,7 +518,7 @@ export function MoneyInput({
   }, [validationMessage]);
   return (
     <label className="field" htmlFor={id}>
-      <span>{label}</span>
+      <span id={labelId}>{label}</span>
       <div className="input-affix">
         <span>$</span>
         <input
@@ -520,6 +526,8 @@ export function MoneyInput({
           ref={input}
           type="text"
           inputMode="decimal"
+          aria-labelledby={labelId}
+          aria-describedby={validationMessage ? errorId : undefined}
           aria-invalid={!!validationMessage || undefined}
           maxLength={100}
           min={centsToUsd(min)}
@@ -542,6 +550,11 @@ export function MoneyInput({
         />
         <span>USD</span>
       </div>
+      {validationMessage && (
+        <span id={errorId} className="field-hint field-error" aria-live="polite">
+          {validationMessage}
+        </span>
+      )}
     </label>
   );
 }

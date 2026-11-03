@@ -1,5 +1,5 @@
 .coding-page {
-  max-width: 1240px;
+  max-width: 1100px;
   margin: 0 auto;
   min-width: 0;
 }
@@ -13,16 +13,16 @@
 }
 .coding-compose {
   display: grid;
-  grid-template-columns: minmax(0, 1.6fr) minmax(255px, 1fr);
-  gap: 20px;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 24px;
   align-items: start;
-  margin-bottom: 36px;
+  margin-bottom: 32px;
 }
 .coding-panel {
   background: var(--card);
   border: 1px solid var(--line);
   border-radius: 10px;
-  padding: 23px;
+  padding: 24px;
   min-width: 0;
 }
 .coding-panel h2 {
@@ -123,7 +123,7 @@
   flex-wrap: wrap;
   padding: 14px 17px;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: 10px;
   background: var(--card);
   margin-bottom: 20px;
   font-size: 12px;
@@ -373,12 +373,12 @@
 .coding-history-details .coding-timeline li:last-child {
   padding-bottom: 0;
 }
-@media (max-width: 1000px) {
+@media (max-width: 900px) {
   .coding-compose {
     grid-template-columns: minmax(0, 1fr);
   }
   .coding-panel {
-    padding: 19px;
+    padding: 20px;
   }
 }
 @media (max-width: 720px) {
@@ -393,7 +393,7 @@
     width: 100%;
   }
   .coding-panel {
-    padding: 17px;
+    padding: 20px;
   }
   .coding-tabs {
     gap: 14px;
@@ -401,7 +401,58 @@
   .coding-code {
     font-size: 11px;
   }
-  .coding-page .page-heading h1 {
-    font-size: 25px;
+}
+
+.coding-compose-form .form-section > .field:last-child {
+  margin-bottom: 0;
+}
+.coding-compose-form .coding-actions {
+  margin-top: 22px;
+}
+.coding-resource-notices {
+  display: grid;
+  gap: 12px;
+}
+.coding-resource-notices:empty {
+  display: none;
+}
+.coding-page .coding-brief {
+  margin: 0 0 20px;
+}
+.coding-page .coding-tabs button {
+  min-height: 42px;
+}
+.coding-page .coding-history-details {
+  padding: 0;
+}
+.coding-history-details > .coding-note,
+.coding-history-details > .coding-timeline,
+.coding-history-details > .coding-disclosure {
+  margin-left: 24px;
+  margin-right: 24px;
+}
+.coding-history-details > .coding-disclosure {
+  margin-bottom: 24px;
+}
+@media (max-width: 900px) {
+  .coding-page .coding-tabs button {
+    min-height: 44px;
+  }
+  .coding-page .coding-actions > .button {
+    min-height: 44px;
+  }
+}
+.coding-page > .form-notice {
+  margin-bottom: 20px;
+}
+@media (max-width: 560px) {
+  .form-page.coding-page > .page-heading {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 16px;
+  }
+  .form-page.coding-page > .page-heading .page-heading-actions {
+    justify-content: flex-start;
+    flex-wrap: wrap;
   }
 }

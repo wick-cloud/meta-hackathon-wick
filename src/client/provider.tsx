@@ -9,8 +9,9 @@ import {
   TableViewport,
 } from './table';
 import './provider-console.css';
+import { FormLayout, FormPage, FormPanel, FormSection, FormSummary } from './form-layout';
 import { isMoneyCents, moneyUnits } from '../shared/money';
-import { Fragment, useEffect, useState, type FormEvent } from 'react';
+import { Fragment, useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import {
   Activity,
   ArrowRight,
@@ -28,7 +29,6 @@ import {
   RefreshCw,
   Save,
   Server,
-  Settings2,
   ShieldCheck,
   Sparkles,
   X,
@@ -100,6 +100,24 @@ function ProviderRevenueSplit({ grossCents }: { grossCents: number }) {
   );
 }
 
+function ProviderPageState({
+  title,
+  eyebrow,
+  children,
+}: {
+  title: string;
+  eyebrow: string;
+  children: ReactNode;
+}) {
+  return (
+    <FormPage title={title} eyebrow={eyebrow} className="provider-page">
+      <FormPanel>
+        <FormSection>{children}</FormSection>
+      </FormPanel>
+    </FormPage>
+  );
+}
+
 export function ProviderCapacity() {
   const { data, error, loading, reload } = useResource<Dashboard>('/api/provider/dashboard', 5000);
   const [total, setTotal] = useState<number | null>(null),
@@ -130,14 +148,22 @@ export function ProviderCapacity() {
       setBusy(false);
     }
   }
-  if (loading) return <Spinner label="Loading your capacity" />;
-  if (!data) return <ErrorBox error={error || 'Provider unavailable.'} retry={reload} />;
+  if (loading || !data)
+    return (
+      <ProviderPageState title="Capacity" eyebrow="PROVIDER WORKSPACE">
+        {loading ? (
+          <Spinner label="Loading your capacity" />
+        ) : (
+          <ErrorBox error={error || 'Provider unavailable.'} retry={reload} />
+        )}
+      </ProviderPageState>
+    );
   const { capacity, provider } = data;
   const protectedSpare = Math.max(0, capacity.total - capacity.held - capacity.available);
   const share = (quantity: number) =>
     `${capacity.total ? Math.min(100, (quantity / capacity.total) * 100) : 0}%`;
   return (
-    <>
+    <div className="form-page provider-page">
       <PageHeader
         eyebrow="PROVIDER WORKSPACE"
         title="Capacity"
@@ -200,112 +226,114 @@ export function ProviderCapacity() {
         />
       </div>
       <ErrorBox error={error || actionError} retry={error ? reload : undefined} />
-      <div className="provider-two-column">
-        <section className="card">
-          <div className="section-heading">
-            <h2>Current allocation</h2>
-            <span>{capacity.total} configured slots</span>
-          </div>
-          <div
-            className="capacity-meter"
-            role="img"
-            aria-label={`${capacity.held} held, ${protectedSpare} protected spare and ${capacity.available} available of ${capacity.total} configured slots`}
+      <FormLayout
+        aside={
+          <FormSummary
+            title="Current allocation"
+            description={`${capacity.total} configured slots`}
           >
-            <span className="held" style={{ width: share(capacity.held) }} />
-            <span className="spare" style={{ width: share(protectedSpare) }} />
-            <span className="available" style={{ width: share(capacity.available) }} />
-          </div>
-          <dl className="capacity-breakdown">
-            <div>
-              <dt>
-                <i className="dot held" /> Runtime slots held
-              </dt>
-              <dd>{capacity.held}</dd>
-              <p>Bids and environments, including allocations awaiting cleanup.</p>
+            <div
+              className="capacity-meter"
+              role="img"
+              aria-label={`${capacity.held} held, ${protectedSpare} protected spare and ${capacity.available} available of ${capacity.total} configured slots`}
+            >
+              <span className="held" style={{ width: share(capacity.held) }} />
+              <span className="spare" style={{ width: share(protectedSpare) }} />
+              <span className="available" style={{ width: share(capacity.available) }} />
             </div>
-            <div>
-              <dt>
-                <i className="dot spare" /> Protected spare
-              </dt>
-              <dd>{protectedSpare}</dd>
-              <p>Headroom retained by your current capacity policy.</p>
+            <dl className="capacity-breakdown">
+              <div>
+                <dt>
+                  <i className="dot held" /> Runtime slots held
+                </dt>
+                <dd>{capacity.held}</dd>
+                <p>Bids and environments, including allocations awaiting cleanup.</p>
+              </div>
+              <div>
+                <dt>
+                  <i className="dot spare" /> Protected spare
+                </dt>
+                <dd>{protectedSpare}</dd>
+                <p>Headroom retained by your current capacity policy.</p>
+              </div>
+              <div>
+                <dt>
+                  <i className="dot available" /> Available for new bids
+                </dt>
+                <dd>{capacity.available}</dd>
+                <p>Configured allocation; upstream capacity and Wick admission still apply.</p>
+              </div>
+            </dl>
+          </FormSummary>
+        }
+      >
+        <FormPanel>
+          <FormSection title="Allocation settings">
+            <p className="muted-text">
+              Set the total slots this account makes available. Existing reservations and historical
+              capacity commitments remain protected.
+            </p>
+            <p>
+              <Link className="text-link" href="/provider/policy">
+                Review a selling strategy with Muse <ArrowRight size={14} />
+              </Link>
+            </p>
+            <form onSubmit={save}>
+              <label className="field" htmlFor="total-capacity">
+                <span>Total VM slots</span>
+                <input
+                  id="total-capacity"
+                  type="number"
+                  min={0}
+                  max={100}
+                  step={1}
+                  value={total ?? capacity.total}
+                  onChange={(e) => {
+                    if (capacityRevision === null) setCapacityRevision(data.policyRevision);
+                    setTotal(Number(e.target.value));
+                    setSaved(false);
+                  }}
+                  required
+                />
+                <span className="field-hint">
+                  You currently have {capacity.held} reserved{' '}
+                  {capacity.held === 1 ? 'slot' : 'slots'}. Existing reservations are preserved.
+                </span>
+              </label>
+              <button className="button primary" disabled={busy}>
+                {busy ? (
+                  <Spinner label="Saving" />
+                ) : (
+                  <>
+                    <Save size={16} />
+                    Save capacity
+                  </>
+                )}
+              </button>
+              {saved && <SuccessBox>Capacity updated.</SuccessBox>}
+            </form>
+            <div className="capacity-calendar-link">
+              <span>85% provider share · 15% Broker fee</span>
+              <Link href="/provider/earnings">
+                View earnings <ArrowRight size={14} />
+              </Link>
             </div>
-            <div>
-              <dt>
-                <i className="dot available" /> Available for new bids
-              </dt>
-              <dd>{capacity.available}</dd>
-              <p>Configured allocation; upstream capacity and Wick admission still apply.</p>
-            </div>
-          </dl>
-        </section>
-        <section className="card">
+          </FormSection>
+        </FormPanel>
+      </FormLayout>
+      <FormPanel className="recent-activity">
+        <FormSection>
           <div className="section-heading">
-            <h2>Allocation settings</h2>
-            <Settings2 size={18} />
-          </div>
-          <p className="muted-text">
-            Set the total slots this account makes available. Existing reservations and historical
-            capacity commitments remain protected.
-          </p>
-          <p>
-            <Link className="text-link" href="/provider/policy">
-              Review a selling strategy with Muse <ArrowRight size={14} />
-            </Link>
-          </p>
-          <form onSubmit={save}>
-            <label className="field" htmlFor="total-capacity">
-              <span>Total VM slots</span>
-              <input
-                id="total-capacity"
-                type="number"
-                min={0}
-                max={100}
-                step={1}
-                value={total ?? capacity.total}
-                onChange={(e) => {
-                  if (capacityRevision === null) setCapacityRevision(data.policyRevision);
-                  setTotal(Number(e.target.value));
-                  setSaved(false);
-                }}
-                required
-              />
-              <span className="field-hint">
-                You currently have {capacity.held} reserved {capacity.held === 1 ? 'slot' : 'slots'}
-                . Existing reservations are preserved.
-              </span>
-            </label>
-            <button className="button primary" disabled={busy}>
-              {busy ? (
-                <Spinner label="Saving" />
-              ) : (
-                <>
-                  <Save size={16} />
-                  Save capacity
-                </>
-              )}
-            </button>
-            {saved && <SuccessBox>Capacity updated.</SuccessBox>}
-          </form>
-          <div className="capacity-calendar-link">
-            <span>85% provider share · 15% Broker fee</span>
-            <Link href="/provider/earnings">
-              View earnings <ArrowRight size={14} />
+            <h2>Recent activity</h2>
+            <Link className="text-link" href="/provider/activity">
+              View all
+              <ArrowRight size={14} />
             </Link>
           </div>
-        </section>
-      </div>
-      <section className="card recent-activity">
-        <div className="section-heading">
-          <h2>Recent activity</h2>
-          <Link className="text-link" href="/provider/activity">
-            View all
-            <ArrowRight size={14} />
-          </Link>
-        </div>
-        <ActivityList items={data.activity.slice(0, 5)} />
-      </section>
-    </>
+          <ActivityList items={data.activity.slice(0, 5)} />
+        </FormSection>
+      </FormPanel>
+    </div>
   );
 }
 
@@ -411,8 +439,16 @@ export function ProviderPolicy() {
       setBusy('');
     }
   }
-  if (loading || (!policy && !error)) return <Spinner label="Loading policy" />;
-  if (!policy) return <ErrorBox error={error || 'Policy unavailable.'} retry={reload} />;
+  if (loading || !policy)
+    return (
+      <ProviderPageState title="Pricing & policy" eyebrow="PROVIDER SETTINGS">
+        {loading || !error ? (
+          <Spinner label="Loading policy" />
+        ) : (
+          <ErrorBox error={error || 'Policy unavailable.'} retry={reload} />
+        )}
+      </ProviderPageState>
+    );
   const ownCatalog = catalog.filter(
     (c) =>
       c.approved && (!data?.provider.cloudProvider || c.provider === data.provider.cloudProvider),
@@ -425,7 +461,7 @@ export function ProviderPolicy() {
     (data?.capacity.total ?? 0) - (data?.capacity.held ?? 0) - spare,
   );
   return (
-    <>
+    <div className="form-page provider-page">
       <PageHeader
         eyebrow="PROVIDER SETTINGS"
         title="Pricing & policy"
@@ -435,61 +471,67 @@ export function ProviderPolicy() {
           {modes.muse === 'fixture' ? 'Fixture Muse · no model calls' : museLabel}
         </span>
       </PageHeader>
-      <section className="card">
-        <h2>Your selling strategy</h2>
-        <p className="muted-text">
-          Muse uses only your own saved policy, current capacity, and approved configurations. A
-          proposal holds no slots and changes no active limits.
-        </p>
-        <form onSubmit={propose}>
-          <label className="field" htmlFor="selling-strategy">
-            <span>Natural-language selling strategy</span>
-            <textarea
-              id="selling-strategy"
-              value={strategy}
-              onChange={(event) => setStrategy(event.target.value)}
-              rows={3}
-              maxLength={1000}
-              minLength={3}
-              required
-              disabled={!!busy || !!applyAttempt}
-              placeholder="Fill idle machines, keep two slots spare, never quote below $0.05."
-            />
-          </label>
-          <div className="form-actions">
-            <button className="button muse-button" disabled={!!busy || stale || !!applyAttempt}>
-              {busy === 'propose' ? (
-                <Spinner label="Preparing limits" />
-              ) : (
-                <>
-                  <Sparkles size={16} />
-                  Propose editable limits
-                </>
-              )}
-            </button>
-            <span className="field-hint">
-              Replaces the draft below for your review. Apply is a separate action.
-            </span>
-          </div>
-        </form>
-      </section>
+      <FormPanel>
+        <FormSection
+          title="Your selling strategy"
+          description="Muse uses only your own saved policy, current capacity, and approved configurations. A proposal holds no slots and changes no active limits."
+        >
+          <form onSubmit={propose}>
+            <label className="field" htmlFor="selling-strategy">
+              <span>Natural-language selling strategy</span>
+              <textarea
+                id="selling-strategy"
+                value={strategy}
+                onChange={(event) => setStrategy(event.target.value)}
+                rows={3}
+                maxLength={1000}
+                minLength={3}
+                required
+                disabled={!!busy || !!applyAttempt}
+                placeholder="Fill idle machines, keep two slots spare, never quote below $0.05."
+              />
+            </label>
+            <div className="form-actions">
+              <button className="button muse-button" disabled={!!busy || stale || !!applyAttempt}>
+                {busy === 'propose' ? (
+                  <Spinner label="Preparing limits" />
+                ) : (
+                  <>
+                    <Sparkles size={16} />
+                    Propose editable limits
+                  </>
+                )}
+              </button>
+              <span className="field-hint">
+                Replaces the draft below for your review. Apply is a separate action.
+              </span>
+            </div>
+          </form>
+        </FormSection>
+      </FormPanel>
       {data && (
-        <section className="card policy-notes">
-          <div className="section-heading">
-            <h2>Current capacity and active policy</h2>
-            <span>Revision {data.policyRevision}</span>
-          </div>
-          <DetailRow label="Configured demo slots">{data.capacity.total}</DetailRow>
-          <DetailRow label="Existing holds">{data.capacity.held}</DetailRow>
-          <DetailRow label="Kept spare by active policy">{data.policy.reserveSlots ?? 0}</DetailRow>
-          <DetailRow label="Available for new holds">{data.capacity.available}</DetailRow>
-          <DetailRow label="Active minimum total">{money(data.policy.minimumPriceCents)}</DetailRow>
-          <DetailRow label="Automatic bids and counteroffers">
-            {data.policy.autoBid
-              ? 'Enabled within your approved limits'
-              : 'Paused; manual bids remain available'}
-          </DetailRow>
-        </section>
+        <FormPanel className="policy-notes">
+          <FormSection>
+            <div className="section-heading">
+              <h2>Current capacity and active policy</h2>
+              <span>Revision {data.policyRevision}</span>
+            </div>
+            <DetailRow label="Configured VM slots">{data.capacity.total}</DetailRow>
+            <DetailRow label="Existing holds">{data.capacity.held}</DetailRow>
+            <DetailRow label="Kept spare by active policy">
+              {data.policy.reserveSlots ?? 0}
+            </DetailRow>
+            <DetailRow label="Available for new holds">{data.capacity.available}</DetailRow>
+            <DetailRow label="Active minimum total">
+              {money(data.policy.minimumPriceCents)}
+            </DetailRow>
+            <DetailRow label="Automatic bids and counteroffers">
+              {data.policy.autoBid
+                ? 'Enabled within your approved limits'
+                : 'Paused; manual bids remain available'}
+            </DetailRow>
+          </FormSection>
+        </FormPanel>
       )}
       {stale && !applyAttempt && (
         <div className="error-box" role="alert">
@@ -503,18 +545,18 @@ export function ProviderPolicy() {
         </div>
       )}
       {proposal && (
-        <section className="card">
-          <h2>Proposed limits · not active</h2>
-          <p className="muted-text">
-            Review and edit every limit below. The decision receipt describes the original proposal;
-            your edits are applied only when you choose Apply reviewed limits.
-          </p>
-          <ReceiptCard
-            receipt={proposal.receipt}
-            mode={proposal.mode}
-            modelCalled={proposal.modelCalled}
-          />
-        </section>
+        <FormPanel>
+          <FormSection
+            title="Proposed limits · not active"
+            description="Review and edit every limit below. The decision receipt describes the original proposal; your edits are applied only when you choose Apply reviewed limits."
+          >
+            <ReceiptCard
+              receipt={proposal.receipt}
+              mode={proposal.mode}
+              modelCalled={proposal.modelCalled}
+            />
+          </FormSection>
+        </FormPanel>
       )}
       <ErrorBox error={error || actionError} retry={error ? reload : undefined} />
       {applyAttempt && !busy && (
@@ -528,155 +570,11 @@ export function ProviderPolicy() {
       )}
       <form onSubmit={save}>
         <fieldset disabled={!!busy} style={{ border: 0, padding: 0, margin: 0 }}>
-          <div className="provider-two-column">
-            <section className="card">
-              <div className="section-heading">
-                <h2>{proposal ? 'Review proposed limits' : 'Bidding policy'}</h2>
-                <span>Based on revision {baseRevision}</span>
-              </div>
-              <label className="field" htmlFor="reserve-slots">
-                <span>Slots to keep spare</span>
-                <input
-                  id="reserve-slots"
-                  type="number"
-                  min={0}
-                  max={100}
-                  step={1}
-                  required
-                  disabled={!!applyAttempt}
-                  value={spare}
-                  onChange={(event) => update({ reserveSlots: Number(event.target.value) })}
-                />
-                <span className="field-hint">
-                  With current holds, these limits allow {proposedAvailable} new slots. Spare slots
-                  apply to manual bids, automatic bids, and accepted alternatives. Existing holds
-                  remain intact.
-                </span>
-              </label>
-              <label className="toggle-row" htmlFor="auto-bid">
-                <div>
-                  <strong>Automatic bids and counteroffers</strong>
-                  <p>
-                    Broker submits eligible base-price bids. Muse may choose an optional discount;
-                    declining it keeps the base when it fits the buyer’s budget. Buyer acceptance
-                    can bind a counteroffer and start provisioning. Pausing stops new automatic bids
-                    and counteroffer fills; manual bids remain available.
-                  </p>
-                </div>
-                <input
-                  id="auto-bid"
-                  type="checkbox"
-                  className="toggle-input"
-                  checked={policy.autoBid}
-                  disabled={!!applyAttempt}
-                  onChange={(e) => update({ autoBid: e.target.checked })}
-                />
-                <span className="toggle-track" aria-hidden="true" />
-              </label>
-              <div className="field-grid">
-                <MoneyInput
-                  id="minimum-price"
-                  label="Minimum total price (USD)"
-                  value={policy.minimumPriceCents}
-                  disabled={!!applyAttempt}
-                  onChange={(minimumPriceCents) => update({ minimumPriceCents })}
-                />
-                <MoneyInput
-                  id="base-price"
-                  label="Base total price (USD)"
-                  value={policy.basePriceCents}
-                  disabled={!!applyAttempt}
-                  onChange={(basePriceCents) => update({ basePriceCents })}
-                />
-              </div>
-              <MoneyInput
-                id="policy-max-price"
-                label="Maximum total price (USD)"
-                value={policy.maxPriceCents ?? policy.basePriceCents}
-                disabled={!!applyAttempt}
-                onChange={(maxPriceCents) => update({ maxPriceCents })}
-              />
-              <p className="field-hint">
-                These limits are the gross total the buyer pays, before Broker’s 15% commission. You
-                keep 85% before compute costs. The buyer’s budget also applies; real Wick bids must
-                leave enough after commission to cover the estimated compute cost. Automatic bids
-                use your base or that cost floor, whichever is higher. The last free slot stays at
-                base.
-              </p>
-              <ProviderRevenueSplit grossCents={policy.basePriceCents} />
-              <div className="form-divider" />
-              <h3>Eligible configurations</h3>
-              <p className="muted-text">
-                Only administrator-approved existing Wick configurations can be offered.
-              </p>
-              <div className="catalog-checks">
-                {ownCatalog.map((item) => (
-                  <label key={item.id}>
-                    <input
-                      type="checkbox"
-                      checked={allowed.includes(item.id)}
-                      disabled={!!applyAttempt}
-                      onChange={(e) =>
-                        update({
-                          allowedCatalogIds: e.target.checked
-                            ? [...allowed, item.id]
-                            : allowed.filter((id) => id !== item.id),
-                        })
-                      }
-                    />
-                    <div>
-                      <strong>{item.name}</strong>
-                      <span>
-                        {item.cpu} vCPU · {item.memoryGb} GiB · {item.region}
-                      </span>
-                    </div>
-                  </label>
-                ))}
-              </div>
-              <div className="form-actions">
-                <button
-                  className="button primary"
-                  disabled={!!busy || (stale && !applyAttempt) || baseRevision === null}
-                >
-                  {busy === 'save' ? (
-                    <Spinner label="Saving policy" />
-                  ) : (
-                    <>
-                      <Save size={16} />
-                      {applyAttempt
-                        ? 'Retry same apply'
-                        : proposal
-                          ? 'Apply reviewed limits'
-                          : 'Save policy'}
-                    </>
-                  )}
-                </button>
-                {(dirty || proposal) && (
-                  <button
-                    type="button"
-                    className="button secondary"
-                    onClick={discardDraft}
-                    disabled={!!applyAttempt}
-                  >
-                    Discard draft
-                  </button>
-                )}
-                {saved && (
-                  <span className="saved-label">
-                    <Check size={15} />
-                    Policy saved
-                  </span>
-                )}
-              </div>
-            </section>
-            <aside>
-              <div className="muse-explainer large">
-                <span className="icon-tile violet">
-                  <Sparkles size={20} />
-                </span>
-                <div>
-                  <h3>A proposal with boundaries</h3>
-                  <p>
+          <FormLayout
+            aside={
+              <>
+                <FormSummary title="A proposal with boundaries">
+                  <p className="muted-text">
                     With at least two free slots and half of unreserved capacity available, Muse may
                     offer up to 10% off without crossing your floor. Declining the discount keeps
                     the eligible base. Capacity, budget, pricing limits, and the auction deadline
@@ -685,48 +583,192 @@ export function ProviderPolicy() {
                   <span className="tiny-label">
                     {modes.muse === 'fixture' ? 'Fixture proposals · no model calls' : museLabel}
                   </span>
+                </FormSummary>
+                <FormSummary title="What your policy changes" className="policy-notes">
+                  <DetailRow label="Broker commission">15% of your gross rental revenue</DetailRow>
+                  <DetailRow label="Added buyer fee">$0.00</DetailRow>
+                  <DetailRow label="Future bids">Use your saved policy</DetailRow>
+                  <DetailRow label="Existing reservations">Remain in place</DetailRow>
+                  <DetailRow label="Awarded quotes">Stay fixed</DetailRow>
+                  <DetailRow label="Manual bids">
+                    Same floor, spare slots, and capacity checks
+                  </DetailRow>
+                  <DetailRow label="Buyer-approved alternatives">
+                    Require active automation and saved limits, rechecked on acceptance
+                  </DetailRow>
+                  <p className="small-muted">
+                    Your private policy is isolated from other suppliers. Credentials and customer
+                    terminal contents never go to Muse.
+                  </p>
+                </FormSummary>
+              </>
+            }
+          >
+            <FormPanel>
+              <FormSection>
+                <div className="section-heading">
+                  <h2>{proposal ? 'Review proposed limits' : 'Bidding policy'}</h2>
+                  <span>Based on revision {baseRevision}</span>
                 </div>
-              </div>
-              <div className="card policy-notes">
-                <h3>What your policy changes</h3>
-                <DetailRow label="Broker commission">15% of your gross rental revenue</DetailRow>
-                <DetailRow label="Added buyer fee">$0.00</DetailRow>
-                <DetailRow label="Future bids">Use your saved policy</DetailRow>
-                <DetailRow label="Existing reservations">Remain in place</DetailRow>
-                <DetailRow label="Awarded quotes">Stay fixed</DetailRow>
-                <DetailRow label="Manual bids">
-                  Same floor, spare slots, and capacity checks
-                </DetailRow>
-                <DetailRow label="Buyer-approved alternatives">
-                  Require active automation and saved limits, rechecked on acceptance
-                </DetailRow>
-                <p className="small-muted">
-                  Your private policy is isolated from other suppliers. Credentials and customer
-                  terminal contents never go to Muse.
+                <label className="field" htmlFor="reserve-slots">
+                  <span>Slots to keep spare</span>
+                  <input
+                    id="reserve-slots"
+                    type="number"
+                    min={0}
+                    max={100}
+                    step={1}
+                    required
+                    disabled={!!applyAttempt}
+                    value={spare}
+                    onChange={(event) => update({ reserveSlots: Number(event.target.value) })}
+                  />
+                  <span className="field-hint">
+                    With current holds, these limits allow {proposedAvailable} new slots. Spare
+                    slots apply to manual bids, automatic bids, and accepted alternatives. Existing
+                    holds remain intact.
+                  </span>
+                </label>
+                <label className="toggle-row" htmlFor="auto-bid">
+                  <div>
+                    <strong>Automatic bids and counteroffers</strong>
+                    <p>
+                      Broker submits eligible base-price bids. Muse may choose an optional discount;
+                      declining it keeps the base when it fits the buyer’s budget. Buyer acceptance
+                      can bind a counteroffer and start provisioning. Pausing stops new automatic
+                      bids and counteroffer fills; manual bids remain available.
+                    </p>
+                  </div>
+                  <input
+                    id="auto-bid"
+                    type="checkbox"
+                    className="toggle-input"
+                    checked={policy.autoBid}
+                    disabled={!!applyAttempt}
+                    onChange={(e) => update({ autoBid: e.target.checked })}
+                  />
+                  <span className="toggle-track" aria-hidden="true" />
+                </label>
+                <div className="field-grid">
+                  <MoneyInput
+                    id="minimum-price"
+                    label="Minimum total price (USD)"
+                    value={policy.minimumPriceCents}
+                    disabled={!!applyAttempt}
+                    onChange={(minimumPriceCents) => update({ minimumPriceCents })}
+                  />
+                  <MoneyInput
+                    id="base-price"
+                    label="Base total price (USD)"
+                    value={policy.basePriceCents}
+                    disabled={!!applyAttempt}
+                    onChange={(basePriceCents) => update({ basePriceCents })}
+                  />
+                </div>
+                <MoneyInput
+                  id="policy-max-price"
+                  label="Maximum total price (USD)"
+                  value={policy.maxPriceCents ?? policy.basePriceCents}
+                  disabled={!!applyAttempt}
+                  onChange={(maxPriceCents) => update({ maxPriceCents })}
+                />
+                <p className="field-hint">
+                  These limits are the gross total the buyer pays, before Broker’s 15% commission.
+                  You keep 85% before compute costs. The buyer’s budget also applies; real Wick bids
+                  must leave enough after commission to cover the estimated compute cost. Automatic
+                  bids use your base or that cost floor, whichever is higher. The last free slot
+                  stays at base.
                 </p>
-              </div>
-            </aside>
-          </div>
+                <ProviderRevenueSplit grossCents={policy.basePriceCents} />
+                <div className="form-divider" />
+                <h3>Eligible configurations</h3>
+                <p className="muted-text">
+                  Only administrator-approved existing Wick configurations can be offered.
+                </p>
+                <div className="catalog-checks">
+                  {ownCatalog.map((item) => (
+                    <label key={item.id}>
+                      <input
+                        type="checkbox"
+                        checked={allowed.includes(item.id)}
+                        disabled={!!applyAttempt}
+                        onChange={(e) =>
+                          update({
+                            allowedCatalogIds: e.target.checked
+                              ? [...allowed, item.id]
+                              : allowed.filter((id) => id !== item.id),
+                          })
+                        }
+                      />
+                      <div>
+                        <strong>{item.name}</strong>
+                        <span>
+                          {item.cpu} vCPU · {item.memoryGb} GiB · {item.region}
+                        </span>
+                      </div>
+                    </label>
+                  ))}
+                </div>
+                <div className="form-actions">
+                  <button
+                    className="button primary"
+                    disabled={!!busy || (stale && !applyAttempt) || baseRevision === null}
+                  >
+                    {busy === 'save' ? (
+                      <Spinner label="Saving policy" />
+                    ) : (
+                      <>
+                        <Save size={16} />
+                        {applyAttempt
+                          ? 'Retry same apply'
+                          : proposal
+                            ? 'Apply reviewed limits'
+                            : 'Save policy'}
+                      </>
+                    )}
+                  </button>
+                  {(dirty || proposal) && (
+                    <button
+                      type="button"
+                      className="button secondary"
+                      onClick={discardDraft}
+                      disabled={!!applyAttempt}
+                    >
+                      Discard draft
+                    </button>
+                  )}
+                  {saved && (
+                    <span className="saved-label">
+                      <Check size={15} />
+                      Policy saved
+                    </span>
+                  )}
+                </div>
+              </FormSection>
+            </FormPanel>
+          </FormLayout>
         </fieldset>
       </form>
-      <section className="card recent-activity">
-        <div className="section-heading">
-          <h2>Counteroffer decisions</h2>
-          <Link className="text-link" href="/provider/activity">
-            View all activity <ArrowRight size={14} />
-          </Link>
-        </div>
-        <p className="muted-text">
-          Your private decision receipts. Proposed alternatives hold no slots until the buyer
-          explicitly accepts.
-        </p>
-        <ActivityList
-          items={(data?.activity ?? [])
-            .filter((item) => item.kind.startsWith('counteroffer_'))
-            .slice(0, 5)}
-        />
-      </section>
-    </>
+      <FormPanel className="recent-activity">
+        <FormSection>
+          <div className="section-heading">
+            <h2>Counteroffer decisions</h2>
+            <Link className="text-link" href="/provider/activity">
+              View all activity <ArrowRight size={14} />
+            </Link>
+          </div>
+          <p className="muted-text">
+            Your private decision receipts. Proposed alternatives hold no slots until the buyer
+            explicitly accepts.
+          </p>
+          <ActivityList
+            items={(data?.activity ?? [])
+              .filter((item) => item.kind.startsWith('counteroffer_'))
+              .slice(0, 5)}
+          />
+        </FormSection>
+      </FormPanel>
+    </div>
   );
 }
 
@@ -943,7 +985,7 @@ export function ProviderRequests() {
     dashboard = useResource<Dashboard>('/api/provider/dashboard', 5000);
   const items = data?.items || [];
   return (
-    <>
+    <div className="form-page provider-page">
       <PageHeader
         eyebrow="THE MARKETPLACE"
         title="Buyer requests"
@@ -1042,7 +1084,7 @@ export function ProviderRequests() {
           />
         </TableFooter>
       </TablePanel>
-    </>
+    </div>
   );
 }
 
@@ -1161,7 +1203,7 @@ export function ProviderOfferings() {
     }
   }
   return (
-    <>
+    <div className="form-page provider-page">
       <PageHeader
         eyebrow="PROVIDER SUPPLY"
         title="Instant offerings"
@@ -1211,181 +1253,189 @@ export function ProviderOfferings() {
       />
       {success && <SuccessBox>{success}</SuccessBox>}
       {suggestions && (
-        <section className="card offering-suggestions">
-          <div className="section-heading">
-            <h2>Suggested for your review</h2>
-            <button
-              className="icon-button"
-              onClick={() => setSuggestions(null)}
-              aria-label="Close offering suggestions"
-            >
-              <X size={17} />
-            </button>
-          </div>
-          {suggestions.proposals.length ? (
-            <div className="suggestion-list">
-              {suggestions.proposals.map((proposal, i) => (
-                <div key={i}>
-                  <div>
-                    <strong>{proposal.name}</strong>
-                    <p>{proposal.description}</p>
-                    <span>
-                      {money(proposal.priceCents)}{' '}
-                      {proposal.durationMinutes
-                        ? `· ${proposal.durationMinutes} minute example`
-                        : modes.wick === 'real'
-                          ? '· 30 minute example'
-                          : 'fixed fixture rental total'}
-                    </span>
-                  </div>
-                  <button
-                    className="button secondary small"
-                    onClick={() => {
-                      setDraft(proposal);
-                      setShowForm(true);
-                    }}
-                  >
-                    Review suggestion
-                    <ArrowRight size={14} />
-                  </button>
-                </div>
-              ))}
+        <FormPanel className="offering-suggestions">
+          <FormSection>
+            <div className="section-heading">
+              <h2>Suggested for your review</h2>
+              <button
+                className="icon-button"
+                onClick={() => setSuggestions(null)}
+                aria-label="Close offering suggestions"
+              >
+                <X size={17} />
+              </button>
             </div>
-          ) : (
-            <p className="muted-text">
-              No offering suggestions right now. Record unmatched demand or create an offering
-              manually.
-            </p>
-          )}
-          <ReceiptCard
-            receipt={suggestions.receipt}
-            mode={suggestions.mode}
-            modelCalled={suggestions.modelCalled}
-          />
-        </section>
+            {suggestions.proposals.length ? (
+              <div className="suggestion-list">
+                {suggestions.proposals.map((proposal, i) => (
+                  <div key={i}>
+                    <div>
+                      <strong>{proposal.name}</strong>
+                      <p>{proposal.description}</p>
+                      <span>
+                        {money(proposal.priceCents)}{' '}
+                        {proposal.durationMinutes
+                          ? `· ${proposal.durationMinutes} minute example`
+                          : modes.wick === 'real'
+                            ? '· 30 minute example'
+                            : 'fixed fixture rental total'}
+                      </span>
+                    </div>
+                    <button
+                      className="button secondary small"
+                      onClick={() => {
+                        setDraft(proposal);
+                        setShowForm(true);
+                      }}
+                    >
+                      Review suggestion
+                      <ArrowRight size={14} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="muted-text">
+                No offering suggestions right now. Record unmatched demand or create an offering
+                manually.
+              </p>
+            )}
+            <ReceiptCard
+              receipt={suggestions.receipt}
+              mode={suggestions.mode}
+              modelCalled={suggestions.modelCalled}
+            />
+          </FormSection>
+        </FormPanel>
       )}
       {showForm && (
-        <section className="card offering-form">
-          <div className="section-heading">
-            <h2>Review & publish an offering</h2>
-            <span className="quiet-badge">
-              {dashboard.data?.provider.simulated === false
-                ? 'Wick-managed allocation'
-                : 'Simulated demo supply'}
-            </span>
-          </div>
-          <form onSubmit={create}>
-            <div className="field-grid">
-              <label className="field" htmlFor="offering-name">
-                <span>Offering name</span>
-                <input
-                  id="offering-name"
-                  maxLength={100}
-                  value={draft.name}
-                  onChange={(e) => setDraft({ ...draft, name: e.target.value })}
-                  placeholder="A little room to explore"
-                  required
-                />
-              </label>
-              <label className="field" htmlFor="offering-config">
-                <span>Approved configuration</span>
-                <select
-                  id="offering-config"
-                  value={draft.catalogId}
-                  disabled={!dashboard.data || !approved.length}
-                  onChange={(e) =>
-                    setDraft({
-                      ...draft,
-                      catalogId: e.target.value,
-                      durationMinutes: undefined,
-                      priceBasis: undefined,
-                    })
-                  }
-                  required
-                >
-                  {!selected && (
-                    <option value={draft.catalogId} disabled>
-                      {dashboard.data ? 'No approved configurations' : 'Loading configurations…'}
-                    </option>
-                  )}
-                  {approved.map((item) => (
-                    <option key={item.id} value={item.id}>
-                      {item.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
+        <FormPanel className="offering-form">
+          <FormSection>
+            <div className="section-heading">
+              <h2>Review & publish an offering</h2>
+              <span className="quiet-badge">
+                {dashboard.data?.provider.simulated === false
+                  ? 'Wick-managed allocation'
+                  : 'Simulated demo supply'}
+              </span>
             </div>
-            <label className="field" htmlFor="offering-description">
-              <span>Description</span>
-              <textarea
-                id="offering-description"
-                rows={2}
-                maxLength={1000}
-                value={draft.description}
-                onChange={(e) => setDraft({ ...draft, description: e.target.value })}
-                placeholder="What this environment offers"
-                required
-              />
-            </label>
-            <div className="field-grid">
-              {modes.wick === 'fixture' ? (
-                <MoneyInput
-                  id="offering-price"
-                  label="Fixed rental price (USD)"
-                  value={draft.priceCents}
-                  onChange={(priceCents) => setDraft({ ...draft, priceCents })}
-                  min={1}
-                />
-              ) : (
-                <div className="field">
-                  <span>Reviewed 30 minute example</span>
-                  <strong>
-                    {publishPrice === undefined ? 'Quote unavailable' : money(publishPrice)}
-                  </strong>
-                  <p className="field-hint">
-                    Publishing stores this example total. A changed rate or policy is rejected for a
-                    fresh review. Each rental gets a duration-specific fixed quote. Binding bids may
-                    differ within your policy and the buyer’s budget. Your 85% share must cover the
-                    estimated upstream compute cost.
-                  </p>
-                </div>
-              )}
-              <div className="field">
-                <span>Supported durations</span>
-                <div className="supported-duration-tags">
-                  {approved
-                    .find((c) => c.id === draft.catalogId)
-                    ?.durationMinutes.map((n) => (
-                      <span key={n} className="quiet-badge">
-                        {n} min
-                      </span>
+            <form onSubmit={create}>
+              <div className="field-grid">
+                <label className="field" htmlFor="offering-name">
+                  <span>Offering name</span>
+                  <input
+                    id="offering-name"
+                    maxLength={100}
+                    value={draft.name}
+                    onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+                    placeholder="A little room to explore"
+                    required
+                  />
+                </label>
+                <label className="field" htmlFor="offering-config">
+                  <span>Approved configuration</span>
+                  <select
+                    id="offering-config"
+                    value={draft.catalogId}
+                    disabled={!dashboard.data || !approved.length}
+                    onChange={(e) =>
+                      setDraft({
+                        ...draft,
+                        catalogId: e.target.value,
+                        durationMinutes: undefined,
+                        priceBasis: undefined,
+                      })
+                    }
+                    required
+                  >
+                    {!selected && (
+                      <option value={draft.catalogId} disabled>
+                        {dashboard.data ? 'No approved configurations' : 'Loading configurations…'}
+                      </option>
+                    )}
+                    {approved.map((item) => (
+                      <option key={item.id} value={item.id}>
+                        {item.name}
+                      </option>
                     ))}
+                  </select>
+                </label>
+              </div>
+              <label className="field" htmlFor="offering-description">
+                <span>Description</span>
+                <textarea
+                  id="offering-description"
+                  rows={2}
+                  maxLength={1000}
+                  value={draft.description}
+                  onChange={(e) => setDraft({ ...draft, description: e.target.value })}
+                  placeholder="What this environment offers"
+                  required
+                />
+              </label>
+              <div className="field-grid">
+                {modes.wick === 'fixture' ? (
+                  <MoneyInput
+                    id="offering-price"
+                    label="Fixed rental price (USD)"
+                    value={draft.priceCents}
+                    onChange={(priceCents) => setDraft({ ...draft, priceCents })}
+                    min={1}
+                  />
+                ) : (
+                  <div className="field">
+                    <span>Reviewed 30 minute example</span>
+                    <strong>
+                      {publishPrice === undefined ? 'Quote unavailable' : money(publishPrice)}
+                    </strong>
+                    <p className="field-hint">
+                      Publishing stores this example total. A changed rate or policy is rejected for
+                      a fresh review. Each rental gets a duration-specific fixed quote. Binding bids
+                      may differ within your policy and the buyer’s budget. Your 85% share must
+                      cover the estimated upstream compute cost.
+                    </p>
+                  </div>
+                )}
+                <div className="field">
+                  <span>Supported durations</span>
+                  <div className="supported-duration-tags">
+                    {approved
+                      .find((c) => c.id === draft.catalogId)
+                      ?.durationMinutes.map((n) => (
+                        <span key={n} className="quiet-badge">
+                          {n} min
+                        </span>
+                      ))}
+                  </div>
                 </div>
               </div>
-            </div>
-            <ErrorBox error={quoteError} />
-            {publishPrice !== undefined && <ProviderRevenueSplit grossCents={publishPrice} />}
-            <div className="form-actions">
-              <button
-                className="button primary"
-                disabled={!!busy || !selected || !dashboard.data || publishPrice === undefined}
-              >
-                {busy === 'create' ? (
-                  <Spinner label="Publishing" />
-                ) : (
-                  <>
-                    <Check size={16} />
-                    Publish offering
-                  </>
-                )}
-              </button>
-              <button type="button" className="button secondary" onClick={() => setShowForm(false)}>
-                Cancel
-              </button>
-            </div>
-          </form>
-        </section>
+              <ErrorBox error={quoteError} />
+              {publishPrice !== undefined && <ProviderRevenueSplit grossCents={publishPrice} />}
+              <div className="form-actions">
+                <button
+                  className="button primary"
+                  disabled={!!busy || !selected || !dashboard.data || publishPrice === undefined}
+                >
+                  {busy === 'create' ? (
+                    <Spinner label="Publishing" />
+                  ) : (
+                    <>
+                      <Check size={16} />
+                      Publish offering
+                    </>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  className="button secondary"
+                  onClick={() => setShowForm(false)}
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+          </FormSection>
+        </FormPanel>
       )}
       <TablePanel label="Instant offerings">
         <TableToolbar>
@@ -1548,11 +1598,12 @@ export function ProviderOfferings() {
           future bids only.
         </p>
       </div>
-    </>
+    </div>
   );
 }
 
 export function ProviderEarnings() {
+  const { modes } = useSession();
   const { data, error, loading, reload, nextCursor, loadingMore, loadMore, moreError } =
     usePagedResource<ProviderEarning>('/api/provider/earnings');
   const items = data?.items ?? [];
@@ -1567,7 +1618,7 @@ export function ProviderEarnings() {
     0n,
   );
   return (
-    <>
+    <div className="form-page provider-page">
       <PageHeader
         eyebrow="PROVIDER EARNINGS"
         title="Earnings"
@@ -1583,7 +1634,11 @@ export function ProviderEarnings() {
           <CircleDollarSign size={23} />
         </span>
         <div>
-          <h3>Demo earnings · no payouts</h3>
+          <h3>
+            {modes.wick === 'fixture'
+              ? 'Demo earnings · no payouts'
+              : 'Recorded earnings · no payouts'}
+          </h3>
           <p>
             For instant rentals, each split is fixed with the accepted offer and recorded once the
             VM is ready. Your share is before compute costs, so it is not profit. No payments or
@@ -1698,7 +1753,7 @@ export function ProviderEarnings() {
         </TableFooter>
       </TablePanel>
       <AgreementCharges provider />
-    </>
+    </div>
   );
 }
 
@@ -1732,7 +1787,7 @@ export function ProviderActivity() {
   const { data, error, loading, reload, nextCursor, loadingMore, loadMore, moreError } =
     usePagedResource<ActivityItem>('/api/provider/activity', 5000);
   return (
-    <>
+    <div className="form-page provider-page">
       <PageHeader
         eyebrow="PROVIDER HISTORY"
         title="Activity"
@@ -1765,7 +1820,7 @@ export function ProviderActivity() {
           />
         </TableFooter>
       </TablePanel>
-    </>
+    </div>
   );
 }
 
@@ -1798,12 +1853,20 @@ export function AdminConfig({ onUpdated }: { onUpdated: () => void }) {
       setBusy('');
     }
   }
-  if (loading) return <Spinner label="Loading administration" />;
-  if (!data) return <ErrorBox error={error || 'Configuration unavailable.'} retry={reload} />;
+  if (loading || !data)
+    return (
+      <ProviderPageState title="Marketplace configuration" eyebrow="ADMINISTRATION">
+        {loading ? (
+          <Spinner label="Loading administration" />
+        ) : (
+          <ErrorBox error={error || 'Configuration unavailable.'} retry={reload} />
+        )}
+      </ProviderPageState>
+    );
   const modes = data.modes || session.modes,
     catalog = data.catalog || session.catalog;
   return (
-    <>
+    <div className="form-page provider-page">
       <PageHeader
         eyebrow="ADMINISTRATION"
         title="Marketplace configuration"
@@ -1944,121 +2007,123 @@ export function AdminConfig({ onUpdated }: { onUpdated: () => void }) {
         )}
         <TableFooter count={catalog.length} noun="configurations" />
       </TablePanel>
-      <div className="provider-two-column">
-        <section className="card">
-          <h2>Customer VM limit</h2>
-          <p className="muted-text">
-            Limit concurrent actual customer environments. Provisioning and pending cleanup continue
-            to count.
-          </p>
-          <form
-            onSubmit={(event) => {
-              event.preventDefault();
-              void act(
-                'limit',
-                () =>
-                  put('/api/admin/config', {
-                    maxConcurrentVms: limit ?? data.maxConcurrentVms ?? 20,
-                  }),
-                'Customer VM limit updated.',
-              );
-            }}
+      <FormLayout
+        aside={
+          <FormSummary
+            title="Providers"
+            description="Each account manages its own capacity and approved Wick configurations. Customer quotes stay fixed; provider earnings and upstream compute costs are tracked separately."
           >
-            <label className="field" htmlFor="vm-limit">
-              <span>Maximum concurrent VMs</span>
-              <input
-                id="vm-limit"
-                type="number"
-                min={1}
-                max={20}
-                step={1}
-                value={limit ?? data.maxConcurrentVms ?? 20}
-                onChange={(e) => setLimit(Number(e.target.value))}
-                required
-              />
-            </label>
-            <button className="button primary" disabled={!!busy}>
-              {busy === 'limit' ? (
-                <Spinner label="Saving" />
-              ) : (
-                <>
-                  <Save size={15} />
-                  Save limit
-                </>
-              )}
-            </button>
-          </form>
-        </section>
-        <section className="card">
-          <h2>Providers</h2>
-          <p className="muted-text">
-            These accounts manage demo supplier allocations backed by Wick; they are not independent
-            provider firms. Customer fixed quotes and Wick internal usage are separate. No payment
-            due.
-          </p>
-          <div className="admin-provider-list">
-            {data.providers?.map((provider, index) => (
-              <div key={provider.id}>
-                <span className={`provider-avatar provider-${index % 3}`}>
-                  {provider.name.slice(-1)}
-                </span>
-                <div>
-                  <strong>{provider.name}</strong>
-                  <span>
-                    {provider.simulated === false
-                      ? 'Wick-managed provider'
-                      : 'Simulated demo supplier'}
+            <div className="admin-provider-list">
+              {data.providers?.map((provider, index) => (
+                <div key={provider.id}>
+                  <span className={`provider-avatar provider-${index % 3}`}>
+                    {provider.name.slice(-1)}
                   </span>
+                  <div>
+                    <strong>{provider.name}</strong>
+                    <span>
+                      {provider.simulated === false
+                        ? 'Wick-managed provider'
+                        : 'Simulated demo supplier'}
+                    </span>
+                  </div>
                 </div>
-              </div>
-            ))}
+              ))}
+            </div>
+          </FormSummary>
+        }
+      >
+        <FormPanel>
+          <FormSection
+            title="Customer VM limit"
+            description="Limit concurrent actual customer environments. Provisioning and pending cleanup continue to count."
+          >
+            <form
+              onSubmit={(event) => {
+                event.preventDefault();
+                void act(
+                  'limit',
+                  () =>
+                    put('/api/admin/config', {
+                      maxConcurrentVms: limit ?? data.maxConcurrentVms ?? 20,
+                    }),
+                  'Customer VM limit updated.',
+                );
+              }}
+            >
+              <label className="field" htmlFor="vm-limit">
+                <span>Maximum concurrent VMs</span>
+                <input
+                  id="vm-limit"
+                  type="number"
+                  min={1}
+                  max={20}
+                  step={1}
+                  value={limit ?? data.maxConcurrentVms ?? 20}
+                  onChange={(e) => setLimit(Number(e.target.value))}
+                  required
+                />
+              </label>
+              <button className="button primary" disabled={!!busy}>
+                {busy === 'limit' ? (
+                  <Spinner label="Saving" />
+                ) : (
+                  <>
+                    <Save size={15} />
+                    Save limit
+                  </>
+                )}
+              </button>
+            </form>
+          </FormSection>
+        </FormPanel>
+      </FormLayout>
+      <FormPanel className="unresolved-card">
+        <FormSection>
+          <div className="section-heading">
+            <h2>Lifecycle recovery</h2>
+            <span>{data.unresolved?.length || 0} unresolved</span>
           </div>
-        </section>
-      </div>
-      <section className="card unresolved-card">
-        <div className="section-heading">
-          <h2>Lifecycle recovery</h2>
-          <span>{data.unresolved?.length || 0} unresolved</span>
-        </div>
-        {data.unresolved?.length ? (
-          <div className="recovery-list">
-            {data.unresolved.map((vm) => (
-              <div key={vm.id}>
-                <span className="icon-tile small neutral">
-                  <RefreshCw size={15} />
-                </span>
-                <div>
-                  <strong>{vm.catalogName || vm.id.slice(0, 8)}</strong>
-                  <span>
-                    {vm.failureReason || 'Awaiting confirmed upstream state'} ·{' '}
-                    {dateTime(vm.createdAt)}
+          {data.unresolved?.length ? (
+            <div className="recovery-list">
+              {data.unresolved.map((vm) => (
+                <div key={vm.id}>
+                  <span className="icon-tile small neutral">
+                    <RefreshCw size={15} />
                   </span>
+                  <div>
+                    <strong>{vm.catalogName || vm.id.slice(0, 8)}</strong>
+                    <span>
+                      {vm.failureReason || 'Awaiting confirmed upstream state'} ·{' '}
+                      {dateTime(vm.createdAt)}
+                    </span>
+                  </div>
+                  <StatusPill status={vm.status} />
+                  <button
+                    className="button secondary small"
+                    disabled={!!busy}
+                    onClick={() =>
+                      void act(
+                        vm.id,
+                        () => post(`/api/admin/vms/${vm.id}/reconcile`),
+                        'Reconciliation queued. Capacity remains held until cleanup is confirmed.',
+                      )
+                    }
+                  >
+                    {busy === vm.id ? 'Queuing…' : 'Reconcile'}
+                  </button>
                 </div>
-                <StatusPill status={vm.status} />
-                <button
-                  className="button secondary small"
-                  disabled={!!busy}
-                  onClick={() =>
-                    void act(
-                      vm.id,
-                      () => post(`/api/admin/vms/${vm.id}/reconcile`),
-                      'Reconciliation queued. Capacity remains held until cleanup is confirmed.',
-                    )
-                  }
-                >
-                  {busy === vm.id ? 'Queuing…' : 'Reconcile'}
-                </button>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <EmptyState
-            icon={<CheckCircle2 size={25} />}
-            title="Nothing needs recovery"
-            description="Uncertain lifecycle operations retain their reservation and appear here for reconciliation."
-          />
-        )}
-      </section>
-    </>
+              ))}
+            </div>
+          ) : (
+            <EmptyState
+              icon={<CheckCircle2 size={25} />}
+              title="Nothing needs recovery"
+              description="Uncertain lifecycle operations retain their reservation and appear here for reconciliation."
+            />
+          )}
+        </FormSection>
+      </FormPanel>
+    </div>
   );
 }

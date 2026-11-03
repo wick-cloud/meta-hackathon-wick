@@ -83,7 +83,7 @@ export function CreateDisk({
     }
   }
   return (
-    <MarketDialog titleId="create-disk-title" busy={busy} onClose={onClose}>
+    <MarketDialog titleId="create-disk-title" busy={busy} onClose={onClose} variant="drawer">
       <form className="disk-create-form" onSubmit={create}>
         <div className="disk-dialog-head">
           <h2 id="create-disk-title">Create disk</h2>
@@ -307,14 +307,22 @@ export function WorkspacePicker({
 }
 
 export function Disks() {
-  const options = useDiskOptions();
+  const options = useDiskOptions(),
+    navigate = useNavigate(),
+    [creating, setCreating] = useState(false);
   return (
-    <>
+    <div className="inventory-page disk-inventory">
       <PageHeader
         eyebrow="WORKSPACE"
         title="Disks"
         description="Persistent workspaces for your agents."
-      />
+      >
+        {options.data?.enabled && (
+          <button className="button primary" onClick={() => setCreating(true)}>
+            <Plus size={16} /> Create disk
+          </button>
+        )}
+      </PageHeader>
       {options.loading ? (
         <Spinner label="Loading disk availability" />
       ) : options.error ? (
@@ -327,15 +335,19 @@ export function Disks() {
           />
         </TablePanel>
       ) : (
-        <DiskInventory mode={options.data.mode} />
+        <DiskInventory mode={options.data.mode} onCreate={() => setCreating(true)} />
       )}
-    </>
+      {creating && (
+        <CreateDisk
+          onClose={() => setCreating(false)}
+          onCreated={(disk) => navigate('/disks/' + disk.id)}
+        />
+      )}
+    </div>
   );
 }
-function DiskInventory({ mode }: { mode: 'fixture' | 'real' }) {
-  const disks = usePagedResource<Disk>('/api/disks?limit=25', 5000),
-    navigate = useNavigate(),
-    [creating, setCreating] = useState(false);
+function DiskInventory({ mode, onCreate }: { mode: 'fixture' | 'real'; onCreate: () => void }) {
+  const disks = usePagedResource<Disk>('/api/disks?limit=25', 5000);
   return (
     <>
       <div className="disk-inventory-head">
@@ -343,9 +355,6 @@ function DiskInventory({ mode }: { mode: 'fixture' | 'real' }) {
           <LockKeyhole size={14} /> Only you can access these disks
           {mode === 'fixture' ? ' · Fixture demo' : ''}
         </p>
-        <button className="button primary" onClick={() => setCreating(true)}>
-          <Plus size={16} /> Create disk
-        </button>
       </div>
       <TablePanel label="Your disks">
         <TableTabs>
@@ -401,7 +410,7 @@ function DiskInventory({ mode }: { mode: 'fixture' | 'real' }) {
             title="Give your agents a place to keep their work."
             description="Create a disk, then use it when starting a VM or Studio task."
           >
-            <button className="button secondary" onClick={() => setCreating(true)}>
+            <button className="button secondary" onClick={onCreate}>
               <Plus size={15} /> Create your first disk
             </button>
           </TableState>
@@ -421,12 +430,6 @@ function DiskInventory({ mode }: { mode: 'fixture' | 'real' }) {
       </TablePanel>
       <ErrorBox error={(disks.data ? disks.error : '') || disks.moreError} />
       <p className="disk-footnote">Files stay on your disk after a VM stops.</p>
-      {creating && (
-        <CreateDisk
-          onClose={() => setCreating(false)}
-          onCreated={(disk) => navigate('/disks/' + disk.id)}
-        />
-      )}
     </>
   );
 }
@@ -470,7 +473,7 @@ export function DiskDetail({ id }: { id: string }) {
   const { attachments, workspaces } = detail.data;
   const usable = disk.status === 'ready' && !disk.cleanupPending && options.data?.enabled;
   return (
-    <>
+    <div className="inventory-page disk-detail">
       <Link href="/disks" className="back-link">
         <ArrowLeft size={15} /> All disks
       </Link>
@@ -734,6 +737,6 @@ export function DiskDetail({ id }: { id: string }) {
           </form>
         </MarketDialog>
       )}
-    </>
+    </div>
   );
 }
