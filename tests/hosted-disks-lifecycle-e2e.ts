@@ -2,7 +2,8 @@
  * Requires RUN_HOSTED_DISK_E2E=1 and existing runtime credentials in memory.
  * Never invokes native create, changes provider settings, or buys model tokens.
  * Use RUN_HOSTED_DISK_E2E_CLEANUP=1 with HOSTED_DISK_E2E_RUN_ID to recover an
- * interrupted run from its private, fsynced test-results journal.
+ * interrupted run from its private, fsynced verification-results journal.
+ * HOSTED_DISK_E2E_OUTPUT_DIR selects an existing journal directory for recovery.
  */
 import { randomBytes, randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
@@ -19,7 +20,9 @@ const routes = [
   { catalogId: 'modal:micro:auto', provider: 'modal', region: 'auto', folder: 'modal' },
 ] as const;
 const runId = process.env.HOSTED_DISK_E2E_RUN_ID ?? randomUUID();
-const output = resolve('test-results', `hosted-disks-lifecycle-${runId}`);
+const output = resolve(
+  process.env.HOSTED_DISK_E2E_OUTPUT_DIR ?? `verification-results/hosted-disks-lifecycle-${runId}`,
+);
 const journalPath = join(output, 'journal.jsonl');
 const reportPath = join(output, 'report.json');
 const recovering = process.env.RUN_HOSTED_DISK_E2E_CLEANUP === '1';

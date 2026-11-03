@@ -46,6 +46,7 @@ export default defineRailway(() => {
       MAX_CONCURRENT_VMS: preserve(),
       DISKS_ENABLED: preserve(),
       DISK_QUALIFIED_CATALOG_IDS: preserve(),
+      STUDIO_APPROVED_COMPUTE_CATALOG_IDS: preserve(),
       LOG_LEVEL: preserve(),
       SEED_BUYER_EMAIL: preserve(),
       SEED_BUYER_PASSWORD: preserve(),

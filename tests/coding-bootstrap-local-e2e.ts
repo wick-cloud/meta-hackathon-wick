@@ -12,7 +12,7 @@ assert.equal(process.env.RUN_CODING_BOOTSTRAP_E2E, '1', 'Set RUN_CODING_BOOTSTRA
 const runId = randomUUID();
 const container = `wick-coding-bootstrap-${runId}`;
 const image = `wick-coding-bootstrap:${runId}`;
-const output = resolve('test-results', `coding-bootstrap-${runId}.json`);
+const output = resolve('verification-results', `coding-bootstrap-${runId}.json`);
 const checks: string[] = [];
 const report: Record<string, unknown> = {
   runId,
@@ -142,7 +142,7 @@ CMD ["sleep", "infinity"]
     report.passed = false;
     process.exitCode = 1;
   }
-  mkdirSync(resolve('test-results'), { recursive: true });
+  mkdirSync(resolve('verification-results'), { recursive: true });
   writeFileSync(output, JSON.stringify(report, null, 2) + '\n', { mode: 0o600 });
   console.log(JSON.stringify({ ...report, report: output }));
 }

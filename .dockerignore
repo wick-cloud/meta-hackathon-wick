@@ -8,5 +8,6 @@ dist
 .railway
 coverage
 test-results
+verification-results
 playwright-report
 *.log

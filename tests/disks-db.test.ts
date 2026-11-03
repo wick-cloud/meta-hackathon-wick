@@ -244,6 +244,63 @@ describe.skipIf(!databaseUrl)('customer-owned disks (disposable PostgreSQL)', ()
     expect(spy.mock.calls).toHaveLength(calls);
     spy.mockRestore();
   });
+  it('discovers every approved native-mount shape under the wildcard and tracks catalog changes', async () => {
+    const originalMode = ctx.wick.mode;
+    const originalIds = ctx.config.diskQualifiedCatalogIds;
+    ctx.wick.mode = 'real';
+    ctx.config.diskQualifiedCatalogIds = ['*'];
+    const nativeIds = [
+      'e2b:micro:us',
+      'e2b:small:us',
+      'e2b:medium:us',
+      'modal:micro:auto',
+      'modal:small:auto',
+      'modal:medium:auto',
+      'modal:large:auto',
+    ];
+    const ids = [...nativeIds, 'daytona:small:us', 'e2b:large:us'];
+    try {
+      for (const id of ids) {
+        const [provider, profile, region] = id.split(':');
+        await pool.query(
+          "INSERT INTO broker_catalog(id,item,approved,source_mode) VALUES($1,$2,$3,'real')",
+          [
+            id,
+            {
+              id,
+              provider,
+              profile,
+              region,
+              capabilities: id.startsWith('daytona:')
+                ? ['shared-files']
+                : ['persistent-drives', 'shared-files'],
+            },
+            id !== 'e2b:large:us',
+          ],
+        );
+      }
+      expect(await diskOptions(ctx)).toEqual({
+        enabled: true,
+        mode: 'real',
+        eligibleCatalogIds: [...nativeIds].sort(),
+      });
+      await pool.query('UPDATE broker_catalog SET approved=false WHERE id=$1', [
+        'modal:large:auto',
+      ]);
+      expect((await diskOptions(ctx)).eligibleCatalogIds).not.toContain('modal:large:auto');
+      await pool.query(
+        "UPDATE broker_catalog SET item=jsonb_set(item,'{capabilities}','[\"shared-files\"]') WHERE id=$1",
+        ['e2b:medium:us'],
+      );
+      expect((await diskOptions(ctx)).eligibleCatalogIds).not.toContain('e2b:medium:us');
+      ctx.config.diskQualifiedCatalogIds = [];
+      expect((await diskOptions(ctx)).enabled).toBe(false);
+    } finally {
+      await pool.query('DELETE FROM broker_catalog WHERE id=ANY($1::text[])', [ids]);
+      ctx.wick.mode = originalMode;
+      ctx.config.diskQualifiedCatalogIds = originalIds;
+    }
+  });
   it('requires two qualified providers before enabling real creation', async () => {
     const original = ctx.wick.mode;
     ctx.wick.mode = 'real';

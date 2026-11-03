@@ -12,13 +12,21 @@ to exercise the UI, API, auctions and durable lifecycle without allocating paid
 storage or compute. Fixture terminal output is simulated; it does not certify a
 mounted filesystem or native provider behavior.
 
-Real enablement also requires `DISK_QUALIFIED_CATALOG_IDS`, a comma-separated
-operator-reviewed allowlist of approved catalog routes. A route must advertise
-`persistent-drives`. Qualify at least two different provider routes before
-advertising cross-provider shared storage. Neither the public schema nor a
-catalog capability is a substitute for this qualification. The production pilot
-has exercised `e2b:micro:us` and `modal:micro:auto`; see the observed checks and
-limits in [the production verification record](verification/disks-production-2026-11-02.md).
+Set `DISK_QUALIFIED_CATALOG_IDS=*` to enable every administrator-approved shape
+that advertises Wick's native `persistent-drives` capability. This automatically
+includes newly approved native-mount shapes without maintaining a second list
+of disk shape IDs. Normal provider, billing, ownership and mount-readiness checks
+still apply. A comma-separated list of exact IDs remains available for restricted
+rollouts; an empty value enables no real routes. At least two distinct eligible
+providers are required for real disk creation.
+
+`shared-files` alone is HTTPS file access, not a persistent filesystem mount.
+Those configurations remain excluded from disk-backed VM rentals. Studio's
+compute-execution approval is separate: native disk support does not establish
+that the guest can run the required namespace and network sandbox.
+
+The original pilot exercised `e2b:micro:us` and `modal:micro:auto`; see its observed
+checks and limits in [the production verification record](verification/disks-production-2026-11-02.md).
 
 For each provider pair, create one private drive with `attachmentMode: shared`,
 then start overlapping VMs using `workspaceDrive: { driveId, accessMode: mount }`.
@@ -28,8 +36,8 @@ reads through the shared-drive HTTPS API used for planning), atomic rename and
 required Git/filesystem operations. Terminate one VM while the other continues.
 After both terminate and their drive attachments disappear, attach another VM
 and compare file hashes. Test acknowledged writes surviving abrupt VM loss and
-document the upstream filesystem durability/consistency limits. Keep routes out
-of the allowlist until these checks pass.
+document the upstream filesystem durability/consistency limits. Operators can use
+the exact-ID rollout setting while evaluating a provider's new mount implementation.
 
 Opt-in probes live in `tests/disks-native-live-e2e.ts`,
 `tests/hosted-disk-readiness-e2e.ts`, `tests/hosted-disks-lifecycle-e2e.ts` and
@@ -40,10 +48,14 @@ only authentication sessions. The other probes require their explicit run flag:
 `RUN_NATIVE_DISK_E2E=1`, `RUN_HOSTED_DISK_E2E=1` or
 `RUN_HOSTED_STUDIO_DISK_E2E=1`. Hosted probes use `HOSTED_E2E_BASE_URL` and existing
 buyer credentials; no seeding or funding is performed. Paid probes journal exact
-resource identities under ignored `test-results/` before dispatching requests.
+resource identities under ignored `verification-results/` before dispatching requests,
+separate from Playwright's automatically cleared `test-results/` directory.
 They cap admissions and prices and clean up their own resources. Preserve their
 journals after interruption and use the cleanup-only switches documented at the
 top of each script; do not start a new run to replace an uncertain allocation.
+For journals created with the previous defaults, pass their original report path
+explicitly using the script's report-file environment variable when recovering
+(or `HOSTED_DISK_E2E_OUTPUT_DIR` for the hosted VM lifecycle probe).
 
 The local unprivileged sandbox regression is
 `RUN_CODING_BOOTSTRAP_E2E=1 npx tsx tests/coding-bootstrap-local-e2e.ts`.
