@@ -118,6 +118,20 @@
   }
 }
 @media (max-width: 600px) {
+  .demo-console .quiet-badge {
+    max-width: 100%;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  .demo-console .detail-row {
+    min-width: 0;
+    flex-wrap: wrap;
+  }
+  .demo-console .detail-row > strong {
+    max-width: 100%;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
   .demo-console .page-heading-actions {
     min-width: 0;
     max-width: 100%;
