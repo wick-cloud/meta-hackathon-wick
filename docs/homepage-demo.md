@@ -174,8 +174,8 @@ at most two dedicated disks per integration mode. Both demo choices use this sam
 pool. Existing customer disks are never adopted. Each disk is leased exclusively;
 the next visitor cannot claim it until native VM termination and zero native
 attachments are confirmed. Ending a run closes its token grant and VM but retains
-the demo disk. The next VM clears all workspace files, including hidden files and
-prior Studio journals, before installing its instructions or allowing terminal or
+the demo disk. The next VM clears all workspace files, including hidden customer files and
+prior Studio journals (preserving the reserved Archil mount-control entry), before installing its instructions or allowing terminal or
 model access. A failed or uncertain reset never exposes the terminal.
 
 Disk creation is removed from subsequent runs; the two real auction deadlines,

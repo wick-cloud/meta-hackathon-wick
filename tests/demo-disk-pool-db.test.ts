@@ -118,6 +118,8 @@ describe.skipIf(!url)('dedicated demo disk pool', () => {
       try {
         const workspace = join(base, 'workspace');
         mkdirSync(workspace);
+        mkdirSync(join(workspace, '.archil'));
+        writeFileSync(join(workspace, '.archil', 'mount-control'), 'native-control');
         const outside = join(base, 'outside');
         writeFileSync(outside, 'keep');
         writeFileSync(join(workspace, '.old-studio-journal'), 'private');
@@ -133,6 +135,9 @@ describe.skipIf(!url)('dedicated demo disk pool', () => {
           'WICK_DEMO_SCRIPT_READY',
         );
         expect(readFileSync(outside, 'utf8')).toBe('keep');
+        expect(readFileSync(join(workspace, '.archil', 'mount-control'), 'utf8')).toBe(
+          'native-control',
+        );
         expect(existsSync(join(workspace, '.old-studio-journal'))).toBe(false);
         expect(existsSync(join(workspace, 'old'))).toBe(false);
         expect(readFileSync(join(workspace, 'README.txt'), 'utf8')).toContain('demo');
