@@ -2,6 +2,9 @@ import type { CatalogItem, FixedQuote, ManagedPricing, RevenueShare } from './ty
 import { isMoneyCents, moneyUnits } from './money.js';
 
 export const PROVIDER_COMMISSION_BPS = 1500;
+export const MODAL_COMPUTE_PROMOTION_ID = 'modal-one-cent-v1';
+export const MODAL_COMPUTE_PROMOTION_PRICE_CENTS = 1;
+export const MODAL_COMPUTE_PROMOTION_MAX_UPSTREAM_MICROS = 1_000_000;
 export const MAX_RATE_AGE_MS = 15 * 60 * 1000;
 export const MAX_RATE_FUTURE_SKEW_MS = 60 * 1000;
 
@@ -129,6 +132,74 @@ export function acceptedBidQuote(
     revenueShare: revenueShare(price),
     priceBasis: 'provider-bid',
   };
+}
+
+/** A separate, bounded operator subsidy; ordinary acceptedBidQuote remains cost-covered. */
+export function sponsoredComputeQuote(
+  pricing: ManagedPricing,
+  durationMinutes: number,
+  price = MODAL_COMPUTE_PROMOTION_PRICE_CENTS,
+): FixedQuote {
+  const target = fixedQuote(commissionPricing(pricing), durationMinutes);
+  if (price !== MODAL_COMPUTE_PROMOTION_PRICE_CENTS)
+    throw new Error('The Modal compute promotion has a fixed one-cent buyer price.');
+  const upstream = BigInt(target.upstreamEstimatedComputeMicros);
+  if (upstream > BigInt(MODAL_COMPUTE_PROMOTION_MAX_UPSTREAM_MICROS))
+    throw new Error('The Modal compute promotion exceeds its upstream cost cap.');
+  const split = revenueShare(price);
+  const shortfall = upstream - BigInt(split.providerNetMicros);
+  return {
+    ...target,
+    totalPriceCents: price,
+    revenueShare: split,
+    priceBasis: 'operator-sponsored',
+    promotion: {
+      id: MODAL_COMPUTE_PROMOTION_ID,
+      fundedBy: 'operator-wick-account',
+      estimatedSubsidyMicros: (shortfall > 0n ? shortfall : 0n).toString(),
+      maxUpstreamComputeMicros: String(MODAL_COMPUTE_PROMOTION_MAX_UPSTREAM_MICROS),
+    },
+  };
+}
+
+/** Validate immutable attribution without consulting today's flag or rate freshness. */
+export function isSponsoredComputeQuote(value: unknown): value is FixedQuote {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const quote = value as FixedQuote;
+  if (
+    quote.model !== 'wick-provider-commission-v1' ||
+    quote.commissionBps !== PROVIDER_COMMISSION_BPS ||
+    quote.rateSource !== 'wick-customer-catalog' ||
+    typeof quote.rateRetrievedAt !== 'string' ||
+    !Number.isFinite(Date.parse(quote.rateRetrievedAt)) ||
+    quote.priceBasis !== 'operator-sponsored' ||
+    quote.currency !== 'USD' ||
+    quote.rounding !== 'ceil-once-to-cent-minimum-one-cent'
+  )
+    return false;
+  try {
+    const expected = sponsoredComputeQuote(
+      quote,
+      quote.durationSeconds / 60,
+      quote.totalPriceCents,
+    );
+    return (
+      quote.totalPriceCents === expected.totalPriceCents &&
+      quote.targetTotalPriceCents === expected.targetTotalPriceCents &&
+      quote.upstreamCostFloorCents === expected.upstreamCostFloorCents &&
+      quote.upstreamEstimatedComputeMicros === expected.upstreamEstimatedComputeMicros &&
+      quote.revenueShare?.commissionBps === expected.revenueShare!.commissionBps &&
+      quote.revenueShare?.grossCents === expected.revenueShare!.grossCents &&
+      quote.revenueShare?.brokerFeeMicros === expected.revenueShare!.brokerFeeMicros &&
+      quote.revenueShare?.providerNetMicros === expected.revenueShare!.providerNetMicros &&
+      quote.promotion?.id === expected.promotion!.id &&
+      quote.promotion?.fundedBy === expected.promotion!.fundedBy &&
+      quote.promotion?.estimatedSubsidyMicros === expected.promotion!.estimatedSubsidyMicros &&
+      quote.promotion?.maxUpstreamComputeMicros === expected.promotion!.maxUpstreamComputeMicros
+    );
+  } catch {
+    return false;
+  }
 }
 
 export function requireCurrentRate(pricing: ManagedPricing, catalog: CatalogItem) {

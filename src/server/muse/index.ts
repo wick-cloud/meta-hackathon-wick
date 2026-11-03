@@ -2,6 +2,8 @@ import type { FastifyInstance } from 'fastify';
 import { HttpError, type AppContext } from '../context.js';
 import { getCatalog, getProvider } from '../marketplace/data.js';
 import { offeringPriceCandidates, recentUnmetDemand } from './demand.js';
+import { managedPricing } from '../../shared/pricing.js';
+import { modalComputePromotionQuote } from '../marketplace/compute-promotion.js';
 import { catalogSatisfiesRequest } from '../marketplace/matching.js';
 
 /** A small per-user limit also bounds paid calls; no model loop or automatic retry. */
@@ -55,20 +57,48 @@ export async function registerMuse(app: FastifyInstance, ctx: AppContext) {
       ctx.wick.mode,
       allowed.map((item) => item.id),
     );
-    const pricedCandidates = offeringPriceCandidates(
-      allowed,
-      provider.policy,
-      ctx.wick.mode,
-    ).filter((candidate) => {
-      const item = allowed.find((entry) => entry.id === candidate.catalogId)!;
-      return demand.some((group) =>
-        catalogSatisfiesRequest(item, {
-          region: group.region,
-          duration_minutes: group.durationMinutes,
-          requirements: group.requirements,
-        }),
-      );
-    });
+    const pricedCandidates = allowed
+      .slice(0, 100)
+      .flatMap((item) => {
+        if (ctx.wick.mode === 'real' && ctx.config.modalComputePromotionEnabled) {
+          try {
+            const promotion = modalComputePromotionQuote(
+              ctx,
+              provider,
+              item,
+              managedPricing(item),
+              30,
+            );
+            if (
+              promotion &&
+              provider.policy.minimumPriceCents <= 1 &&
+              (provider.policy.maxPriceCents === undefined || provider.policy.maxPriceCents >= 1)
+            )
+              return [
+                {
+                  id: `${item.id}:30`,
+                  catalogId: item.id,
+                  durationMinutes: 30,
+                  totalPriceCents: 1,
+                },
+              ];
+          } catch {
+            return [];
+          }
+        }
+        return offeringPriceCandidates([item], provider.policy, ctx.wick.mode);
+      })
+      .filter((candidate) => {
+        const item = allowed.find((entry) => entry.id === candidate.catalogId)!;
+        return demand.some((group) =>
+          catalogSatisfiesRequest(item, {
+            region: group.region,
+            duration_minutes: group.durationMinutes,
+            requirements: group.requirements,
+          }),
+        );
+      })
+      .slice(0, 30);
     // Buyer identity, free text, credentials and other suppliers' policies never leave this route.
     return ctx.muse.proposeOfferings({
       demand,

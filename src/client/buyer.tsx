@@ -42,6 +42,8 @@ import {
   DEFAULT_PRICE_CENTS,
   museLabel,
   cloudRouteName,
+  compareComputeBids,
+  isSponsoredModalBid,
   regionName,
   dateTime,
   loadDraft,
@@ -96,9 +98,14 @@ import {
   FormDisclosure,
 } from './form-layout';
 import './compute-layout.css';
+import {
+  ComputePromotionBadge,
+  ComputePromotionNotice,
+  modalPromotionPreview,
+} from './compute-promotion';
 
 export function NewEnvironment() {
-  const { catalog, modes, user } = useSession(),
+  const { catalog, modes, user, computePromotion } = useSession(),
     navigate = useNavigate();
   const params = new URLSearchParams(window.location.search),
     copyId = params.get('copy'),
@@ -286,6 +293,16 @@ export function NewEnvironment() {
               ]}
             />
             <FormTotal label="Maximum total" value={money(budget)} note="USD · entire rental" />
+            <ComputePromotionNotice
+              available={
+                !!computePromotion &&
+                !pending &&
+                modes.wick === 'real' &&
+                approved.some((item) =>
+                  item.durationMinutes.some((duration) => !!modalPromotionPreview(item, duration)),
+                )
+              }
+            />
             <ErrorBox
               error={error || (!pending && !first ? configurationError : '')}
               retry={linkedDiskId && diskOptions.error ? diskOptions.reload : undefined}
@@ -476,12 +493,8 @@ export function AuctionPage({ id }: { id: string }) {
     );
   const { request, bids, vm } = data;
   const open = request.status === 'open';
-  const sorted = [...bids].sort(
-    (a, b) =>
-      a.totalPriceCents - b.totalPriceCents ||
-      a.createdAt.localeCompare(b.createdAt) ||
-      a.id.localeCompare(b.id),
-  );
+  const sorted = [...bids].sort(compareComputeBids);
+  const sponsored = sorted.find(isSponsoredModalBid);
   const ended = ['no_offers', 'failed', 'cancelled'].includes(request.status);
   const rentalEnded =
     !!vm &&
@@ -531,6 +544,7 @@ export function AuctionPage({ id }: { id: string }) {
         />
       </PageHeader>
       <ErrorBox error={error || actionError} retry={error ? reload : undefined} />
+      <ComputePromotionNotice pricing={vm?.pricing ?? sponsored?.pricing} />
       <div className="form-layout compute-auction-layout">
         <div>
           <FormPanel className={`auction-card ${open ? 'is-live' : ''}`}>
@@ -615,6 +629,7 @@ export function AuctionPage({ id }: { id: string }) {
                       {bid.cloudProvider === 'provider-blaxel' && (
                         <span>Underlying Wick route: {cloudRouteName(bid.cloudProvider)}</span>
                       )}
+                      {isSponsoredModalBid(bid) && <ComputePromotionBadge pricing={bid.pricing} />}
                     </div>
                     <div className="bid-price">
                       <strong>{money(bid.totalPriceCents)}</strong>
@@ -644,7 +659,10 @@ export function AuctionPage({ id }: { id: string }) {
             )}
             <div className="auction-footnote">
               <ShieldCheck size={15} />
-              Prices are fixed for the full rental. Ties are resolved by accepted time, then bid ID.
+              Prices are fixed for the full rental.{' '}
+              {sponsored
+                ? 'Equal-price ties favor sponsored Modal offers, then accepted time and bid ID.'
+                : 'Ties are resolved by accepted time, then bid ID.'}
             </div>
           </FormPanel>
           {vm && (
@@ -872,6 +890,7 @@ export function VMDetail({ id }: { id: string }) {
               : 'Only charged after confirmed readiness'}
         </span>
       </FormNotice>
+      {!scheduled && <ComputePromotionNotice pricing={vm.pricing} />}
       {vm.cleanupPending && (
         <FormNotice className="compute-warning" icon={<Clock3 size={16} />}>
           <span role="status">
@@ -1136,7 +1155,10 @@ export function Invoices() {
                       </Link>
                     </td>
                     <td>{shortDate(invoice.createdAt)}</td>
-                    <td className="money-cell numeric-cell">{money(amount(invoice))}</td>
+                    <td className="money-cell numeric-cell">
+                      {money(amount(invoice))}
+                      <ComputePromotionBadge pricing={invoice.pricing} />
+                    </td>
                     <td>
                       <TableStatus>No payment due</TableStatus>
                     </td>

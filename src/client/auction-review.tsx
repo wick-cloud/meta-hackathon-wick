@@ -13,6 +13,7 @@ import {
   useSession,
 } from './components';
 import { DiskPicker, useDiskOptions } from './disks';
+import { ComputePromotionNotice, modalPromotionPreview } from './compute-promotion';
 import {
   FormPage,
   FormLayout,
@@ -26,7 +27,7 @@ import {
 } from './form-layout';
 
 export function RequestReview() {
-  const { catalog, modes } = useSession(),
+  const { catalog, modes, computePromotion } = useSession(),
     navigate = useNavigate();
   const [draft, setDraft] = useState<Draft | null>(() => {
     const saved = loadDraft();
@@ -183,6 +184,15 @@ export function RequestReview() {
                 label="Maximum total"
                 value={money(draft.maxPriceCents)}
                 note="USD · entire rental"
+              />
+              <ComputePromotionNotice
+                available={
+                  !!computePromotion &&
+                  resourcesValid &&
+                  !diskPending &&
+                  modes.wick === 'real' &&
+                  matches.some((item) => !!modalPromotionPreview(item, draft.durationMinutes))
+                }
               />
               <button
                 type="submit"

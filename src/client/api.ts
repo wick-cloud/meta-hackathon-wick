@@ -1,4 +1,5 @@
 import { PROVIDER_REGISTRY } from '../shared/providers.js';
+import { isSponsoredComputeQuote } from '../shared/pricing';
 import { centsToUsd, formatMoney, formatMoneyMicros } from '../shared/money';
 import type {
   Actor,
@@ -24,6 +25,12 @@ export interface Session {
   modes: { wick: Mode; muse: Mode };
   catalog: CatalogItem[];
   commissionBps?: number;
+  computePromotion?: {
+    provider: 'modal';
+    totalPriceCents: 1;
+    tiePriority: 'modal';
+    fundedBy: 'operator-wick-account';
+  };
 }
 export interface EnvironmentRequest {
   id: string;
@@ -55,7 +62,19 @@ export interface Bid {
   cloudProvider?: string;
   region?: string;
   simulated?: boolean;
+  pricing?: FixedQuote;
 }
+
+export const isSponsoredModalBid = (bid: Bid) =>
+  bid.cloudProvider === 'modal' &&
+  bid.simulated === false &&
+  bid.totalPriceCents === 1 &&
+  isSponsoredComputeQuote(bid.pricing);
+
+/** Keep API order for remaining ties: its accepted timestamps preserve database microseconds. */
+export const compareComputeBids = (a: Bid, b: Bid) =>
+  a.totalPriceCents - b.totalPriceCents ||
+  Number(isSponsoredModalBid(b)) - Number(isSponsoredModalBid(a));
 export interface VM {
   id: string;
   diskId?: string | null;
@@ -103,6 +122,7 @@ export interface Invoice {
   revenueShare?: RevenueShare;
 }
 export interface ProviderEarning {
+  pricing?: FixedQuote;
   id: string;
   vmId: string;
   catalogName: string;
