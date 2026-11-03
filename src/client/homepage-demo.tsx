@@ -110,6 +110,7 @@ export function useHomepageDemo() {
     };
   }, [refresh]);
   const active = ongoing(data?.run?.status);
+  const blockedWithoutRun = !!data?.enabled && !data.run && !data.available;
   const cooldown = !!data?.cooldownUntil && Date.parse(data.cooldownUntil) > now;
   useEffect(() => {
     if (wasCooling.current && !cooldown && !actionLock.current) void refresh();
@@ -117,17 +118,18 @@ export function useHomepageDemo() {
   }, [cooldown, refresh]);
   useEffect(() => {
     // A paused demo still needs to show the cleanup of an existing run.
-    if (!active && (!data?.enabled || !cooldown)) return;
+    // A blocked no-run response can precede a pending start's guest cookie after navigation.
+    if (!active && (!data?.enabled || (!cooldown && !blockedWithoutRun))) return;
     const poll = () => {
       if (document.visibilityState !== 'hidden' && !actionLock.current) void refresh();
     };
-    const timer = setInterval(poll, active ? 2500 : 15000);
+    const timer = setInterval(poll, active || blockedWithoutRun ? 2500 : 15000);
     document.addEventListener('visibilitychange', poll);
     return () => {
       clearInterval(timer);
       document.removeEventListener('visibilitychange', poll);
     };
-  }, [data?.enabled, active, cooldown, refresh]);
+  }, [data?.enabled, active, cooldown, blockedWithoutRun, refresh]);
   useEffect(() => {
     if (!active && !cooldown) return;
     const timer = setInterval(() => setNow(Date.now() + offset.current), 1000);
@@ -255,7 +257,8 @@ export function DemoOverview({ demo }: { demo: HomepageDemo }) {
     <section id="demo-overview" className="demo-overview" aria-labelledby="demo-overview-title">
       <div className="demo-card-top">
         <span>
-          <i className="demo-live-dot" /> HACKATHON LIVE DEMO
+          <i className="demo-live-dot" />{' '}
+          {data?.mode === 'fixture' ? 'FIXTURE DEMO PREVIEW' : 'HACKATHON LIVE DEMO'}
         </span>
         <span className="demo-sponsored">Sponsored</span>
       </div>
@@ -265,8 +268,13 @@ export function DemoOverview({ demo }: { demo: HomepageDemo }) {
           “Hello, Muse.”
         </h2>
         <p>
-          A real VM. Real Meta inference.
-          <br />A small experiment, on us.
+          {data?.mode === 'fixture'
+            ? 'A simulated VM. Fixture model responses.'
+            : 'A real VM. Real Meta inference.'}
+          <br />
+          {data?.mode === 'fixture'
+            ? 'Explore the flow without live resources.'
+            : 'A small experiment, on us.'}
         </p>
       </div>
       <div className="demo-included">

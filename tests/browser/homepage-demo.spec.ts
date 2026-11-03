@@ -140,6 +140,8 @@ async function fixture(page: Page, initial = state()) {
     startFailure = false;
   const writes: { path: string; body: Record<string, unknown> }[] = [];
   let reads = 0;
+  let startHold: Promise<void> | null = null;
+  let releaseStart: (() => void) | null = null;
   await page.route('**/api/**', async (route) => {
     const request = route.request(),
       path = new URL(request.url()).pathname;
@@ -160,6 +162,19 @@ async function fixture(page: Page, initial = state()) {
       current = state(receipt('auction'));
       current.run!.kind = request.postDataJSON().kind ?? 'terminal';
       if (current.run!.kind === 'studio') current.run!.studio = studioReceipt('waiting').studio;
+      if (startHold) {
+        const started = current;
+        current = {
+          ...current,
+          available: false,
+          run: null,
+          reason: 'A demo is already active for this browser or connection.',
+        };
+        await startHold;
+        current = started;
+        startHold = null;
+        releaseStart = null;
+      }
       return route.fulfill({ json: current });
     }
     if (path === '/api/demo/end') {
@@ -201,6 +216,12 @@ async function fixture(page: Page, initial = state()) {
     failStarts: (fail: boolean) => {
       startFailure = fail;
     },
+    holdStart: () => {
+      startHold = new Promise<void>((resolve) => {
+        releaseStart = resolve;
+      });
+    },
+    releaseStart: () => releaseStart?.(),
     reads: () => reads,
   };
 }
@@ -273,6 +294,77 @@ for (const anchor of ['live-demo', 'demo-overview']) {
     expect(f.writes).toEqual([]);
   });
 }
+
+test('a late start resumes after home navigation by polling the blocked no-run state without buying again', async ({
+  page,
+}) => {
+  const f = await fixture(page);
+  f.holdStart();
+  try {
+    await page.goto('/demos');
+    await page.getByRole('button', { name: 'Start Muse Studio demo', exact: true }).click();
+    await expect(
+      page.getByRole('button', { name: 'Starting your demo', exact: true }),
+    ).toBeDisabled();
+    await page.getByRole('link', { name: 'Wick Broker home', exact: true }).click();
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText(
+      'Compute and AI. On your terms.',
+    );
+    const homeReads = f.reads();
+    await page.waitForTimeout(3000);
+    expect(f.reads()).toBe(homeReads);
+    await page.getByRole('link', { name: 'Explore live demos', exact: true }).click();
+    await expect(
+      page.getByText('A demo is already active for this browser or connection.', { exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole('button', { name: 'Check demo status', exact: true }),
+    ).toBeEnabled();
+    await expect(page.getByRole('button', { name: 'Try live demo', exact: true })).toBeDisabled();
+    await expect(
+      page.getByRole('button', { name: 'Start Muse Studio demo', exact: true }),
+    ).toBeDisabled();
+    f.releaseStart();
+    await expect(page.getByRole('link', { name: 'Return to Muse Studio demo' })).toBeVisible();
+    expect(f.writes).toHaveLength(1);
+    expect(f.writes[0]!.path).toBe('/api/demo/start');
+    expect(f.writes[0]!.body.kind).toBe('studio');
+  } finally {
+    f.releaseStart();
+  }
+});
+
+test('the no-run status check discovers a saved run without starting a purchase', async ({
+  page,
+}) => {
+  const f = await fixture(page);
+  await page.goto('/demos');
+  await expect(page.getByRole('button', { name: 'Check demo status', exact: true })).toBeEnabled();
+  f.set(state(studioReceipt('passed')));
+  await page.getByRole('button', { name: 'Check demo status', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Your guided Studio workspace.' })).toBeVisible();
+  expect(f.writes).toEqual([]);
+});
+
+test('fixture demos are explicitly simulated before either demo starts', async ({ page }) => {
+  const f = await fixture(page);
+  await page.goto('/demos');
+  await expect(
+    page.getByText('Fixture preview · Resources, model responses, and execution are simulated.', {
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(page.getByText(/A simulated VM\. Fixture model responses\./)).toBeVisible();
+  await expect(
+    page.getByText(/Preview a Python Hello World task with fixture source, simulated VM execution/),
+  ).toBeVisible();
+  await expect(page.getByText(/A real VM\. Real Meta inference\./)).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Try live demo', exact: true })).toBeEnabled();
+  await expect(
+    page.getByRole('button', { name: 'Start Muse Studio demo', exact: true }),
+  ).toBeEnabled();
+  expect(f.writes).toEqual([]);
+});
 
 test('Studio starts explicitly with its mode and an uncertain retry keeps the same operation', async ({
   page,

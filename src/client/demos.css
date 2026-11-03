@@ -41,6 +41,14 @@
   margin-bottom: 44px;
   align-items: stretch;
 }
+.demos-status-action {
+  display: flex;
+  justify-content: flex-end;
+  margin: 0 0 18px;
+}
+.broker-demos > main > .demo-fixture-note {
+  margin: 0 0 18px;
+}
 .demos-terminal-choice {
   min-width: 0;
 }
