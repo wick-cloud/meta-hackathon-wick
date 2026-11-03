@@ -3,12 +3,12 @@ import type { AppContext } from '../context.js';
 import type { Row } from '../marketplace/data.js';
 import { transaction } from '../marketplace/db.js';
 import { createDisk } from '../disks/service.js';
-import { demoActor, demoModeAllowed } from './service.js';
+import { DEMO_MAX_ACTIVE_RUNS, demoActor, demoModeAllowed } from './service.js';
 
 /** Only newly created, dedicated demo disks enter this bounded pool. */
 export async function warmDemoDisks(ctx: AppContext) {
   if (!ctx.config.liveDemoReuseDisks || !demoModeAllowed(ctx)) return;
-  for (const slot of [1, 2]) {
+  for (let slot = 1; slot <= DEMO_MAX_ACTIVE_RUNS; slot++) {
     const entry = await transaction(ctx.pool, async (db) => {
       await db.query("SELECT pg_advisory_xact_lock(hashtext('demo-disk-pool'))");
       let row = (

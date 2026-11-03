@@ -20,6 +20,8 @@ import { INFERENCE_PROVIDERS, type InferenceProvider } from '../../shared/infere
 
 export const DEMO_QUEUE = 'broker-homepage-demo';
 export const DEMO_CATALOG_ID = 'modal:micro:auto';
+/** Admitted runs retain a global slot until resource cleanup is confirmed. */
+export const DEMO_MAX_ACTIVE_RUNS = 5;
 export const DEMO_LIMITS = {
   durationMinutes: 15,
   cooldownMinutes: 20,
@@ -28,6 +30,8 @@ export const DEMO_LIMITS = {
   inputTokens: 5000,
   outputTokens: 2048,
 } as const;
+/** Runs one network connection may have active or cooling down at once. */
+export const DEMO_NETWORK_RUNS = 3;
 export const DEMO_RESERVATION_CENTS = 50;
 export const DEMO_DAILY_CENTS = 500;
 export const DEMO_TOKEN_CENTS = 5;
@@ -160,25 +164,87 @@ async function gate(
     await db.query(
       `SELECT
       (SELECT count(*)::int FROM broker_demo_runs WHERE ended_at IS NULL) active,
-      EXISTS(SELECT 1 FROM broker_demo_runs d LEFT JOIN broker_demo_visitors v ON v.id=d.visitor_id
-        WHERE (v.secret_digest=$1 OR d.ip_digest=$2) AND d.ended_at IS NULL) own_active,
-      (SELECT max(d.cooldown_until) FROM broker_demo_runs d LEFT JOIN broker_demo_visitors v ON v.id=d.visitor_id
-        WHERE v.secret_digest=$1 OR d.ip_digest=$2) cooldown_until,
+      EXISTS(SELECT 1 FROM broker_demo_runs d JOIN broker_demo_visitors v ON v.id=d.visitor_id
+        WHERE v.secret_digest=$1 AND d.ended_at IS NULL) own_active,
+      (SELECT max(d.cooldown_until) FROM broker_demo_runs d JOIN broker_demo_visitors v ON v.id=d.visitor_id
+        WHERE v.secret_digest=$1) own_cooldown_until,
+      (SELECT count(*)::int FROM broker_demo_runs
+        WHERE ip_digest=$2 AND (ended_at IS NULL OR cooldown_until>clock_timestamp())) network_runs,
+      (SELECT count(*)::int FROM broker_demo_runs WHERE ip_digest=$2 AND ended_at IS NULL) network_active,
+      (SELECT min(cooldown_until) FROM broker_demo_runs
+        WHERE ip_digest=$2 AND ended_at IS NOT NULL AND cooldown_until>clock_timestamp()) network_free_at,
       (SELECT reserved_cents FROM broker_demo_days WHERE day=(clock_timestamp() AT TIME ZONE 'America/New_York')::date) reserved_cents,
       clock_timestamp() at`,
       [identity?.visitorDigest ?? null, identity?.ipDigest ?? ipDigest ?? null],
     )
   ).rows[0];
+  // A browser gets one run, then its own cooldown. A shared network (one venue Wi-Fi)
+  // gets DEMO_NETWORK_RUNS runs that are active or cooling down, so clearing cookies
+  // still cannot reset a network's allowance.
+  const ownCooldown = state.own_cooldown_until && state.own_cooldown_until > state.at;
+  const networkFull = state.network_runs >= DEMO_NETWORK_RUNS;
+  const cooldown_until = ownCooldown
+    ? state.own_cooldown_until
+    : networkFull && state.network_active < DEMO_NETWORK_RUNS
+      ? state.network_free_at
+      : null;
   const reason = state.own_active
-    ? 'A demo is already active for this browser or connection.'
-    : state.cooldown_until && state.cooldown_until > state.at
+    ? 'A demo is already active for this browser.'
+    : ownCooldown
       ? 'Your next demo is available after the cooldown.'
-      : state.active >= 2
-        ? 'Both demo slots are in use. Please try again after a demo ends.'
-        : Number(state.reserved_cents ?? 0) + DEMO_RESERVATION_CENTS > DEMO_DAILY_CENTS
-          ? 'Today’s demo budget is reserved. Please return after midnight Eastern time.'
-          : null;
-  return { ...state, reason };
+      : networkFull
+        ? 'This network has used its demo allowance. Please try again after a demo ends or cools down.'
+        : state.active >= DEMO_MAX_ACTIVE_RUNS
+          ? `All ${DEMO_MAX_ACTIVE_RUNS} demo slots are in use. Please try again after a demo ends.`
+          : Number(state.reserved_cents ?? 0) + DEMO_RESERVATION_CENTS > DEMO_DAILY_CENTS
+            ? 'Today’s demo budget is reserved. Please return after midnight Eastern time.'
+            : null;
+  return { ...state, cooldown_until, reason };
+}
+
+/** Called in a transaction; the lock also protects any following admission. */
+async function resumeDemoStart(
+  db: PoolClient,
+  identity: DemoIdentity,
+  operationKey: string,
+  kind: 'terminal' | 'studio',
+  demoName: string,
+): Promise<Row | undefined> {
+  await db.query("SELECT pg_advisory_xact_lock(hashtext('homepage-demo-admission'))");
+  const prior = (
+    await db.query(
+      `SELECT d.*,d.kind AS requested_kind,d.demo_name AS requested_name
+      FROM broker_demo_runs d JOIN broker_demo_visitors v ON v.id=d.visitor_id
+      WHERE v.secret_digest=$1 AND d.operation_key=$2
+      UNION ALL
+      SELECT d.*,r.requested_kind,r.requested_name
+      FROM broker_demo_start_replays r JOIN broker_demo_visitors v ON v.id=r.visitor_id
+      JOIN broker_demo_runs d ON d.id=r.run_id AND d.visitor_id=r.visitor_id
+      WHERE v.secret_digest=$1 AND r.operation_key=$2 LIMIT 1`,
+      [identity.visitorDigest, operationKey],
+    )
+  ).rows[0];
+  if (prior) {
+    if (prior.requested_kind !== kind || prior.requested_name !== demoName)
+      throw new HttpError(409, 'This operation key belongs to a different demo kind.');
+    return prior;
+  }
+  const active = (
+    await db.query(
+      `SELECT d.* FROM broker_demo_runs d JOIN broker_demo_visitors v ON v.id=d.visitor_id
+      WHERE v.secret_digest=$1 AND d.ended_at IS NULL`,
+      [identity.visitorDigest],
+    )
+  ).rows[0];
+  if (!active) return undefined;
+  // Remember the requested inputs as well as the actual resumed run: it may have
+  // another fixed kind/name, and a delayed retry must never admit a new run.
+  await db.query(
+    `INSERT INTO broker_demo_start_replays(visitor_id,operation_key,requested_kind,requested_name,run_id)
+    VALUES($1,$2,$3,$4,$5)`,
+    [active.visitor_id, operationKey, kind, demoName, active.id],
+  );
+  return active;
 }
 
 export async function startDemo(
@@ -200,35 +266,18 @@ export async function startDemo(
     );
   clientOperationKey(operationKey, true);
   if (!demoModeAllowed(ctx)) throw new HttpError(409, 'The live demo is unavailable.');
-  // An accepted retry is read-only even if a provider subsequently becomes unavailable.
-  const prior = (
-    await ctx.pool.query(
-      `SELECT d.* FROM broker_demo_runs d JOIN broker_demo_visitors v ON v.id=d.visitor_id
-    WHERE v.secret_digest=$1 AND d.operation_key=$2`,
-      [identity.visitorDigest, operationKey],
-    )
-  ).rows[0];
-  if (prior) {
-    if (prior.kind !== kind || prior.demo_name !== demoName)
-      throw new HttpError(409, 'This operation key belongs to a different demo kind.');
-    return prior;
-  }
+  // Recover accepted starts before checking purchase prerequisites. Persist fresh
+  // keys used to resume a run under the same lock as admission and cleanup.
+  const resumed = await transaction(ctx.pool, (db) =>
+    resumeDemoStart(db, identity, operationKey, kind, demoName),
+  );
+  if (resumed) return resumed;
   const prerequisites = await demoPrerequisites(ctx);
   if (prerequisites.reason) throw new HttpError(409, prerequisites.reason);
   return transaction(ctx.pool, async (db) => {
-    await db.query("SELECT pg_advisory_xact_lock(hashtext('homepage-demo-admission'))");
-    const existing = (
-      await db.query(
-        `SELECT d.* FROM broker_demo_runs d JOIN broker_demo_visitors v ON v.id=d.visitor_id
-      WHERE v.secret_digest=$1 AND d.operation_key=$2`,
-        [identity.visitorDigest, operationKey],
-      )
-    ).rows[0];
-    if (existing) {
-      if (existing.kind !== kind || existing.demo_name !== demoName)
-        throw new HttpError(409, 'This operation key belongs to a different demo kind.');
-      return existing;
-    }
+    // A competing start may have admitted this browser while prerequisites ran.
+    const resumed = await resumeDemoStart(db, identity, operationKey, kind, demoName);
+    if (resumed) return resumed;
     const eligibility = await gate(db, identity);
     if (eligibility.reason)
       throw Object.assign(new HttpError(429, eligibility.reason), { retryAfter: 60 });

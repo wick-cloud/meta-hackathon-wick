@@ -39,16 +39,25 @@ export function createDemoIdentity(
   reply: FastifyReply,
 ): DemoIdentity {
   const prior = demoIdentity(ctx, request);
-  if (prior) return prior;
-  const secret = randomBytes(32).toString('base64url');
+  // Refresh the existing cookie before admission, without changing its identity.
+  // An old cookie must not expire while its newly started VM is still running.
+  const secret = prior
+    ? (request.headers.cookie ?? '')
+        .split(';')
+        .map((value) => value.trim())
+        .find((value) => value.startsWith(`${DEMO_COOKIE}=`))!
+        .slice(DEMO_COOKIE.length + 1)
+    : randomBytes(32).toString('base64url');
   reply.header(
     'Set-Cookie',
     `${DEMO_COOKIE}=${secret}; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400${ctx.config.nodeEnv === 'production' ? '; Secure' : ''}`,
   );
-  return {
-    visitorDigest: createHash('sha256').update(secret).digest('hex'),
-    ipDigest: demoIpDigest(ctx, request),
-  };
+  return (
+    prior ?? {
+      visitorDigest: createHash('sha256').update(secret).digest('hex'),
+      ipDigest: demoIpDigest(ctx, request),
+    }
+  );
 }
 /** Deliberately scoped to terminal authorization; never used by normal application APIs. */
 export async function demoTerminalActor(

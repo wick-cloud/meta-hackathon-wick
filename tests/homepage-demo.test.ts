@@ -98,9 +98,11 @@ describe('anonymous demo identity', () => {
     expect(cookie).toContain('; Secure');
     const received = request({ cookie: cookie.split(';')[0]! });
     expect(demoIdentity(ctx, received)).toEqual(issued);
+    const originalCookie = cookie;
     cookie = '';
     expect(createDemoIdentity(ctx, received, reply)).toEqual(issued);
-    expect(cookie).toBe('');
+    expect(cookie).toBe(originalCookie);
+    expect(cookie).toContain('Max-Age=86400');
   });
 });
 

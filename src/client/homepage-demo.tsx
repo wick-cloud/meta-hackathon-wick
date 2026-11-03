@@ -170,17 +170,27 @@ export function useHomepageDemo() {
           setKeyUncertain(false);
         }
       } else {
-        const next = await post<DemoState>(`/api/demo/${action}`, {
-          operationKey: action === 'start' ? startOperation.current : endOperation.current,
-          ...(action === 'start'
-            ? {
-                kind: attemptedKind.current,
-                ...(attemptedKind.current === 'studio' && attemptedName.current
-                  ? { demoName: attemptedName.current }
-                  : {}),
-              }
-            : {}),
-        });
+        const submit = async () => {
+          // Save the guest cookie before allocating resources so a lost start response
+          // can still be recovered by this browser's next status read.
+          if (action === 'start') await post<null>('/api/demo/session');
+          return post<DemoState>(`/api/demo/${action}`, {
+            operationKey: action === 'start' ? startOperation.current : endOperation.current,
+            ...(action === 'start'
+              ? {
+                  kind: attemptedKind.current,
+                  ...(attemptedKind.current === 'studio' && attemptedName.current
+                    ? { demoName: attemptedName.current }
+                    : {}),
+                }
+              : {}),
+          });
+        };
+        // Serialize first starts across tabs so they register the same browser identity.
+        const next =
+          action === 'start' && navigator.locks?.request
+            ? await navigator.locks.request('wick-demo-start', submit)
+            : await submit();
         if (mounted.current) {
           accept(next);
           if (action === 'start') {
@@ -374,6 +384,12 @@ export function DemoOverview({ demo, children }: { demo: HomepageDemo; children?
 /** Shared availability for both demos: they share one session, lease and cooldown. */
 export function DemoAvailability({ demo }: { demo: HomepageDemo }) {
   const { data, loading, active, cooldown, now } = demo;
+  const reason =
+    !data?.run && data?.reason === 'A demo is already active for this browser or connection.'
+      ? 'A demo is active in another browser session on this network. Open the browser or profile where it was started to view it.'
+      : !data?.run && data?.reason?.startsWith('This network has used its demo allowance.')
+        ? `${data.reason} If you started a demo, open its original browser or profile to view it.`
+        : data?.reason || 'Live demo is currently unavailable.';
   return (
     <div className="demo-availability" role="status">
       {loading ? (
@@ -386,7 +402,11 @@ export function DemoAvailability({ demo }: { demo: HomepageDemo }) {
         </>
       ) : cooldown ? (
         <>
-          <Clock3 size={13} /> Next demo in {clock(data?.cooldownUntil, now)}
+          <Clock3 size={13} />
+          <span>
+            {!data?.run && 'Another browser session on this network used the demo allowance. '}
+            Next demo in {clock(data?.cooldownUntil, now)}
+          </span>
         </>
       ) : data?.available && data.enabled ? (
         <>
@@ -394,7 +414,7 @@ export function DemoAvailability({ demo }: { demo: HomepageDemo }) {
         </>
       ) : (
         <>
-          <Clock3 size={13} /> {data?.reason || 'Live demo is currently unavailable.'}
+          <Clock3 size={13} /> {reason}
         </>
       )}
     </div>
