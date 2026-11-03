@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { inflateSync } from 'node:zlib';
 import { Pool } from 'pg';
 import { beforeAll, beforeEach, afterAll, describe, it, expect, vi } from 'vitest';
+import { isolatedPool } from './fixtures/isolated-pool.js';
 import { migrate, transaction } from '../src/server/db.js';
 import { loadConfig } from '../src/server/config.js';
 import type { AppContext } from '../src/server/context.js';
@@ -196,6 +197,7 @@ describe.skipIf(!url)('Studio task budget and lifecycle (disposable Postgres)', 
     } as unknown as AppContext;
   });
   beforeEach(async () => {
+    ctx.pool = isolatedPool(pool);
     await pool.query(
       'TRUNCATE "user",broker_catalog,broker_providers,broker_inference_grants,broker_credit_wallets,broker_credit_ledger CASCADE',
     );

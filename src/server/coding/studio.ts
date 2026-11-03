@@ -71,6 +71,7 @@ import { availableForBids } from '../marketplace/policy.js';
 import { terminateVm } from '../marketplace/lifecycle.js';
 import { createCodingJob, controlCoding, wakeCoding, seal, open, ownerOnly } from './service.js';
 import { verifyPublicRepository, publicRepository, baseRefSchema } from './contracts.js';
+import { withRepositoryPreparation } from './preparation.js';
 import { diskCatalogEligible } from '../disks/service.js';
 import { reserveWorkspace, workspaceContext } from './workspaces.js';
 import {
@@ -369,7 +370,9 @@ export async function createStudioTask(
     throw new HttpError(400, 'Continuing a workspace keeps its existing repository.');
   const verified = previous
     ? { url: previous.repository_url, sha: previous.commit_sha, ref: previous.commit_sha }
-    : await verify(repo.url, input.baseRef);
+    : await withRepositoryPreparation(ctx.pool, actor.id, 'studio', () =>
+        verify(repo.url, input.baseRef),
+      );
   const id = randomUUID();
   const task = await transaction(ctx.pool, async (db) => {
     await authority(db, actor);

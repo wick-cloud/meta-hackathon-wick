@@ -18,7 +18,7 @@ Supply values privately; never paste credentials into commands, reports, Git, or
 - `WICK_API_KEY`, `WICK_ORGANIZATION_ID`, `WICK_GROUP_ID`
 - `WICK_API_BASE` (optional; official API by default)
 - `SCALE_APP_URL` (a loopback HTTP origin on an unused port other than 3000)
-- `SCALE_JOURNAL` (a new absolute JSONL path inside `/home/user/wick-workspace/.broker-run/real-wick-20261028`)
+- `SCALE_JOURNAL` (a new absolute JSONL path inside `../.broker-run/real-wick-20261028`, resolved from the repository working directory)
 - `SCALE_APPROVED_PROVIDER`, `SCALE_APPROVED_PROFILE`, `SCALE_APPROVED_REGION`, `SCALE_APPROVED_CATALOG_ID` (optional reviewed overrides)
 - `SCALE_LIVE_APPROVED` (required **only** for `run`, literal `20-real-vms-15-minutes`)
 

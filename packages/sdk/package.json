@@ -3,7 +3,7 @@
   "version": "0.5.0",
   "description": "Typed customer access to Wick Broker orders, supply and terminals",
   "type": "module",
-  "license": "UNLICENSED",
+  "license": "MIT",
   "engines": {
     "node": ">=22.12.0"
   },

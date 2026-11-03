@@ -109,6 +109,37 @@ describe.skipIf(!databaseUrl)('Real Better Auth invite and role boundary', () =>
       await railwayApp.close();
     }
   });
+  it('ignores supplied IP headers when direct ingress has not opted into proxy trust', async () => {
+    const directApp = Fastify();
+    const config = loadConfig({
+      NODE_ENV: 'test',
+      DATABASE_URL: databaseUrl!,
+      BETTER_AUTH_SECRET: 'auth-test-secret-with-more-than-32-characters',
+      WICK_MODE: 'fixture',
+      MUSE_MODE: 'fixture',
+      APP_URL: 'http://localhost:3000',
+    });
+    await registerAuth(directApp, createAuth(config, pool), config);
+    await directApp.ready();
+    const signIn = (attempt: number) =>
+      directApp.inject({
+        method: 'POST',
+        url: '/api/auth/sign-in/email',
+        remoteAddress: '192.0.2.42',
+        headers: {
+          'x-real-ip': `198.51.100.${attempt}`,
+          'x-forwarded-for': `203.0.113.${attempt}`,
+        },
+        payload: { email: 'invited@test.invalid', password: 'incorrect-password' },
+      });
+    try {
+      for (let attempt = 1; attempt <= 10; attempt++)
+        expect((await signIn(attempt)).statusCode).toBe(401);
+      expect((await signIn(11)).statusCode).toBe(429);
+    } finally {
+      await directApp.close();
+    }
+  });
   it('logs in an explicitly seeded account with an HttpOnly session and database role', async () => {
     const response = await app.inject({
       method: 'POST',

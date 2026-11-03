@@ -11,3 +11,15 @@ test-results
 verification-results
 playwright-report
 *.log
+.DS_Store
+.npmrc
+.broker-run
+.secrets
+security-results
+gitleaks*.json
+*.pem
+*.key
+*.p12
+*.pfx
+*.dump
+*.sql.gz

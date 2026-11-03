@@ -43,10 +43,19 @@ automatically resent; command inspection reads the original journal.
 ## Guest prerequisites and execution
 
 The VM requires Linux, Python 3, Git and `bwrap` (bubblewrap), with working user,
-PID and network namespaces. The first step probes the actual sandbox before
-downloading or spending model quota. Missing tools or disabled namespaces fail
-the job explicitly. There is no unsandboxed fallback or automatic privileged
-package installation.
+PID and network namespaces. The legacy existing-VM flow requires those tools to
+be present. Authorized Studio preparation of a newly rented disposable VM can
+bootstrap fixed system prerequisites before cloning: guests with root or usable
+noninteractive sudo install Git, bubblewrap, and CA certificates through their
+configured APT repositories. An unprivileged Debian 12 guest with `NoNewPrivs=1`
+instead downloads bubblewrap through authenticated APT metadata and extracts it
+into the task's private runtime, without running package installers or elevating
+privileges. Unsupported setup fails explicitly.
+
+The helper probes the actual isolation boundary before downloading or executing
+repository code. Repository scripts and dependency installers never run with
+setup privileges. Missing tools, disabled namespaces, or a failed isolation
+probe stop the job; there is no unsandboxed fallback.
 
 Tests mount the fresh clone at `/repo`, system tools read-only, a private
 `/tmp`, a fresh `/proc`, and minimal `/dev`. Customer home/workspace directories,
@@ -69,31 +78,31 @@ background test processes.
 
 ## Funding, authority and recovery
 
-* Owner sessions alone create/control/read jobs. Agent and batch keys cannot
+- Owner sessions alone create/control/read jobs. Agent and batch keys cannot
   use coding endpoints or gain VM command authority. Jobs have their own
   durable owner/VM/grant/deadline authority, independent of browser lifetime.
-* Account role, grant, VM identity/state, deadline, lease, and pause/stop intent
+- Account role, grant, VM identity/state, deadline, lease, and pause/stop intent
   are rechecked at dispatch. Revocation stops new actions; an already dispatched
   step may complete while cleanup/reconciliation remains pending.
-* Every coding model call uses the existing qualified prepaid gateway. Both
+- Every coding model call uses the existing qualified prepaid gateway. Both
   token dimensions must fit in one pack. Reservations, usage settlement,
   concurrency and unknown outcomes preserve existing ledger behavior. There is
   no second inference money charge or unmetered Muse helper fallback.
-* Migration 024 adds `source_job_id` authority. Normal public completions still
+- Migration 024 adds `source_job_id` authority. Normal public completions still
   require a grant-bound API key; owner-session access is not enabled globally.
-* Defaults: 10 minutes, 8 model attempts/24 steps, 512 output tokens including
+- Defaults: 10 minutes, 8 model attempts/24 steps, 512 output tokens including
   reasoning, four active pilot jobs globally and one per VM. Paused/unresolved
   jobs retain those slots. The earliest task/VM/grant deadline is immutable.
-* Missing quota pauses the job. Purchase another pack through the existing
+- Missing quota pauses the job. Purchase another pack through the existing
   30-second auction or instant quote, then resume. Funding and expiry do not
   change automatically.
-* Guest commands journal intent before execution and atomically save their
+- Guest commands journal intent before execution and atomically save their
   bounded receipts. Lost responses or worker leases never trigger automatic
   command replay. **Inspect existing command** reads the same journal; only a
   definitive receipt permits recovery.
-* Missing/uncertain Meta output is never automatically regenerated, even if
+- Missing/uncertain Meta output is never automatically regenerated, even if
   usage settled. Receipts remain attached and unresolved quota stays held.
-* Stop persists intent and sets the guest stop marker. It becomes terminal only
+- Stop persists intent and sets the guest stop marker. It becomes terminal only
   after command cleanup is acknowledged; otherwise it remains uncertain.
 
 ## Retention and owner-session APIs
@@ -107,12 +116,12 @@ Guest clones share the customer VM's existing finite lifetime.
 
 These intentionally are not agent-key SDK/OpenAPI routes:
 
-* `GET /api/coding/options`
-* `GET /api/coding/jobs?limit=25&cursor=...`
-* `POST /api/coding/jobs` with a stable `operationKey`
-* `GET /api/coding/jobs/:id`
-* `POST /api/coding/jobs/:id/{pause,resume,stop,reconcile}`
-* `GET /api/coding/jobs/:id/patch`
+- `GET /api/coding/options`
+- `GET /api/coding/jobs?limit=25&cursor=...`
+- `POST /api/coding/jobs` with a stable `operationKey`
+- `GET /api/coding/jobs/:id`
+- `POST /api/coding/jobs/:id/{pause,resume,stop,reconcile}`
+- `GET /api/coding/jobs/:id/patch`
 
 History uses buyer-scoped keyset pagination, maximum 100. Details load at most
 64 recent step rows and never call providers per row. Three-minute fenced leases and

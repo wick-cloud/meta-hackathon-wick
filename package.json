@@ -31,7 +31,13 @@
     "test:coding-local": "tsx tests/coding-local-e2e.ts",
     "test:studio-local": "CODING_LOCAL_STUDIO=1 tsx tests/coding-local-e2e.ts",
     "test:studio-live": "tsx tests/studio-inference-live-e2e.ts",
-    "studio:usage:evaluate": "tsx scripts/evaluate-studio-usage.ts"
+    "studio:usage:evaluate": "tsx scripts/evaluate-studio-usage.ts",
+    "audit": "npm audit --audit-level=moderate",
+    "format:check": "node scripts/check-format.mjs",
+    "test:static": "node scripts/verify-static.mjs",
+    "test:docker": "bash scripts/verify-container.sh",
+    "security:secrets": "node scripts/scan-secrets.mjs",
+    "test:restore": "tsx scripts/verify-backup-restore.ts"
   },
   "dependencies": {
     "@fastify/middie": "^9.0.3",
@@ -73,5 +79,11 @@
     "packages/sdk",
     "packages/cli",
     "packages/mcp"
-  ]
+  ],
+  "overrides": {
+    "@fastify/static": {
+      "glob": "14.0.2"
+    }
+  },
+  "license": "MIT"
 }

@@ -4,7 +4,7 @@ On **October 29, 2026, 11:29–11:32 PDT (UTC−07:00)**, three bounded customer
 
 - Run interval: `2026-10-29T18:29:40.929Z`–`2026-10-29T18:32:04.594Z`.
 - Deployed source: [`70ffbe40967ae1fd0a002acfe276cc94d6b76a8e`](https://github.com/wick-cloud/meta-hackathon-wick/commit/70ffbe40967ae1fd0a002acfe276cc94d6b76a8e).
-- Railway deployment: `2165c2b7-3506-4379-adae-c6fa58abd31b`.
+- The Railway deployment identifier and account-owned resource links are retained in the private run journal; public evidence is tied to the source commit above.
 - Downloaded and independently installed packages: `@wick-cloud/broker-sdk`, `@wick-cloud/broker-cli` and `@wick-cloud/broker-mcp`, each **0.1.0**.
 - Client runtime: Node.js **24.7.0**; the interactive CLI ran through a local macOS PTY.
 - Infrastructure mode: **real**. These were actual customer orders, provider bids, native environments and terminal connections.
@@ -13,11 +13,11 @@ On **October 29, 2026, 11:29–11:32 PDT (UTC−07:00)**, three bounded customer
 
 Each client placed one 30-second auction for a **15-minute Micro environment, 1 vCPU and 2 GB RAM**. Each exact replay returned the original order, leaving **one logical order and one environment per client**.
 
-| Client | Real bids | Winner  | Accepted quote | Order                                                                                                           | VM                                                                                                         |
-| ------ | --------- | ------- | -------------- | --------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| SDK    | 3         | Daytona | $0.05          | [657001a1](https://meta-hackathon-wick-production.up.railway.app/requests/657001a1-1a5d-48d1-a03c-7d4d39f8ef71) | [50a265da](https://meta-hackathon-wick-production.up.railway.app/vms/50a265da-21fe-4796-916b-352aede9cb86) |
-| CLI    | 3         | E2B     | $0.05          | [a9edd003](https://meta-hackathon-wick-production.up.railway.app/requests/a9edd003-24ab-44d0-a36a-3662ea1e13c4) | [bc51d7c5](https://meta-hackathon-wick-production.up.railway.app/vms/bc51d7c5-137c-4043-acf4-4dadff76a0e8) |
-| MCP    | 3         | E2B     | $0.05          | [7990c425](https://meta-hackathon-wick-production.up.railway.app/requests/7990c425-ee5d-4de1-93e8-24d3bd70b7c8) | [bb3fd5a4](https://meta-hackathon-wick-production.up.railway.app/vms/bb3fd5a4-2fca-46e7-afae-4dec9dc292e7) |
+| Client | Real bids | Winner  | Accepted quote | Logical orders | VMs |
+| ------ | --------- | ------- | -------------- | -------------- | --- |
+| SDK    | 3         | Daytona | $0.05          | 1              | 1   |
+| CLI    | 3         | E2B     | $0.05          | 1              | 1   |
+| MCP    | 3         | E2B     | $0.05          | 1              | 1   |
 
 Every auction received non-simulated automatic bids from **Daytona ($0.05), E2B ($0.05) and Modal ($0.08)**. Accepted quotes stayed within the reviewed buyer ceiling. The orders were visible through the shared UI history with Broker API-key attribution.
 

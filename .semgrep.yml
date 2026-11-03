@@ -1,0 +1,47 @@
+rules:
+  - id: no-runtime-eval
+    languages: [javascript, typescript]
+    message: Avoid evaluating source strings; use a bounded parser or explicit dispatch.
+    severity: ERROR
+    pattern-either:
+      - pattern: eval(...)
+      - pattern: new Function(...)
+      - pattern: Function(...)
+    paths:
+      include: [/src, /packages]
+  - id: no-disabled-tls-verification
+    languages: [javascript, typescript]
+    message: TLS certificate verification must remain enabled.
+    severity: ERROR
+    pattern-either:
+      - pattern: '{..., rejectUnauthorized: false, ...}'
+      - pattern: process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0"
+    paths:
+      include: [/src, /packages, /scripts]
+  - id: no-shell-interpolation
+    languages: [javascript, typescript]
+    message: Pass arguments separately to execFile/spawn instead of interpolating shell commands.
+    severity: ERROR
+    pattern-either:
+      - pattern: exec(`...${$VALUE}...`, ...)
+      - pattern: execSync(`...${$VALUE}...`, ...)
+      - pattern: $CHILD.exec(`...${$VALUE}...`, ...)
+      - pattern: $CHILD.execSync(`...${$VALUE}...`, ...)
+    paths:
+      include: [/src, /packages]
+  - id: no-dynamic-html
+    languages: [javascript, typescript]
+    message: Render escaped React content; review any HTML rendering with an explicit sanitizer.
+    severity: ERROR
+    pattern: <$TAG dangerouslySetInnerHTML={$VALUE} ... />
+    paths:
+      include: [/src/client]
+  - id: no-weak-crypto-cipher
+    languages: [javascript, typescript]
+    message: Use authenticated encryption with an explicit key and a unique nonce.
+    severity: ERROR
+    pattern-either:
+      - pattern: $CRYPTO.createCipher(...)
+      - pattern: createCipher(...)
+    paths:
+      include: [/src, /packages]

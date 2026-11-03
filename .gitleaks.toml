@@ -1,0 +1,61 @@
+title = "Wick public release secret scan"
+
+[extend]
+useDefault = true
+
+# Reviewed false positives only. Keep each exact value tied to its exact file.
+# No test directories, commits, or rule families are globally excluded.
+[[rules]]
+id = "generic-api-key"
+
+[[rules.allowlists]]
+description = "Non-secret idempotency identifiers"
+condition = "AND"
+paths = ["(^|/)docs/verification/modal\\-requalification\\-2026\\-10\\-30\\.json$"]
+regexes = ["^modal\\-requalification\\-b8bf09e0\\-5931\\-467b\\-9721\\-53e64025fbec$"]
+
+[[rules.allowlists]]
+description = "Historical TypeScript code expression, not a credential"
+condition = "AND"
+paths = ["(^|/)src/server/config\\.ts$"]
+regexes = ["^e\\.WICK_ORGANIZATION_ID===$"]
+
+[[rules.allowlists]]
+description = "Non-secret idempotency identifiers"
+condition = "AND"
+paths = ["(^|/)tests/developer\\-keys\\-db\\.test\\.ts$"]
+regexes = ["^fixture\\-operation\\-001$", "^fixture\\-operation\\-002$"]
+
+[[rules.allowlists]]
+description = "Explicit synthetic authentication secret in a disposable test database"
+condition = "AND"
+paths = ["(^|/)tests/openapi\\-wire\\-db\\.test\\.ts$"]
+regexes = ["^wire\\-fixture\\-secret\\-with\\-at\\-least\\-32\\-characters$"]
+
+[[rules.allowlists]]
+description = "Non-secret idempotency identifiers"
+condition = "AND"
+paths = ["(^|/)tests/provider\\-identity\\-routes\\.test\\.ts$"]
+regexes = ["^foreign\\-policy\\-123$"]
+
+[[rules.allowlists]]
+description = "Non-secret idempotency identifiers"
+condition = "AND"
+paths = ["(^|/)tests/wick\\-contract\\.test\\.ts$"]
+regexes = ["^persisted\\-key\\-123$"]
+
+[[rules.allowlists]]
+description = "Bundled xterm property assignment, not a credential"
+condition = "AND"
+paths = ['''(^|/)dist/client/assets/terminal-[A-Za-z0-9_-]+\.js$''']
+regexes = ['''^r\.TwoKeyMap=void$''']
+
+[[rules]]
+id = "private-key"
+
+[[rules.allowlists]]
+description = "Malformed PEM sentinels used to test redaction; no key material"
+condition = "AND"
+paths = ['''(^|/)tests/muse\.test\.ts$''']
+regexTarget = "match"
+regexes = ['''^-----BEGIN PRIVATE KEY-----\\n(?:private-pem\\n-----END PRIVATE KEY-----|unfinished-pem['"])''']

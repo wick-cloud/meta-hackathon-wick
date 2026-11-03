@@ -1,4 +1,4 @@
-FROM node:24-bookworm-slim AS build
+FROM node:24-bookworm-slim@sha256:c86ecead9e55a5210ac1727de38a4ca840bf03dcaf34dc9749addbf383b1920c AS build
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci --workspaces=false
@@ -8,12 +8,21 @@ COPY scripts ./scripts
 COPY packages/sdk/src/contracts.ts ./packages/sdk/src/contracts.ts
 RUN npm run build:app
 
-FROM node:24-bookworm-slim AS runtime
+FROM node:24-alpine@sha256:8a32c8cf649a49915a66e81e7a609223c708d0adabf288ee3f4077d765542f85 AS runtime
 ENV NODE_ENV=production HOST=0.0.0.0 PORT=3000
 WORKDIR /app
 COPY package*.json ./
-RUN npm ci --omit=dev --workspaces=false && npm cache clean --force
+# Preserve the existing hosting pre-deploy `npm run` command. npm 12.2.1 still
+# bundles undici 6.29.0; replace that dependency with its compatible security patch.
+RUN npm install --global npm@12.2.1 --ignore-scripts \
+    && npm install --prefix /tmp/broker-npm-security --ignore-scripts --no-audit --no-fund \
+       --package-lock=false undici@6.29.1 \
+    && rm -rf /usr/local/lib/node_modules/npm/node_modules/undici \
+    && mv /tmp/broker-npm-security/node_modules/undici /usr/local/lib/node_modules/npm/node_modules/undici \
+    && npm ci --omit=dev --workspaces=false --ignore-scripts && npm cache clean --force \
+    && rm -rf /tmp/broker-npm-security /opt/yarn* /usr/local/bin/yarn /usr/local/bin/yarnpkg
 COPY --from=build /app/dist ./dist
+COPY LICENSE ./LICENSE
 COPY migrations ./migrations
 COPY scripts/coding-guest.py ./scripts/coding-guest.py
 COPY client-releases ./client-releases

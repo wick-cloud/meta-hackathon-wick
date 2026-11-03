@@ -3,6 +3,7 @@ import { Pool } from 'pg';
 import Fastify from 'fastify';
 import { registerCoding } from '../src/server/coding/index.js';
 import { afterAll, beforeAll, beforeEach, describe, it, expect, vi } from 'vitest';
+import { isolatedPool } from './fixtures/isolated-pool.js';
 import { migrate, transaction } from '../src/server/db.js';
 import { loadConfig } from '../src/server/config.js';
 import type { AppContext } from '../src/server/context.js';
@@ -223,6 +224,7 @@ describe.skipIf(!url)('durable coding jobs (disposable PostgreSQL; no live provi
     } as unknown as AppContext;
   });
   beforeEach(async () => {
+    ctx.pool = isolatedPool(pool);
     commands.length = 0;
     verify.mockClear();
     loseCommand = false;
