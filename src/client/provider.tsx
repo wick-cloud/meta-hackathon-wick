@@ -177,6 +177,9 @@ export function ProviderCapacity() {
         <span className="quiet-badge">
           {provider.simulated ? 'Simulated demo supply' : 'Wick-managed allocation'}
         </span>
+        <Link className="button secondary" href="/provider/sales">
+          <Sparkles size={15} /> Improve my sales
+        </Link>
       </PageHeader>
       <nav className="provider-setup-guide" aria-label="Provider setup">
         <span className="provider-setup-label">Start selling</span>
@@ -480,6 +483,9 @@ export function ProviderPolicy() {
         <span className="quiet-badge">
           {modes.muse === 'fixture' ? 'Fixture Muse · no model calls' : museLabel}
         </span>
+        <Link className="button secondary" href="/provider/sales">
+          <Sparkles size={15} /> Improve my sales
+        </Link>
       </PageHeader>
       <ComputePromotionNotice available={promotedProvider} audience="provider" />
       <FormPanel>
