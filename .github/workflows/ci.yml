@@ -65,7 +65,11 @@ jobs:
       - run: npm run security:secrets
       - run: npm run db:seed
       - run: npm run test:recovery
-      - run: npm run test:restore
+      - name: Restore with client tools matching the PostgreSQL 16 test server
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends postgresql-client-16
+          PATH="/usr/lib/postgresql/16/bin:$PATH" npm run test:restore
       - run: npx playwright install --with-deps chromium
       - run: |
           INFERENCE_MARKET_MODE=fixture node dist/src/server/index.js > /tmp/wick-broker.log 2>&1 &
@@ -115,5 +119,7 @@ jobs:
       - uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
         with:
           version: v0.76.1
+      - name: Verify secret-scan redaction and failure handling
+        run: node --test tests/image-secret-scanner.test.mjs
       - name: Build and verify the production container
         run: bash scripts/verify-container.sh

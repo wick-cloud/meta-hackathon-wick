@@ -19,6 +19,7 @@ cleanup() {
 }
 trap cleanup EXIT
 docker build --tag "$fixture_image" .
+node scripts/scan-image-secrets.mjs "$fixture_image"
 # Scan the exact runtime image that the smoke test starts. No unfixed-vulnerability
 # exclusions or implicit .trivyignore suppressions: triage failures before release.
 trivy image --scanners vuln --severity HIGH,CRITICAL --exit-code 1 \

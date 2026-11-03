@@ -44,6 +44,21 @@ function postgresEnv(name: string) {
   };
 }
 try {
+  const serverMajor = Math.floor(
+    Number((await admin.query('SHOW server_version_num')).rows[0].server_version_num) / 10000,
+  );
+  for (const tool of ['pg_dump', 'pg_restore']) {
+    const version = await exec(tool, ['--version'], {
+      env: postgresEnv(sourceName),
+      timeout: 5000,
+    });
+    const clientMajor = Number(/PostgreSQL\) (\d+)/.exec(version.stdout)?.[1]);
+    assert.equal(
+      clientMajor,
+      serverMajor,
+      `${tool} must match the PostgreSQL server major version; select matching client tools in PATH.`,
+    );
+  }
   for (const name of [sourceName, restoredName]) {
     await admin.query(`CREATE DATABASE ${name}`);
     created.push(name);

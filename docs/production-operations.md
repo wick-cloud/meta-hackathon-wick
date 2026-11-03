@@ -54,7 +54,8 @@ production restoration cannot be established by source-code tests.
 `npm run test:restore` uses `TEST_DATABASE_URL` only to create two new disposable
 loopback databases. It applies migrations, inserts fixture wallet/ledger records,
 performs `pg_dump`/`pg_restore`, and verifies exact records and migration digests.
-It requires PostgreSQL client tools compatible with the server. It never restores
+It requires PostgreSQL client tools of the same major version as the server and
+rejects mismatches before creating fixture databases. It never restores
 over the provided database and removes its temporary databases/dump afterward.
 
 For an incident:
@@ -82,6 +83,19 @@ which also selects a patched minimatch. Static-file serving and traversal reject
 are covered by a regression test. Remove the override when the upstream dependency
 supports the patched chain directly, after rerunning the production image smoke test.
 An empty package audit is useful evidence, not proof that every code path is safe.
+
+The runtime uses a pinned official Node 24 Alpine image. npm is retained for the
+existing hosting migration command, pinned to 12.2.1 with its bundled undici replaced
+by the compatible 6.29.1 security patch. Unused Yarn tooling is removed. The image
+gate scans the actual runtime for high/critical vulnerabilities and secrets, then
+exercises migrations, seeding, readiness, static assets and graceful shutdown.
+Revisit the bundled dependency patch when npm publishes a version containing it.
+
+npm's bundled glob/minimatch still have moderate advisory findings in the installed
+package-manager tooling. These are outside the application's dependency audit, which
+currently reports zero findings. The image gate blocks every high/critical finding
+without broad exclusions; moderate operator-tool exposure remains a tracked upgrade
+item, so a passing image gate does not mean the image has zero vulnerabilities.
 
 ## Release evidence
 

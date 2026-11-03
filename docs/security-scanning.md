@@ -58,6 +58,14 @@ work is merged and inspect the final package/container contents.
 
 ## Coverage limits
 
+The container release gate separately runs `scripts/scan-image-secrets.mjs` with
+Trivy 0.76.1 against the locally built runtime image. It scans runtime layers
+(including retained evidence from removed files) and image configuration/history,
+disables built-in path exemptions, and blocks findings at every severity. Raw
+scanner output and reports stay in a private temporary directory and are removed;
+only finding metadata is printed. This does not scan discarded build stages,
+external build caches, or previously published images.
+
 The scanner is a detection aid, not proof that no secret exists. It sees refs
 available in the checkout; it does not fetch missing refs, inspect remote issue
 attachments, GitHub release assets, hosted logs, registry image layers, or
