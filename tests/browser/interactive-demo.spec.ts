@@ -109,6 +109,12 @@ async function fits(page: Page) {
   expect(layout.scrollWidth, `${layout.path} at ${layout.width}px`).toBeLessThanOrEqual(
     layout.width + 1,
   );
+  if (layout.width <= 600) {
+    const heading = await page.locator('.main-content h1').boundingBox();
+    expect(heading?.width, `${layout.path} heading at ${layout.width}px`).toBeGreaterThanOrEqual(
+      140,
+    );
+  }
 }
 
 for (const role of ['buyer', 'seller'] as const) {
