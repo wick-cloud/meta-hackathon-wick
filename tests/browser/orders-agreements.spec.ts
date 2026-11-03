@@ -291,9 +291,10 @@ test('Try again only GETs the original request and requires a new explicit aucti
   await expect(page).toHaveURL(/requests\/new-request/);
   expect(writes).toHaveLength(1);
   expect(writes[0].path).toBe('/api/requests');
+  expect(writes[0].body).toMatchObject({ region: 'any', matchAcrossProviders: true });
 });
 
-test('Retrying a revoked configuration requires an explicit available replacement', async ({
+test('Retrying a revoked configuration finds compatible providers without choosing a replacement', async ({
   page,
 }) => {
   const writes = await fixture(page, 'buyer', (path, method) =>
@@ -307,22 +308,16 @@ test('Retrying a revoked configuration requires an explicit available replacemen
   );
   await page.goto(`/new?copy=${id}`);
   await expect(page).toHaveURL(/requests\/review/);
-  const configuration = page.getByRole('combobox', { name: /^Configuration\b/ });
-  await expect(configuration).toHaveValue('revoked-configuration');
-  await expect(configuration.locator('option:checked')).toHaveText(
-    'Choose an available configuration',
-  );
+  await expect(page.getByRole('combobox', { name: /configuration|region/i })).toHaveCount(0);
   await expect(
     page.getByRole('button', { name: 'Start 30-second auction', exact: true }),
-  ).toBeDisabled();
+  ).toBeEnabled();
   expect(writes).toHaveLength(0);
-
-  await configuration.selectOption('micro');
-  await expect(configuration).toHaveValue('micro');
   await page.getByRole('button', { name: 'Start 30-second auction', exact: true }).click();
   await expect(page).toHaveURL(/requests\/replacement-request/);
   expect(writes).toHaveLength(1);
   expect(writes[0].body.catalogId).toBe('micro');
+  expect(writes[0].body).toMatchObject({ region: 'any', matchAcrossProviders: true });
 });
 
 test('Returning to the description preserves the manually reviewed environment choices', async ({
@@ -360,9 +355,7 @@ test('Returning to the description preserves the manually reviewed environment c
   await page.goto('/new/vm');
   await page.getByLabel('Describe your environment').fill('My environment');
   await page.getByRole('button', { name: 'Review manually', exact: true }).click();
-  await page.getByRole('combobox', { name: /^Reference configuration\b/ }).selectOption('large');
-  await page.getByLabel('Let compatible providers compete', { exact: false }).uncheck();
-  await page.getByRole('combobox', { name: 'Rental duration', exact: true }).selectOption('60');
+  await page.getByRole('button', { name: '60 minutes', exact: true }).click();
   await page.getByLabel('Minimum vCPUs', { exact: true }).fill('4');
   await page.getByLabel('Minimum memory (GiB)', { exact: true }).fill('8');
   await page.getByLabel('Maximum total price (USD)', { exact: false }).fill('3.21');
@@ -370,13 +363,11 @@ test('Returning to the description preserves the manually reviewed environment c
   await page.getByLabel('Describe your environment').fill('My updated environment');
   await page.getByRole('button', { name: 'Review manually', exact: true }).click();
 
-  await expect(page.getByRole('combobox', { name: /^Configuration\b/ })).toHaveValue('large');
-  await expect(
-    page.getByLabel('Let compatible providers compete', { exact: false }),
-  ).not.toBeChecked();
-  await expect(page.getByRole('combobox', { name: 'Region', exact: true })).toHaveValue('eu');
-  await expect(page.getByRole('combobox', { name: 'Rental duration', exact: true })).toHaveValue(
-    '60',
+  await expect(page.getByRole('combobox', { name: /configuration|region/i })).toHaveCount(0);
+  await expect(page.getByRole('checkbox', { name: /compatible providers/i })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '60 minutes', exact: true })).toHaveAttribute(
+    'aria-pressed',
+    'true',
   );
   await expect(page.getByLabel('Minimum vCPUs', { exact: true })).toHaveValue('4');
   await expect(page.getByLabel('Minimum memory (GiB)', { exact: true })).toHaveValue('8');
@@ -388,8 +379,8 @@ test('Returning to the description preserves the manually reviewed environment c
   expect(writes[0].body).toMatchObject({
     description: 'My updated environment',
     catalogId: 'large',
-    region: 'eu',
-    matchAcrossProviders: false,
+    region: 'any',
+    matchAcrossProviders: true,
     durationMinutes: 60,
     requirements: { cpu: 4, memoryGb: 8 },
     maxPriceCents: 321,
