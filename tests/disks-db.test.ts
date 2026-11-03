@@ -258,7 +258,7 @@ describe.skipIf(!databaseUrl)('customer-owned disks (disposable PostgreSQL)', ()
       'modal:medium:auto',
       'modal:large:auto',
     ];
-    const ids = [...nativeIds, 'daytona:small:us', 'e2b:large:us'];
+    const ids = [...nativeIds, 'daytona:small:us', 'e2b:large:us', 'e2b:medium:byok'];
     try {
       for (const id of ids) {
         const [provider, profile, region] = id.split(':');
@@ -271,6 +271,8 @@ describe.skipIf(!databaseUrl)('customer-owned disks (disposable PostgreSQL)', ()
               provider,
               profile,
               region,
+              pricingMode: 'managed',
+              ...(id.endsWith(':byok') ? { providerKeyId: 'fixture-provider-key' } : {}),
               capabilities: id.startsWith('daytona:')
                 ? ['shared-files']
                 : ['persistent-drives', 'shared-files'],
@@ -308,6 +310,7 @@ describe.skipIf(!databaseUrl)('customer-owned disks (disposable PostgreSQL)', ()
     const item = {
       id: 'e2b:small:us',
       provider: 'e2b',
+      pricingMode: 'managed',
       approved: true,
       capabilities: ['persistent-drives'],
     };
