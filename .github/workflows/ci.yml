@@ -70,6 +70,48 @@ jobs:
       - run: npm run security:secrets
       - run: npm run db:seed
       - run: npm run test:recovery
+  browser:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: wick
+          POSTGRES_PASSWORD: wick_ci_only
+          POSTGRES_DB: wick_broker
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U wick -d wick_broker"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgresql://wick:wick_ci_only@localhost:5432/wick_broker
+      BETTER_AUTH_SECRET: ci-only-auth-secret-not-for-any-real-environment
+      WICK_MODE: fixture
+      MUSE_MODE: fixture
+      APP_URL: http://localhost:3000
+      E2E_BASE_URL: http://localhost:3000
+      SEED_BUYER_EMAIL: buyer@demo.wick.local
+      SEED_SUPPLIER_A_EMAIL: supplier-a@demo.wick.local
+      SEED_SUPPLIER_B_EMAIL: supplier-b@demo.wick.local
+      SEED_SUPPLIER_C_EMAIL: supplier-c@demo.wick.local
+      SEED_ADMIN_EMAIL: admin@demo.wick.local
+      SEED_BUYER_PASSWORD: ci-buyer-only-password
+      SEED_SUPPLIER_A_PASSWORD: ci-supplier-a-only-password
+      SEED_SUPPLIER_B_PASSWORD: ci-supplier-b-only-password
+      SEED_SUPPLIER_C_PASSWORD: ci-supplier-c-only-password
+      SEED_ADMIN_PASSWORD: ci-admin-only-password
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm run db:seed
       - run: npx playwright install --with-deps chromium
       - run: |
           INFERENCE_MARKET_MODE=fixture node dist/src/server/index.js > /tmp/wick-broker.log 2>&1 &

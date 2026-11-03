@@ -142,6 +142,32 @@ print("Hello, World!")
     }
   });
 
+  it.each(['fifo', 'dangling symlink'])(
+    'rejects a journal %s without opening or following it',
+    (kind) => {
+      const runner = localStudioRunner(),
+        id = randomUUID();
+      try {
+        const journal = join(runner.directory, `.wick-studio-${id}-0.json`);
+        if (kind === 'fifo')
+          execFileSync(
+            'python3',
+            ['-I', '-S', '-c', 'import os,sys;os.mkfifo(sys.argv[1])', journal],
+            { timeout: 5000 },
+          );
+        else symlinkSync(join(runner.directory, 'missing-journal-target'), journal);
+        expect(runner.execute(demoStudioCommand(id, 0, source, deadline()))).toMatchObject({
+          stdout: '',
+          exitCode: null,
+          errorCode: 'execution_already_recorded',
+        });
+        expect(existsSync(join(runner.directory, 'hello_world.py'))).toBe(false);
+      } finally {
+        runner.close();
+      }
+    },
+  );
+
   it('does not execute uncertain or expired attempts, or follow an artifact symlink', () => {
     const runner = localStudioRunner(),
       pendingId = randomUUID();

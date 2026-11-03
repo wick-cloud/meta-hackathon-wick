@@ -18,7 +18,7 @@ requires qualification of worker leases, admission limits, and in-memory guards.
   and Studio tasks. Untrusted repository code runs in an isolated customer VM,
   outside the Broker host. Missing isolation fails the job closed.
 - `disks/` owns buyer disk state and file access. `demo/` owns the separately
-  bounded, operator-sponsored public demonstration.
+  bounded, operator-sponsored terminal and guided Hello World demonstrations on `/demos`.
 - `integrations/` holds Wick, Muse, terminal, and drive adapters. Fixture modes
   are explicit; a failed real call never silently falls back to a fixture.
 - `packages/sdk`, `packages/cli`, and `packages/mcp` expose customer developer

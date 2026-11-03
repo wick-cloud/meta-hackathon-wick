@@ -46,10 +46,11 @@ if time.time()>=job["deadline"]:
 journal=BASE/(".wick-studio-"+job["runId"]+"-"+str(job["attempt"])+".json")
 pending=journal.with_suffix(".pending")
 try:
-    fd=os.open(journal,os.O_RDONLY|os.O_NOFOLLOW)
+    # Existence is the only fact needed. Never open a user-controlled FIFO/device
+    # or follow a symlink while checking an untrusted no-reexecution marker.
+    os.lstat(journal)
 except FileNotFoundError: pass
 else:
-    os.close(fd)
     # This disk is user-writable. An existing journal is only a no-reexecute guard,
     # never authority for a successful server receipt.
     result["errorCode"]="execution_already_recorded"
