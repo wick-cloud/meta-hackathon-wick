@@ -2,6 +2,11 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  PROVIDER_CANARIES,
+  PROVIDER_SIZE_CANARIES,
+} from '../scripts/live-scale/provider-canary.js';
+import { revenueShare } from '../src/shared/pricing.js';
 
 const state = vi.hoisted(() => ({
   now: 0,
@@ -222,6 +227,429 @@ describe('hosted live-run safety with inert settings and zero external calls', (
     await import('../scripts/hosted-scale.js');
     return done;
   }
+  function qualificationFixture(
+    failedProvider?: string,
+    faults: {
+      lostBidReply?: string;
+      restoreFailure?: string;
+      size?: 'medium' | 'large';
+      retry?: boolean;
+    } = {},
+  ) {
+    const at = new Date(state.now).toISOString();
+    const size = faults.retry ? 'large' : faults.size;
+    const selected = Object.entries(size ? PROVIDER_SIZE_CANARIES[size] : PROVIDER_CANARIES)
+      .map(([provider, resources], i) => ({
+        ...resources,
+        provider,
+        name: provider,
+        region: 'auto',
+        capacity: 1,
+        catalogId: `${provider}:${resources.profile}:auto`,
+        offeringId: randomUUID(),
+        providerId: randomUUID(),
+        cookie: `fixture-${provider}`,
+        rateMicrosPerSecond:
+          size === 'medium' ? [44, 10][i] : size === 'large' ? [85, 20][i] : [12, 19, 38, 5][i],
+        basePriceCents:
+          size === 'medium' ? [5, 2.4][i] : size === 'large' ? [9, 3][i] : [3.6, 6, 10.8, 2.4][i],
+        configuredBasePriceCents: size ? [3.6, 2.4][i] : [3.6, 6, 10.8, 2.4][i],
+      }))
+      .filter((p) => !faults.retry || p.provider === 'boat');
+    const input = {
+      ...settings,
+      mode: faults.retry
+        ? 'provider-size-retry-canary'
+        : size
+          ? 'provider-size-canary'
+          : 'provider-canary',
+      target: selected.length,
+      providers: selected,
+    };
+    writeFileSync(settingsPath, JSON.stringify(input), { mode: 0o600 });
+    records[0] = {
+      ...records[0],
+      mode: input.mode,
+      target: input.target,
+      fingerprint: createHash('sha256')
+        .update(
+          JSON.stringify({
+            baseUrl: input.baseUrl,
+            scope: [input.wick.organizationId, input.wick.groupId],
+            providers: selected.map((p) => [
+              p.provider,
+              p.catalogId,
+              p.profile,
+              p.region,
+              p.rateMicrosPerSecond,
+            ]),
+            mode: input.mode,
+            target: input.target,
+            quoteCeilingCents: 20,
+            terminalHoldMs: 130000,
+            canaries: selected.map((p) => [
+              p.provider,
+              p.offeringId,
+              p.cpu,
+              p.memoryGb,
+              p.diskGb,
+              p.capacity,
+              p.basePriceCents,
+            ]),
+          }),
+        )
+        .digest('hex'),
+    };
+    const refreshWatchdog = () =>
+      writeFileSync(
+        journalPath + '.watchdog-ready',
+        JSON.stringify({ runId, pid: process.pid, at: new Date(state.now).toISOString() }),
+        { mode: 0o600 },
+      );
+    refreshWatchdog();
+    state.onDelay = refreshWatchdog;
+    const requests: Record<string, any>[] = [];
+    const approved = new Set<string>(),
+      active = new Set<string>();
+    const unrelatedVm = { id: randomUUID(), requestId: randomUUID(), status: 'running' };
+    const manualBids: Record<string, any>[] = [];
+    let failedRestore = false;
+    const catalog = () =>
+      selected.map((p) => ({
+        ...p,
+        id: p.catalogId,
+        approved: approved.has(p.provider),
+        resources: { diskGb: p.diskGb },
+        capabilities: ['interactive-terminal'],
+        durationMinutes: [15],
+        pricingMode: 'managed',
+        managedRouteVerification: 'execution-preview-managed',
+        rateSource: 'wick-customer-catalog',
+        rateRetrievedAt: at,
+      }));
+    const vm = (r: Record<string, any>) => ({
+      id: r.vmId,
+      requestId: r.id,
+      environmentId: r.environmentId,
+      status: r.terminated ? 'terminated' : 'running',
+      durationMinutes: 15,
+      createdAt: at,
+      readyAt: at,
+      cleanupPending: false,
+    });
+    const requestView = (r: Record<string, any>) => ({
+      id: r.id,
+      ...r.body,
+      createdAt: at,
+      closesAt: new Date(Date.parse(at) + 30000).toISOString(),
+      status: r.cancelled ? 'cancelled' : r.bid ? 'ready' : 'open',
+      winningBidId: r.bid?.id,
+    });
+    state.get.mockImplementation(async (id: string) => {
+      const r = requests.find((r) => r.environmentId === id && r.bid)!;
+      expect(r).toBeDefined();
+      return {
+        id,
+        name: 'wick-broker-' + r.vmId.slice(0, 8),
+        organizationId: settings.wick.organizationId,
+        groupId: settings.wick.groupId,
+        provider: r.provider.provider,
+        profile: r.provider.profile,
+        status: r.terminated ? 'terminated' : 'running',
+        createdAt: at,
+        expiresAt: new Date(Date.parse(at) + 900000).toISOString(),
+        billingMode: 'wick_managed',
+        raw: { region: 'auto' },
+      };
+    });
+    state.terminate.mockImplementation(async (id: string) => {
+      const r = requests.find((r) => r.environmentId === id)!;
+      expect(r).toBeDefined();
+      r.terminated = true;
+    });
+    const fetcher = vi.fn(async (url: URL, init: RequestInit) => {
+      expect(url.hostname).toBe('hosted-scale.invalid');
+      const p = selected.find((p) => p.cookie === new Headers(init.headers).get('cookie'));
+      const path = url.pathname;
+      let body: unknown;
+      if (path === '/health') body = { modes: { wick: 'real', muse: 'real' } };
+      else if (path === '/api/admin/config')
+        body = {
+          maxConcurrentVms: 20,
+          unresolved: [],
+          providers: [{ held: 4 }],
+          catalog: catalog(),
+        };
+      else if (path === '/api/catalog') body = { items: catalog() };
+      else if (path.startsWith('/api/admin/catalog/')) {
+        const item = selected.find(
+          (p) => p.catalogId === decodeURIComponent(path.split('/').at(-1)!),
+        )!;
+        expect(item).toBeDefined();
+        JSON.parse(String(init.body)).approved
+          ? approved.add(item.provider)
+          : approved.delete(item.provider);
+        body = { approved: approved.has(item.provider) };
+      } else if (path === '/api/provider/offerings') {
+        expect(p).toBeDefined();
+        body = {
+          items: [{ id: p!.offeringId, catalogId: p!.catalogId, active: active.has(p!.provider) }],
+        };
+      } else if (path.startsWith('/api/provider/offerings/')) {
+        expect(path.split('/').at(-1)).toBe(p!.offeringId);
+        if (
+          !JSON.parse(String(init.body)).active &&
+          faults.restoreFailure === p!.provider &&
+          !failedRestore
+        ) {
+          failedRestore = true;
+          return new Response('{}', { status: 503 });
+        }
+        JSON.parse(String(init.body)).active ? active.add(p!.provider) : active.delete(p!.provider);
+        body = { active: active.has(p!.provider) };
+      } else if (path === '/api/provider/dashboard') {
+        expect(p).toBeDefined();
+        const held = requests.filter(
+          (r) => r.provider.provider === p!.provider && r.bid && !r.terminated,
+        ).length;
+        body = {
+          provider: { id: p!.providerId, cloudProvider: p!.provider },
+          capacity: { total: 1, held, available: 1 - held },
+          policy: {
+            autoBid: false,
+            basePriceCents: p!.configuredBasePriceCents,
+            minimumPriceCents: 1,
+            maxPriceCents: 20,
+          },
+        };
+      } else if (path === '/api/requests' && init.method === 'POST') {
+        const submitted = JSON.parse(String(init.body));
+        const item = selected.find((p) => p.catalogId === submitted.catalogId)!;
+        expect(item).toBeDefined();
+        expect(approved.has(item.provider) && active.has(item.provider)).toBe(true);
+        expect(submitted).toMatchObject({
+          region: 'auto',
+          matchAcrossProviders: false,
+          durationMinutes: 15,
+          maxPriceCents: item.basePriceCents,
+          requirements: { cpu: item.cpu, memoryGb: item.memoryGb },
+        });
+        const r = {
+          id: randomUUID(),
+          vmId: randomUUID(),
+          environmentId: 'native-' + requests.length,
+          provider: item,
+          body: submitted,
+          terminated: false,
+        };
+        requests.push(r);
+        body = requestView(r);
+      } else if (path.startsWith('/api/provider/requests/') && path.endsWith('/bids')) {
+        const r = requests.find((r) => r.id === path.split('/')[4])!;
+        expect(r).toBeDefined();
+        expect(p).toBe(r.provider);
+        const submitted = JSON.parse(String(init.body));
+        expect(submitted).toEqual({
+          totalPriceCents: p!.basePriceCents,
+          offeringId: p!.offeringId,
+        });
+        manualBids.push(submitted);
+        if (p!.provider === failedProvider) return new Response('{}', { status: 503 });
+        r.bid = {
+          id: randomUUID(),
+          providerId: p!.providerId,
+          cloudProvider: p!.provider,
+          catalogId: p!.catalogId,
+          region: p!.region,
+          totalPriceCents: p!.basePriceCents,
+          pricing: { rateMicrosPerSecond: p!.rateMicrosPerSecond },
+          revenueShare: revenueShare(p!.basePriceCents),
+        };
+        if (p!.provider === faults.lostBidReply) return new Response('{}', { status: 503 });
+        body = r.bid;
+      } else if (path === '/api/requests') body = { items: requests.map(requestView) };
+      else if (path.endsWith('/cancel')) {
+        const r = requests.find((r) => r.id === path.split('/')[3])!;
+        r.cancelled = true;
+        body = {};
+      } else if (path.startsWith('/api/requests/')) {
+        const r = requests.find((r) => r.id === path.split('/')[3])!;
+        body = { request: requestView(r), vm: r.bid ? vm(r) : null, bids: r.bid ? [r.bid] : [] };
+      } else if (path === '/api/vms')
+        body = { items: [unrelatedVm, ...requests.filter((r) => r.bid).map(vm)] };
+      else if (path.endsWith('/terminate')) {
+        const r = requests.find((r) => r.vmId === path.split('/')[3])!;
+        expect(r).toBeDefined();
+        r.terminated = true;
+        body = { accepted: true };
+      } else if (path === '/api/invoices')
+        body = {
+          items: requests
+            .filter((r) => r.bid)
+            .map((r) => ({
+              id: randomUUID(),
+              vmId: r.vmId,
+              totalCents: r.provider.basePriceCents,
+              feeCents: 0,
+              revenueShare: revenueShare(r.provider.basePriceCents),
+            })),
+        };
+      else throw new Error('Unexpected inert qualification route ' + path);
+      return new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+    vi.stubGlobal('fetch', fetcher);
+    return { requests, manualBids, approved, active, unrelatedVm, selected };
+  }
+  it('runs one Boat Large retry at its effective base with strict proofs and full cleanup', async () => {
+    const fixture = qualificationFixture(undefined, { retry: true });
+    const result = await invoke('run');
+    expect(result).toMatchObject({
+      validationPassed: true,
+      attemptedRequests: 1,
+      mode: 'provider-size-retry-canary',
+      providerResults: { boat: { nativeRunning: true, terminalPassed: true, invoicePassed: true } },
+      cleanup: { confirmed: true, listingsRestored: true, nativeConfirmed: 1 },
+    });
+    expect(result.terminalHoldMs).toBeGreaterThanOrEqual(130000);
+    expect(fixture.requests).toHaveLength(1);
+    expect(fixture.manualBids).toHaveLength(1);
+    expect(fixture.requests[0].body).toMatchObject({
+      catalogId: 'boat:large:auto',
+      durationMinutes: 15,
+      maxPriceCents: 3,
+    });
+    expect(fixture.manualBids[0].totalPriceCents).toBe(3);
+    expect(fixture.selected[0].configuredBasePriceCents).toBe(2.4);
+    expect(fixture.approved.size).toBe(0);
+    expect(fixture.active.size).toBe(0);
+    expect(fixture.unrelatedVm.status).toBe('running');
+    expect(state.create).not.toHaveBeenCalled();
+    expect(state.list).not.toHaveBeenCalled();
+  });
+  it.each(['medium', 'large'] as const)(
+    'qualifies only two exact %s routes at effective bases while preserving saved account prices',
+    async (size) => {
+      const fixture = qualificationFixture(undefined, { size });
+      const result = await invoke('run');
+      expect(result).toMatchObject({
+        validationPassed: true,
+        attemptedRequests: 2,
+        mode: 'provider-size-canary',
+        cleanup: { confirmed: true, listingsRestored: true, nativeConfirmed: 2 },
+      });
+      expect(result.terminalHoldMs).toBeGreaterThanOrEqual(130000);
+      expect(fixture.requests).toHaveLength(2);
+      expect(fixture.manualBids.map((b) => b.totalPriceCents).sort((a, b) => a - b)).toEqual(
+        size === 'medium' ? [2.4, 5] : [3, 9],
+      );
+      expect(fixture.selected.map((p) => p.configuredBasePriceCents)).toEqual([3.6, 2.4]);
+      expect(fixture.approved.size).toBe(0);
+      expect(fixture.active.size).toBe(0);
+      expect(fixture.unrelatedVm.status).toBe('running');
+      expect(state.create).not.toHaveBeenCalled();
+      expect(state.list).not.toHaveBeenCalled();
+    },
+  );
+  it('reconciles a lost successful manual bid without an offeringId field or replay', async () => {
+    const fixture = qualificationFixture(undefined, { lostBidReply: 'provider-freestyle' });
+    const result = await invoke('run');
+    expect(result.validationPassed).toBe(true);
+    expect(fixture.manualBids).toHaveLength(4);
+    expect(result.cleanup.confirmed).toBe(true);
+  });
+  it('stops globally after a provider restore error while independently deapproving its catalog', async () => {
+    const fixture = qualificationFixture(undefined, { restoreFailure: 'sail' });
+    const result = await invoke('run');
+    expect(result.validationPassed).toBe(false);
+    expect(result.cleanup).toMatchObject({ confirmed: true, listingsRestored: true });
+    expect(fixture.approved.size).toBe(0);
+    expect(fixture.active.size).toBe(0);
+    const journal = readFileSync(journalPath, 'utf8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line));
+    expect(
+      journal.some(
+        (r) => r.kind === 'stop-requested' && r.reason === 'CANARY_IMMEDIATE_RESTORE_FAILED',
+      ),
+    ).toBe(true);
+    expect(fixture.requests.length).toBeLessThanOrEqual(4);
+  });
+  it('keeps cleanup restoring for a settling window after an exposure mutation without a request', async () => {
+    const fixture = qualificationFixture();
+    const p = fixture.selected[0],
+      started = state.now;
+    fixture.approved.add(p.provider);
+    fixture.active.add(p.provider);
+    records.push({
+      kind: 'runner-start',
+      at: new Date(started).toISOString(),
+      deadline: started + 720000,
+    });
+    records.push({
+      kind: 'canary-listing-baseline',
+      at: new Date(started).toISOString(),
+      provider: p.provider,
+      catalogId: p.catalogId,
+      offeringId: p.offeringId,
+      catalogApproved: false,
+      offeringActive: false,
+      autoBid: false,
+    });
+    records.push({
+      kind: 'canary-exposure-mutation',
+      at: new Date(started).toISOString(),
+      provider: p.provider,
+    });
+    const result = await invoke('cleanup');
+    expect(result).toMatchObject({ confirmed: true, listingsRestored: true });
+    expect(state.now - started).toBeGreaterThanOrEqual(60000);
+    expect(fixture.requests).toHaveLength(0);
+    expect(fixture.approved.size).toBe(0);
+    expect(fixture.active.size).toBe(0);
+  });
+  it.each([undefined, 'boat'])(
+    'qualifies independent exact canaries and restores exposure with failed provider %s',
+    async (failed) => {
+      const fixture = qualificationFixture(failed);
+      const result = await invoke('run');
+      expect(fixture.requests).toHaveLength(4);
+      expect(fixture.manualBids).toHaveLength(4);
+      expect(result.validationPassed).toBe(!failed);
+      expect(result.terminalHoldMs).toBeGreaterThanOrEqual(130000);
+      expect(result.cleanup).toMatchObject({
+        confirmed: true,
+        listingsRestored: true,
+        nativeConfirmed: failed ? 3 : 4,
+      });
+      for (const p of Object.keys(PROVIDER_CANARIES).filter((p) => p !== failed))
+        expect(result.providerResults[p]).toMatchObject({
+          nativeRunning: true,
+          terminalPassed: true,
+          invoicePassed: true,
+        });
+      expect(fixture.approved.size).toBe(0);
+      expect(fixture.active.size).toBe(0);
+      expect(fixture.unrelatedVm.status).toBe('running');
+      expect(state.create).not.toHaveBeenCalled();
+      expect(state.list).not.toHaveBeenCalled();
+      const journal = readFileSync(journalPath, 'utf8')
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line));
+      expect(journal.filter((r) => r.kind === 'request-intent')).toHaveLength(4);
+      expect(
+        journal.some(
+          (r) =>
+            r.kind === 'canary-buyer-baseline' && r.activeVmIds.includes(fixture.unrelatedVm.id),
+        ),
+      ).toBe(true);
+      expect(journal.some((r) => r.kind === 'overflow-intent')).toBe(false);
+    },
+  );
   function canaryFixture(releaseFourth: boolean) {
     const at = new Date().toISOString();
     const requests: Record<string, any>[] = [];
