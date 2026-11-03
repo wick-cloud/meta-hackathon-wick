@@ -32,6 +32,7 @@ import {
 import { retirePackLocked } from './market.js';
 import { studioAuthority } from '../coding/studio-budget.js';
 import { seal } from '../coding/artifacts.js';
+import { assertDemoInference } from '../demo/inference-guard.js';
 import {
   planTokenAllowance,
   tokenAllowanceGroups,
@@ -529,6 +530,7 @@ async function completeInternal(
     }
     if (grant.status !== 'active' || new Date(grant.expires_at) <= (await clock(db)))
       failure(409, 'grant_closed', 'The grant has closed or expired.');
+    await assertDemoInference(db, ctx.config, actor, grantId, input.max_tokens, true);
     activeMode(ctx, grant);
     const routes = (
       await db.query('SELECT * FROM broker_inference_routes ORDER BY provider FOR UPDATE')
@@ -703,6 +705,7 @@ async function completeInternal(
     await transaction(ctx.pool, async (db) => {
       await authority(db, actor, 'inference:use');
       const grant = await lockedGrant(db, actor, grantId, true);
+      await assertDemoInference(db, ctx.config, actor, grantId, input.max_tokens, false);
       if (source) {
         if (source.kind === 'studio') {
           const task = await studioAuthority(db, source, actor);

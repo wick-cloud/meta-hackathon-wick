@@ -3,6 +3,7 @@ import WebSocket from 'ws';
 import type { RawData } from 'ws';
 import { HttpError, type AppContext } from '../context.js';
 import type { WickTerminal } from './types.js';
+import { demoTerminalActor } from '../demo/access.js';
 
 const MAX_CLIENT_FRAME = 32 * 1024;
 const MAX_BUFFER = 256 * 1024;
@@ -73,12 +74,21 @@ export async function registerTerminal(app: FastifyInstance, ctx: AppContext): P
   async function authorize(request: FastifyRequest): Promise<Rental> {
     if (request.headers.origin !== undefined && request.headers.origin !== allowedOrigin)
       throw new HttpError(403, 'Terminal origin is not allowed');
-    const actor = await ctx.requireActor(request, ['buyer']);
-    if (!actor.apiKey && request.headers.origin !== allowedOrigin)
-      throw new HttpError(403, 'Terminal origin is not allowed');
     const id = (request.params as { id: string }).id;
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id))
       throw new HttpError(404, 'VM not found');
+    // Demo cookies authorize only their own ready terminal. They never create a normal
+    // account session, and an explicit Bearer credential always retains its own authority.
+    const actor =
+      request.headers.authorization !== undefined
+        ? await ctx.requireActor(request, ['buyer'])
+        : await demoTerminalActor(ctx, request, id).catch((error: unknown) => {
+            if (error instanceof HttpError && [401, 403].includes(error.statusCode))
+              return ctx.requireActor(request, ['buyer']);
+            throw error;
+          });
+    if (!actor.apiKey && request.headers.origin !== allowedOrigin)
+      throw new HttpError(403, 'Terminal origin is not allowed');
     const { rows } = await ctx.pool.query<Rental>(
       `SELECT id,buyer_id,status,environment_id,expires_at,COALESCE(catalog_snapshot->>'sourceMode','fixture') AS source_mode FROM broker_vms WHERE id=$1 AND buyer_id=$2`,
       [id, actor.id],

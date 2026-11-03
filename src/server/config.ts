@@ -9,6 +9,8 @@ const envSchema = z.object({
   DATABASE_URL: z.string().min(1),
   BETTER_AUTH_SECRET: z.string().min(32),
   AUTH_TRUST_RAILWAY_PROXY: z.enum(['true', 'false']).default('false'),
+  LIVE_DEMO_ENABLED: z.enum(['true', 'false']).default('false'),
+  LIVE_DEMO_ALLOW_FIXTURES: z.enum(['true', 'false']).default('false'),
   WICK_MODE: z.enum(['fixture', 'real']),
   MUSE_MODE: z.enum(['fixture', 'real']),
   WICK_API_BASE: z.string().url().default('https://app.wick-cloud.com/api'),
@@ -78,6 +80,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     throw new Error('Real Muse mode requires BASETEN_API_KEY (or the legacy META_API_KEY).');
   if (e.NODE_ENV === 'production' && !e.APP_URL.startsWith('https://'))
     throw new Error('Production APP_URL must use HTTPS.');
+  if (e.NODE_ENV === 'production' && e.LIVE_DEMO_ALLOW_FIXTURES === 'true')
+    throw new Error('Demo fixtures are permitted only in development or test.');
   return {
     nodeEnv: e.NODE_ENV,
     port: e.PORT,
@@ -86,6 +90,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     databaseUrl: e.DATABASE_URL,
     authSecret: e.BETTER_AUTH_SECRET,
     authTrustRailwayProxy: e.AUTH_TRUST_RAILWAY_PROXY === 'true',
+    liveDemoEnabled: e.LIVE_DEMO_ENABLED === 'true',
+    liveDemoAllowFixtures: e.LIVE_DEMO_ALLOW_FIXTURES === 'true',
     wickMode: e.WICK_MODE,
     museMode: e.MUSE_MODE,
     wickApiBase: e.WICK_API_BASE,

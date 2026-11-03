@@ -1,4 +1,5 @@
 import { registerDisks, startDiskWorkers } from './disks/index.js';
+import { registerDemo, startDemoWorkers } from './demo/index.js';
 import Fastify, { LogController } from 'fastify';
 import { registerCoding, startCodingWorkers } from './coding/index.js';
 import { registerStudio, startStudioWorkers } from './coding/studio-api.js';
@@ -187,6 +188,7 @@ export async function buildApp(
   registerCoding(app, ctx);
   registerStudio(app, ctx);
   await registerDisks(app, ctx);
+  await registerDemo(app, ctx);
   registerAgreementBilling(app, ctx);
   registerNegotiation(app, ctx);
   await registerMuse(app, ctx);
@@ -197,6 +199,7 @@ export async function buildApp(
   await startInferenceWorkers(ctx);
   await startCodingWorkers(ctx);
   await startStudioWorkers(ctx);
+  await startDemoWorkers(ctx);
   const clientRoot = resolve(options.clientRoot ?? 'dist/client');
   if (existsSync(resolve(clientRoot, 'index.html'))) {
     await app.register(fastifyStatic, { root: clientRoot, prefix: '/', wildcard: false });

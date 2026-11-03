@@ -22,6 +22,26 @@ async function marketplace(page: Page, options: { signedIn?: Role; signInAs?: Ro
           catalog: [],
         },
       });
+    if (path === '/api/demo')
+      return route.fulfill({
+        json: {
+          enabled: false,
+          available: false,
+          reason: 'Live demo is currently unavailable.',
+          mode: 'fixture',
+          serverTime: new Date().toISOString(),
+          cooldownUntil: null,
+          limits: {
+            durationMinutes: 15,
+            cooldownMinutes: 20,
+            maxRequests: 2,
+            maxOutputTokens: 1024,
+            inputTokens: 5000,
+            outputTokens: 2048,
+          },
+          run: null,
+        },
+      });
     if (path === '/api/orders')
       return route.fulfill({ json: { items: [], serverNow: new Date().toISOString() } });
     if (path === '/api/vm-inventory')
@@ -74,7 +94,8 @@ test('anonymous home explains both resources and both sides without private read
   await expect(page.getByRole('heading', { name: 'Scheduled capacity', exact: true })).toHaveCount(
     0,
   );
-  await expect(page.getByText('Illustration only · no purchase')).toBeVisible();
+  await expect(page.getByText('Live demo is currently unavailable.')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Try live demo' })).toBeDisabled();
   await expect(
     page.getByRole('link', { name: 'Buy resources', exact: true }).first(),
   ).toHaveAttribute('href', '/login?intent=buy');
@@ -86,38 +107,11 @@ test('anonymous home explains both resources and both sides without private read
     '/login',
   );
   expect(requests.length).toBeGreaterThan(0);
-  expect(requests.every((request) => request.method === 'GET' && request.path === '/api/me')).toBe(
-    true,
-  );
-});
-
-test('example preserves the same bids between buyer and seller and awards only on interaction', async ({
-  page,
-}) => {
-  const requests = await marketplace(page);
-  await page.goto('/');
-  const table = page.getByRole('table', { name: 'Example provider bids' });
-  await expect(table.getByRole('row')).toHaveCount(4);
-  await expect(page.getByRole('button', { name: 'Buyer view' })).toHaveAttribute(
-    'aria-pressed',
-    'true',
-  );
-  await page.getByRole('button', { name: 'Seller view' }).click();
-  await expect(page.getByRole('button', { name: 'Seller view' })).toHaveAttribute(
-    'aria-pressed',
-    'true',
-  );
-  await expect(table.getByText('Your offering')).toBeVisible();
-  await expect(page.getByText('Your floor')).toContainText('$0.0800');
-  await expect(table.getByText('$0.0900')).toBeVisible();
-  await page.getByRole('button', { name: 'Show award' }).click();
-  await expect(page.getByText('Your bid wins. Capacity is committed.')).toBeVisible();
-  await expect(table.getByText('Awarded', { exact: true })).toBeVisible();
-  await page.getByRole('button', { name: 'Buyer view' }).click();
-  await expect(page.getByText('Provider B wins at $0.0900.')).toBeVisible();
-  await page.getByRole('button', { name: 'Replay example' }).click();
-  await expect(page.getByText('The lowest eligible bid wins.', { exact: true })).toBeVisible();
-  expect(requests.filter((request) => request.method !== 'GET')).toHaveLength(0);
+  expect(
+    requests.every(
+      (request) => request.method === 'GET' && ['/api/me', '/api/demo'].includes(request.path),
+    ),
+  ).toBe(true);
 });
 
 for (const intent of ['buy', 'sell'] as const) {
@@ -196,18 +190,11 @@ for (const width of [1440, 1280, 390]) {
     await page.setViewportSize({ width, height: 960 });
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await page.goto('/');
-    await expect(page.getByRole('button', { name: 'Seller view' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Try live demo' })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
       true,
     );
     await review(page, info, `home-${width}`);
-    await page.getByRole('button', { name: 'Seller view' }).focus();
-    await page.keyboard.press('Enter');
-    await expect(page.getByRole('button', { name: 'Seller view' })).toHaveAttribute(
-      'aria-pressed',
-      'true',
-    );
-    await review(page, info, `home-seller-${width}`);
     await page.getByRole('link', { name: 'Sell capacity', exact: true }).first().focus();
     await page.keyboard.press('Enter');
     await expect(page.getByRole('heading', { name: 'Sign in to sell capacity.' })).toBeVisible();
