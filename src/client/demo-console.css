@@ -118,6 +118,14 @@
   }
 }
 @media (max-width: 600px) {
+  .demo-console .page-heading,
+  .demo-console .form-page > .page-heading {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .demo-console .form-page > .page-heading .page-heading-actions {
+    width: 100%;
+  }
   .demo-console .quiet-badge {
     max-width: 100%;
     white-space: normal;
