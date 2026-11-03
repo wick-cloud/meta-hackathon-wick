@@ -91,6 +91,10 @@ function hiddenPromptReady(output: string): boolean {
   );
   return /(?:^|\n)Batch key: $/.test(plainTerminal(output));
 }
+/** The example's optional follow-up question; the verifier skips it to keep its own second call. */
+function questionPromptReady(output: string): boolean {
+  return /(?:^|\n)Ask Muse one question[^\n]*: $/.test(plainTerminal(output));
+}
 function scriptReceipt(output: string, marker: string): { usage: Usage; answerCharacters: number } {
   const text = plainTerminal(output);
   check(new RegExp(`(?:^|\\n)${marker}:0(?:\\n|$)`).test(text), 'python_script_exit');
@@ -312,11 +316,17 @@ class LiveTerminal {
     );
     await this.wait(() => hiddenPromptReady(this.output), 20000, 'python_hidden_prompt_timeout');
     this.socket.send(JSON.stringify({ type: 'input', data: `${key}\r` }));
+    const finished = () =>
+      new RegExp(`(?:^|\\n)${marker}:\\d+(?:\\n|$)`).test(plainTerminal(this.output));
     await this.wait(
-      () => new RegExp(`(?:^|\\n)${marker}:\\d+(?:\\n|$)`).test(plainTerminal(this.output)),
+      () => finished() || questionPromptReady(this.output),
       125000,
       'python_result_timeout_no_retry',
     );
+    if (!finished()) {
+      this.socket.send(JSON.stringify({ type: 'input', data: '\r' }));
+      await this.wait(finished, 20000, 'python_question_skip_timeout');
+    }
     return scriptReceipt(this.output, marker);
   }
   async runStudioFile(expectedHash: string, name = '') {
@@ -851,11 +861,19 @@ function selfTest() {
     () => hiddenPromptReady('Warning: Password input may be echoed.\r\nBatch key: '),
     CheckFailure,
   );
+  const question = 'Ask Muse one question about this VM, the auctions or Wick (Enter to skip): ';
+  assert.equal(questionPromptReady(`Usage: {}\r\n\r\n2/2  Your turn\r\n${question}`), true);
+  assert.equal(questionPromptReady('Ask Muse one question about'), false);
   const marker = 'WICK_DEMO_DONE_test';
   const transcript = `python3 -u /workspace/hello_muse.py; printf '\\n${marker}:%s\\n' "$?"\r\nHello Muse\r\nBatch key: \r\nCalling Meta Muse. Request: ${randomUUID()}\r\nHello from Meta Muse.\r\nUsage: {"prompt_tokens":20,"completion_tokens":10,"total_tokens":30}\r\n${marker}:0\r\n$ `;
   assert.deepEqual(scriptReceipt(transcript, marker), {
     usage: { prompt_tokens: 20, completion_tokens: 10, total_tokens: 30 },
     answerCharacters: 21,
+  });
+  const explained = `Batch key: \r\n\r\n1/2  Muse explains what you just bought\r\nCalling Meta Muse. Request: ${randomUUID()}\r\nYou rented a Modal Micro VM.\r\n$ uname -a\r\nUsage: {"prompt_tokens":340,"completion_tokens":210,"total_tokens":550}\r\nMuse suggested a command. Nothing was run; type it yourself if you want to try it.\r\n\r\n2/2  Your turn\r\n${question}\r\nNo question sent. Run this script again to ask one before the lease ends.\r\n${marker}:0\r\n$ `;
+  assert.deepEqual(scriptReceipt(explained, marker), {
+    usage: { prompt_tokens: 340, completion_tokens: 210, total_tokens: 550 },
+    answerCharacters: 39,
   });
   assert.throws(
     () => scriptReceipt(transcript.replace(`${marker}:0`, `${marker}:1`), marker),

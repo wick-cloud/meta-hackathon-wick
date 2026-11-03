@@ -24,6 +24,19 @@ discount proposals; the terminal example demonstrates the real Muse integration.
 3. **Terminal demo:** once ready, get the demo token key, connect the terminal,
    and run `python3 /workspace/hello_muse.py`. Paste the key at the hidden prompt.
    The script redeems the Baseten pack through the Broker gateway for Muse Spark Open.
+   - **Call 1:** Muse explains what the judge just bought. It sees the VM's own
+     CPU, memory, OS and free disk, plus `/workspace/receipt.json`: the winning
+     provider, accepted bids, gross bid, sponsor credit and token price. These
+     are the same public values the demo receipt shows. Muse ends with one
+     shell command to try.
+   - **Call 2:** the judge asks one question (Enter skips it and keeps the call
+     for a later run). A rerun after the explanation goes straight to the question.
+   - Both prompts use Meta's low reasoning setting (`Reasoning strength: 8.`), so
+     the 1,024-token output cap goes to the answer. Each prompt is sized to the
+     batch's live balance (read with the same key). The gateway reserves 4,096
+     framing tokens plus each message's bytes per call, which leaves the question
+     room for about 45 words. A longer question is shortened, with a notice.
+   - Muse may suggest a command, but the script never runs model output.
 4. **Guided Muse Studio:** choose Hello World, optionally enter your name, and review the non-editable task box. Start the demo and watch the real model generate `hello_world.py` and the
    VM run and verify it. Inspect the generated code and execution output, then
    rerun `python3 /workspace/hello_world.py` in the terminal. Rerunning this Hello
@@ -142,7 +155,8 @@ key rejection, disk deletion, and the paired cooldown. Include the homepage URL
 and these judge instructions alongside the public GitHub repo and demo video.
 
 The opt-in verifier runs that journey through public HTTP and terminal WebSocket
-APIs. It allocates one real demo VM/disk, makes two bounded Baseten requests,
+APIs. It allocates one real demo VM/disk, makes two bounded Baseten requests
+(it skips the script's optional question so its own direct request is the second),
 checks that a third request is rejected and the terminal still accepts commands
 and reconnects without changing the lease, then explicitly ends its own test run
 to verify cleanup and cooldown. Ordinary judge sessions stay open after token

@@ -8,18 +8,14 @@ import { transaction, enqueue } from '../marketplace/db.js';
 import { iso, type Row } from '../marketplace/data.js';
 import { clientOperationKey } from '../operations.js';
 import { diskCatalogEligible, diskOptions } from '../disks/service.js';
-import {
-  requireFreshManagedRate,
-  fixedQuote,
-  managedPricing,
-  isSponsoredComputeQuote,
-} from '../../shared/pricing.js';
+import { requireFreshManagedRate, fixedQuote, managedPricing } from '../../shared/pricing.js';
 import { applyCreditEntry } from '../agreements/credits.js';
 import { createGrantInTransaction } from '../inference/grants.js';
 import { OFFER_SELECT, offeringOpen, packPrice } from '../inference/market.js';
 import { issuePackKey } from '../inference/pack-access.js';
 import type { DemoIdentity } from './access.js';
 import { DEMO_COMPUTE_CATALOG_IDS, demoComputeProviders } from './compute.js';
+import { demoBidView, demoVmPrice } from './receipt.js';
 
 export const DEMO_QUEUE = 'broker-homepage-demo';
 export const DEMO_CATALOG_ID = 'modal:micro:auto';
@@ -512,40 +508,9 @@ export async function demoState(
             provider: 'modal',
             catalogId: DEMO_CATALOG_ID,
             terminalPath: live ? `/api/vms/${vm.id}/terminal` : null,
-            priceCents:
-              vm?.quote_snapshot?.demoSponsorship?.effectivePriceCents ??
-              vm?.quote_snapshot?.totalPriceCents ??
-              null,
-            ...(isSponsoredComputeQuote(vm?.quote_snapshot?.pricing)
-              ? { operatorSponsored: true }
-              : {}),
-            ...(vm?.quote_snapshot?.demoSponsorship
-              ? {
-                  grossPriceCents: Number(vm.quote_snapshot.totalPriceCents),
-                  sponsorCreditCents: vm.quote_snapshot.demoSponsorship.sponsorCreditCents,
-                }
-              : {}),
+            ...demoVmPrice(vm),
             auctionEndsAt: iso(request.closes_at),
-            bids: vmBids.rows.map((b) => ({
-              provider:
-                b.offering_snapshot?.catalog?.provider ??
-                b.offering_snapshot?.cloudProvider ??
-                'modal',
-              priceCents:
-                b.offering_snapshot?.demoSponsorship?.effectivePriceCents ??
-                Number(b.total_price_cents),
-              ...(isSponsoredComputeQuote(b.offering_snapshot?.pricing)
-                ? { operatorSponsored: true }
-                : {}),
-              ...(b.offering_snapshot?.demoSponsorship
-                ? {
-                    grossPriceCents: Number(b.total_price_cents),
-                    sponsorCreditCents: b.offering_snapshot.demoSponsorship.sponsorCreditCents,
-                    catalogId: b.offering_snapshot.catalog.id,
-                  }
-                : {}),
-              acceptedAt: iso(b.created_at)!,
-            })),
+            bids: vmBids.rows.map(demoBidView),
             cleanupConfirmed: Boolean(vm?.cleanup_confirmed_at),
           }
         : null,

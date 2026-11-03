@@ -642,6 +642,25 @@ describe.skipIf(!databaseUrl)(
         grossPriceCents: 8,
         sponsorCreditCents: 7,
       });
+      // The script's receipt.json repeats the same public award the homepage shows.
+      const bootstrap = (commands.mock.calls[0] as unknown as [string, { command: string }])[1];
+      const encodedReceipt = bootstrap.command.match(
+        /f\.write_bytes\(base64\.b64decode\("([A-Za-z0-9+/=]+)"\)\)/,
+      )?.[1];
+      const receipt = JSON.parse(Buffer.from(encodedReceipt!, 'base64').toString());
+      expect(receipt.compute).toMatchObject({
+        winner: 'Modal',
+        size: 'Micro',
+        leaseMinutes: 15,
+        paid: '$0.01',
+        grossBid: '$0.08',
+        sponsorCredit: '$0.07',
+      });
+      expect(receipt.compute.bids).toHaveLength(view.run!.vm!.bids.length);
+      expect(receipt.tokens).toMatchObject({ seller: 'Baseten', input: 5000, output: 2048 });
+      expect(receipt.tokens.paid).toBe(
+        view.run!.tokens!.priceCents === null ? null : `$${view.run!.tokens!.priceCents / 100}`,
+      );
       expect(view.run!.vm!.bids).toEqual([
         expect.objectContaining({
           provider: 'e2b',

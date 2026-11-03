@@ -11,7 +11,15 @@ import { createDisk, deleteDisk, diskDetail, observeVmDisk } from '../disks/serv
 import { createRequest, cancelRequest } from '../marketplace/auction.js';
 import { terminateVm } from '../marketplace/lifecycle.js';
 import { demoBootstrapCommand } from './script.js';
-import { DEMO_QUEUE, DEMO_CATALOG_ID, demoActor, demoEvent, demoModeAllowed } from './service.js';
+import { demoReceiptFacts } from './receipt.js';
+import {
+  DEMO_QUEUE,
+  DEMO_CATALOG_ID,
+  DEMO_LIMITS,
+  demoActor,
+  demoEvent,
+  demoModeAllowed,
+} from './service.js';
 
 async function save(ctx: AppContext, run: Row, assignment: string, values: unknown[] = []) {
   return (
@@ -334,6 +342,23 @@ async function advance(ctx: AppContext, run: Row) {
     await fail(ctx, run, 'The private native disk mount could not be confirmed.');
     return;
   }
+  // Terminal runs give hello_muse.py the same public bid rows the homepage receipt shows.
+  const receipt =
+    run.kind === 'studio'
+      ? null
+      : demoReceiptFacts({
+          vm,
+          bids: (
+            await ctx.pool.query(
+              'SELECT total_price_cents,offering_snapshot,created_at FROM broker_bids WHERE request_id=$1 ORDER BY created_at,id LIMIT 8',
+              [run.request_id],
+            )
+          ).rows,
+          tokenPriceCents: order.price_cents,
+          leaseMinutes: DEMO_LIMITS.durationMinutes,
+          inputTokens: DEMO_LIMITS.inputTokens,
+          outputTokens: DEMO_LIMITS.outputTokens,
+        });
   const authority = (
     await ctx.pool.query(
       `UPDATE broker_demo_runs SET bootstrap_started_at=clock_timestamp()
@@ -344,7 +369,7 @@ async function advance(ctx: AppContext, run: Row) {
   ).rowCount;
   if (!authority) return;
   const initialized = await ctx.wick.runCommand!(vm.environment_id, {
-    command: demoBootstrapCommand(ctx.config.appUrl, run.kind, run.reusable_disk),
+    command: demoBootstrapCommand(ctx.config.appUrl, run.kind, run.reusable_disk, receipt),
     cwd: '/workspace',
   });
   if (
