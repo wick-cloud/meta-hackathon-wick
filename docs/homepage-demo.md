@@ -10,7 +10,7 @@ switches provider or VM size.
 
 ## Judge experience
 
-1. Open the public homepage and select **Try live demo**.
+1. Open the [hosted homepage](https://meta-hackathon-wick-production.up.railway.app) and select **Try live demo**.
 2. Watch the token and compute bids, countdowns, and award receipts on the page.
 3. Once the VM and script are ready, issue and copy the demo token key.
 4. Connect the browser terminal and run `python3 /workspace/hello_muse.py`.
@@ -100,3 +100,15 @@ the private disk; the preloaded Python script produces a real Baseten/Muse
 response; quota and receipts update; and ending the demo confirms VM termination,
 key rejection, disk deletion, and the paired cooldown. Include the homepage URL
 and these judge instructions alongside the public GitHub repo and demo video.
+
+The opt-in verifier runs that journey through public HTTP and terminal WebSocket
+APIs. It allocates one real demo VM/disk, makes two bounded Baseten requests,
+checks that a third request is rejected, then verifies cleanup and cooldown.
+It requires no provider or account credentials and never logs the key or terminal
+text. Do not force-kill it during cleanup.
+
+```sh
+APP_URL=https://meta-hackathon-wick-production.up.railway.app npx tsx scripts/verify-homepage-demo.ts --live
+```
+
+Use `--self-test` without `APP_URL` for parser checks with no network calls.
