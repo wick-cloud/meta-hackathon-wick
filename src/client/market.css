@@ -57,237 +57,137 @@
 .orders-filter-fields {
   display: flex;
   flex-wrap: wrap;
-  align-items: flex-end;
-  gap: 12px;
+  align-items: center;
+  gap: 10px;
   min-width: 0;
 }
-.orders-filters .field {
-  margin: 0;
-  min-width: 138px;
-}
-.orders-filters .field > span:first-child {
-  display: block;
-  margin-bottom: 7px;
-  font-size: 11px;
-  font-weight: 500;
-  color: var(--muted);
+.orders-filter-fields select {
+  width: auto;
+  min-width: 150px;
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--soft);
+  padding: 7px 24px 7px 11px;
 }
 .orders-error {
-  padding: 14px 18px 0;
+  padding: 12px 16px 0;
 }
 .orders-error .error-box {
   margin: 0;
 }
 .orders-table {
-  min-width: 920px;
   table-layout: fixed;
 }
-.orders-table th:nth-child(1) {
-  width: 28%;
-}
 .orders-table th:nth-child(2) {
-  width: 17%;
+  width: 170px;
 }
 .orders-table th:nth-child(3) {
-  width: 18%;
+  width: 172px;
 }
 .orders-table th:nth-child(4) {
-  width: 19%;
+  width: 185px;
 }
 .orders-table th:nth-child(5) {
-  width: 18%;
+  width: 96px;
+}
+.orders-table th:nth-child(6) {
+  width: 132px;
 }
 .orders-table td:first-child {
   min-width: 0;
   max-width: none;
 }
-.orders-identity {
-  display: flex;
-  align-items: flex-start;
-  gap: 11px;
-}
-.orders-kind-icon {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  flex-shrink: 0;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--surface-hover);
-  color: var(--soft);
-}
-.orders-kind-icon.agreement {
-  background: var(--accent-soft);
-  border-color: color-mix(in srgb, var(--accent) 16%, var(--line));
-  color: var(--accent);
-}
-.orders-identity-copy {
-  min-width: 0;
+.orders-identity-cell .data-table-identity > div {
+  flex: 1;
 }
 .market-order-title {
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  display: block;
   overflow: hidden;
-  font-weight: 550;
-  font-size: 13px;
-  line-height: 1.5;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--ink);
 }
-.market-order-title:hover {
-  color: var(--accent);
-  text-decoration: underline;
-  text-underline-offset: 3px;
-}
-.orders-reference {
+.orders-reference,
+.orders-token-spec {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 4px 8px;
-  margin-top: 5px;
-  color: var(--muted);
-  font-size: 11px;
-  line-height: 1.5;
+  gap: 8px;
+  min-width: 0;
+  white-space: nowrap;
+}
+.orders-reference .orders-kind {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: 'Inter Variable', Inter, sans-serif;
 }
 .orders-reference code {
-  color: var(--soft);
-  font-size: 11px;
-  font-family: 'SFMono-Regular', Consolas, monospace;
-  letter-spacing: 0.15px;
+  flex-shrink: 0;
+  font: inherit;
 }
-.orders-created {
-  display: block;
-  color: var(--muted);
-  font-size: 11px;
+.orders-token-spec {
   margin-top: 3px;
+}
+.orders-token-spec .orders-model {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.orders-token-spec > span:last-child {
+  flex-shrink: 0;
 }
 .orders-status-cell {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 7px;
+  gap: 3px;
 }
 .orders-status-meta {
   display: flex;
-  flex-direction: column;
-  gap: 3px;
+  flex-wrap: wrap;
+  gap: 0 6px;
   color: var(--muted);
-  font-size: 11px;
-  line-height: 1.5;
+  font-size: 12px;
 }
-.orders-separator {
-  color: var(--muted);
-  padding: 0 3px;
+.orders-status-meta > span + span::before {
+  content: '·';
+  margin-right: 6px;
 }
 .orders-status-meta .orders-cleanup {
   color: var(--warning);
 }
-.orders-table th.orders-amount-head,
-.orders-table .orders-amount-cell {
-  text-align: right;
-}
 .orders-amount-cell > strong {
   display: block;
-  font-size: 14px;
-  font-weight: 600;
-  line-height: 1.45;
-  font-variant-numeric: tabular-nums;
 }
-.orders-amount-label {
-  margin-top: 3px;
-  color: var(--soft);
-  font-size: 11px;
-  line-height: 1.5;
-}
+.orders-amount-label,
 .orders-amount-detail {
   margin-top: 3px;
   color: var(--muted);
-  font-size: 11px;
-  line-height: 1.5;
-  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  white-space: normal;
 }
 .orders-timing-cell time {
   display: block;
-  color: var(--soft);
-  font-size: 11px;
   font-variant-numeric: tabular-nums;
-  line-height: 1.6;
+  white-space: nowrap;
 }
 .orders-time-label {
   display: flex;
   align-items: center;
   gap: 5px;
   color: var(--muted);
-  font-size: 11px;
-  line-height: 1.5;
-  margin-bottom: 5px;
-}
-.orders-timing-cell .orders-time-primary {
-  color: var(--ink);
   font-size: 12px;
-}
-.orders-time-note {
-  display: block;
-  font-size: 10px;
-  color: var(--muted);
-  margin-top: 3px;
+  margin-bottom: 3px;
 }
 .orders-countdown {
   display: flex;
   align-items: center;
   gap: 6px;
-  margin-bottom: 3px;
-  font-size: 15px;
-  font-variant-numeric: tabular-nums;
-  font-weight: 600;
 }
 .market-live {
   color: var(--accent);
   font-variant-numeric: tabular-nums;
 }
-.market-row-actions {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 8px;
-}
-.market-row-actions .orders-secondary-action {
-  display: inline-flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 4px;
-  font-size: 11px;
-  line-height: 1.5;
-  white-space: nowrap;
-  color: var(--soft);
-}
-.market-row-actions .orders-secondary-action:hover {
-  color: var(--accent);
-}
-@keyframes orders-skeleton {
-  to {
-    opacity: 0.4;
-  }
-}
-
-.market-pagination {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 14px 18px;
-  border-top: 1px solid var(--line);
-  gap: 16px;
-  color: var(--muted);
-  font-size: 11px;
-}
-.market-pagination > div {
-  display: flex;
-  gap: 8px;
-}
 .orders-update-status {
-  font-size: 10px;
   color: var(--muted);
 }
 
@@ -791,32 +691,14 @@ a.market-activation:hover strong {
     font-size: 12px;
   }
   .orders-filter-fields {
-    display: contents;
+    width: 100%;
   }
-  .orders-filters .field {
+  .orders-filter-fields select {
+    flex: 1 1 130px;
     min-width: 0;
-  }
-  .orders-filter-fields .field:first-child {
-    grid-column: auto;
   }
   .orders-auto-update {
     display: none;
-  }
-  .orders-identity {
-    gap: 8px;
-  }
-  .orders-kind-icon {
-    width: 28px;
-    height: 28px;
-    border-radius: 7px;
-  }
-  .orders-reference {
-    font-size: 10px;
-  }
-  .orders-table td,
-  .orders-table th {
-    padding-left: 13px;
-    padding-right: 13px;
   }
   .market-order-intro {
     align-items: flex-start;
