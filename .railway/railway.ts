@@ -8,7 +8,7 @@ export default defineRailway(() => {
     build: { builder: 'DOCKERFILE', dockerfilePath: 'Dockerfile' },
     deploy: {
       startCommand: 'node dist/src/server/index.js',
-      preDeployCommand: ['npm run db:migrate:production'],
+      preDeployCommand: ['node dist/scripts/migrate.js'],
       preDeployTimeoutSeconds: 120,
       healthcheckPath: '/ready',
       healthcheckTimeout: 120,

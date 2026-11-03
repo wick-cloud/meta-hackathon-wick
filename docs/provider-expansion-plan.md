@@ -62,7 +62,7 @@ Exact region/resource/duration checks, managed billing, rate freshness, frozen b
 The setup command requires a provider subset and uses only those providers' private credentials and selected catalog IDs:
 
 ```sh
-npm run configure:real:production -- --apply-providers --providers sail,tenki,freestyle,boat --stage
+node dist/scripts/configure-real.js --apply-providers --providers sail,tenki,freestyle,boat --stage
 ```
 
 New catalog entries are unapproved, new offerings inactive, and automatic bids disabled. Passwords are required for new accounts only and never reset on retries. Existing custom capacity, policy, prices, renamed offerings, approval/activity state, sessions and financial history are preserved by default. The per-provider `_CAPACITY` variables are set to one for this rollout; they override any existing shared `REAL_PROVIDER_CAPACITY=5` value. Scope the initial catalogs to Sail/Tenki Micro and Freestyle/Boat Small.
