@@ -7,6 +7,7 @@ import {
   discoverEnvironment,
   managedEnvironmentMatches,
   environmentOwnershipMatches,
+  environmentCleanupConfirmed,
 } from '../integrations/discovery.js';
 import { transaction, enqueue, activity, QUEUES } from './db.js';
 import { scheduledActivationReady, scheduledActivationCleaned } from '../agreements/activation.js';
@@ -170,12 +171,12 @@ async function requestCleanup(ctx: AppContext, vmId: string, reason: string, exp
     )
       return;
     await db.query(
-      `UPDATE broker_vms SET status=$2,termination_requested_at=COALESCE(termination_requested_at,now()),failure_reason=COALESCE(failure_reason,$3),lease_until=NULL WHERE id=$1`,
+      `UPDATE broker_vms SET status=$2,termination_requested_at=COALESCE(termination_requested_at,now()),failure_reason=$3,lease_until=NULL WHERE id=$1`,
       [vmId, expired ? 'expired' : 'terminating', reason],
     );
     if (!vm.ready_at)
       await db.query(
-        "UPDATE broker_requests SET status=CASE WHEN status='cancelled' THEN status ELSE 'failed' END,failure_reason=$2 WHERE id=$1",
+        "UPDATE broker_requests SET status=CASE WHEN status='cancelled' THEN status ELSE 'failed' END,failure_reason=CASE WHEN status IN ('failed','cancelled') THEN COALESCE(failure_reason,$2) ELSE $2 END WHERE id=$1",
         [vm.request_id, reason],
       );
     await enqueue(ctx, db, QUEUES.cleanup, { vmId });
@@ -259,10 +260,16 @@ export async function provisionVm(ctx: AppContext, vmId: string) {
       );
       return;
     }
-    if (environment.status === 'terminated') {
+    if (environmentCleanupConfirmed(environment)) {
       if (current.disk_id && !(await reconcileVmDisk(ctx, current, environment)))
         throw new Error('Persistent disk detachment is not confirmed.');
-      await confirmCleanup(ctx, vmId, 'Wick terminated the environment before readiness.');
+      await confirmCleanup(
+        ctx,
+        vmId,
+        environment.status === 'failed'
+          ? 'Wick confirmed provisioning failure and completed cleanup; no charge.'
+          : 'Wick terminated the environment before readiness.',
+      );
       return;
     }
     if (environment.status === 'failed') {
@@ -362,9 +369,18 @@ export async function confirmCleanup(
       throw new Error('Persistent disk detachment is not confirmed.');
     const expired = vm.expires_at && new Date(vm.expires_at).getTime() <= Date.now();
     const status = expired ? 'expired' : vm.ready_at ? 'terminated' : 'failed';
+    const request = (
+      await db.query('SELECT status,failure_reason FROM broker_requests WHERE id=$1', [
+        vm.request_id,
+      ])
+    ).rows[0];
+    const failure =
+      !vm.ready_at && ['failed', 'cancelled'].includes(request?.status)
+        ? (request.failure_reason ?? message)
+        : message;
     await db.query(
-      'UPDATE broker_vms SET status=$2,cleanup_confirmed_at=now(),lease_until=NULL,failure_reason=CASE WHEN ready_at IS NULL THEN $3 ELSE failure_reason END WHERE id=$1',
-      [vmId, status, message],
+      'UPDATE broker_vms SET status=$2,cleanup_confirmed_at=now(),lease_until=NULL,failure_reason=CASE WHEN ready_at IS NULL THEN $3 ELSE NULL END WHERE id=$1',
+      [vmId, status, failure],
     );
     await db.query(
       'UPDATE broker_holds SET released_at=now(),release_reason=$2 WHERE bid_id=$1 AND released_at IS NULL',
@@ -375,7 +391,7 @@ export async function confirmCleanup(
     if (!vm.ready_at)
       await db.query(
         "UPDATE broker_requests SET status=CASE WHEN status='cancelled' THEN status ELSE 'failed' END,failure_reason=$2 WHERE id=$1",
-        [vm.request_id, message],
+        [vm.request_id, failure],
       );
     await activity(
       db,
@@ -440,13 +456,19 @@ export async function cleanupVm(ctx: AppContext, vmId: string) {
     )
       throw new Error('Wick cleanup ownership is unverified; no termination was attempted.');
     await persistObservation(ctx, vmId, environment);
-    if (environment.status === 'terminated') {
+    if (environmentCleanupConfirmed(environment)) {
       if (
         vm.disk_id &&
         !(await reconcileVmDisk(ctx, { ...vm, environment_id: environment.id }, environment))
       )
         throw new Error('Persistent disk detachment is not confirmed.');
-      await confirmCleanup(ctx, vmId);
+      await confirmCleanup(
+        ctx,
+        vmId,
+        environment.status === 'failed'
+          ? 'Wick confirmed provisioning failure and completed cleanup; no charge.'
+          : undefined,
+      );
       return;
     }
     await ctx.wick.terminate(environment.id);
@@ -458,13 +480,19 @@ export async function cleanupVm(ctx: AppContext, vmId: string) {
     )
       throw new Error('Wick cleanup observation ownership is unverified.');
     await persistObservation(ctx, vmId, observed);
-    if (observed.status === 'terminated') {
+    if (environmentCleanupConfirmed(observed)) {
       if (
         vm.disk_id &&
         !(await reconcileVmDisk(ctx, { ...vm, environment_id: observed.id }, observed))
       )
         throw new Error('Persistent disk detachment is not confirmed.');
-      await confirmCleanup(ctx, vmId);
+      await confirmCleanup(
+        ctx,
+        vmId,
+        observed.status === 'failed'
+          ? 'Wick confirmed provisioning failure and completed cleanup; no charge.'
+          : undefined,
+      );
       return;
     }
     await retryCleanup(
@@ -527,7 +555,7 @@ export async function terminateVm(
         );
         if (!vm.ready_at)
           await db.query(
-            "UPDATE broker_requests SET status='cancelled',failure_reason='Cancelled before terminal readiness; no charge.' WHERE id=$1",
+            "UPDATE broker_requests SET status='cancelled',failure_reason='Cancelled before terminal readiness; no charge.' WHERE id=$1 AND status NOT IN ('failed','cancelled')",
             [vm.request_id],
           );
         await enqueue(ctx, db, QUEUES.cleanup, { vmId });

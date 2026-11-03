@@ -62,6 +62,7 @@ import {
 } from '../src/server/inference/gateway.js';
 import { registerInference, maintainInference } from '../src/server/inference/index.js';
 import { transaction } from '../src/server/marketplace/db.js';
+import { operationFingerprint } from '../src/server/operations.js';
 import { applyCreditEntry, creditWalletView } from '../src/server/agreements/credits.js';
 import { taskUsage } from '../src/server/coding/usage-data.js';
 import { listOrders, ORDERS_QUERY, registerOrders } from '../src/server/orders.js';
@@ -2287,6 +2288,222 @@ describe.skipIf(!url)(
           (await quotes(ctx, owner, { grantId: emptyModal.id, inputTokens: 1, outputTokens: 12 }))
             .items,
         ).toEqual([]);
+      } finally {
+        ctx.config = oldConfig;
+      }
+    });
+    it('rejects framing-only wallet packs before reserving money, admits useful messages and preserves pooled agent top-ups', async () => {
+      const oldConfig = ctx.config;
+      try {
+        ctx.config = { ...oldConfig, inferenceBasetenProviderEmail: providers[0].email };
+        ctx.inference = await createInferenceRuntime(
+          loadConfig({
+            DATABASE_URL: url!,
+            WICK_MODE: 'fixture',
+            MUSE_MODE: 'fixture',
+            INFERENCE_MARKET_MODE: 'real',
+            BASETEN_API_KEY: 'offline-test-key',
+            BETTER_AUTH_SECRET: oldConfig.authSecret,
+            INFERENCE_QUALIFICATION_JSON: JSON.stringify([
+              {
+                provider: 'baseten',
+                contract: 'muse-spark-open-text-v1',
+                nativeModel: 'meta-models/muse-spark-open-1026',
+                revision: 'offline-utf8-contract',
+                evidence: 'Offline contract fixture only; no native qualification or live request.',
+                validUntil: new Date(Date.now() + 86400000).toISOString(),
+                fixedInputUpperBound: 1048576,
+                inputAccounting: 'utf8-bytes-v1',
+                minimumOutputTokens: 256,
+                maximumOutputTokens: 2048,
+                authoritativeUsage: true,
+                outputIncludesReasoning: true,
+                allAcceptedTextCovered: true,
+                rejectionHasNoUsage: true,
+              },
+            ]),
+          }),
+        );
+        ctx.inference.dispatch = vi.fn(async () => ({
+          id: 'offline-native-receipt',
+          content: 'OK',
+          finishReason: 'stop',
+          inputTokens: 1,
+          outputTokens: 1,
+        }));
+        await initializeInference(ctx);
+        await pool.query('UPDATE broker_token_offerings SET active=true,auto_bid=true');
+        const walletBefore = await creditWalletView(pool, owner.id);
+        for (const quantities of [
+          { inputTokens: 4128, outputTokens: 256 },
+          { inputTokens: 4147, outputTokens: 255 },
+        ]) {
+          expect((await quotes(ctx, owner, quantities)).items).toEqual([]);
+          await expect(
+            createTokenOrder(ctx, owner, {
+              ...quantities,
+              operationKey: randomUUID(),
+              mode: 'auction',
+              maxTotalCents: 1,
+            }),
+          ).rejects.toMatchObject({ code: 'route_unavailable' });
+        }
+        expect(await creditWalletView(pool, owner.id)).toEqual(walletBefore);
+        expect(await walletScopeCount()).toBe(0);
+        expect(
+          (await pool.query('SELECT count(*)::int n FROM broker_token_orders')).rows[0].n,
+        ).toBe(0);
+
+        for (const [inputTokens, content] of [
+          [4129, 'a'],
+          [4147, 'Reply with only OK.'],
+        ] as const) {
+          const quantities = { inputTokens, outputTokens: 256 };
+          const quote = (await quotes(ctx, owner, quantities)).items[0]!;
+          expect(quote).toBeDefined();
+          const purchase = {
+            ...quantities,
+            operationKey: randomUUID(),
+            mode: 'instant',
+            quoteId: quote.quoteId,
+            maxTotalCents: quote.priceCents,
+          };
+          const order = await createTokenOrder(ctx, owner, purchase);
+          const pack = (await tokenOrderDetail(ctx, owner, order.id)).pack!;
+          const issued = await issuePackKey(ctx, owner, pack.id, { operationKey: randomUUID() });
+          const keyActor: Actor = {
+            ...owner,
+            apiKey: {
+              id: issued.key.id,
+              grantId: pack.grantId,
+              packId: pack.id,
+              scopes: issued.key.scopes,
+              limits: {},
+            },
+          };
+          // The minimum is an honest one-byte envelope, not a promise to fit
+          // arbitrary text. The larger saved prompt still needs its full bound.
+          if (inputTokens === 4129)
+            await expect(
+              complete(ctx, keyActor, {
+                ...call,
+                messages: [{ role: 'user', content: 'Reply with only OK.' }],
+                max_tokens: 256,
+                operationKey: randomUUID(),
+              }),
+            ).rejects.toMatchObject({ code: 'token_allowance_exceeded' });
+          await complete(ctx, keyActor, {
+            ...call,
+            messages: [{ role: 'user', content }],
+            max_tokens: 256,
+            operationKey: randomUUID(),
+          });
+          const reserved = (
+            await pool.query(
+              'SELECT reserved_input,reserved_output FROM broker_inference_requests WHERE grant_id=$1',
+              [pack.grantId],
+            )
+          ).rows;
+          expect(reserved).toEqual([{ reserved_input: inputTokens, reserved_output: 256 }]);
+          const walletAfter = await creditWalletView(pool, owner.id);
+          expect(await createTokenOrder(ctx, owner, purchase)).toMatchObject({ id: order.id });
+          expect(await creditWalletView(pool, owner.id)).toEqual(walletAfter);
+        }
+        expect(ctx.inference.dispatch).toHaveBeenCalledTimes(2);
+
+        // Materialize a pre-fix awarded wallet auction. Its money and quota are
+        // historical facts; the new purchase floor must not rewrite or reject
+        // replay of that purchase, or change admission for its existing key.
+        const historicalQuote = (await quotes(ctx, owner, { inputTokens: 4129, outputTokens: 256 }))
+          .items[0]!;
+        const historical = {
+          operationKey: randomUUID(),
+          mode: 'auction',
+          inputTokens: 4128,
+          outputTokens: 256,
+          maxTotalCents: historicalQuote.priceCents,
+        };
+        const historicalOrder = await createTokenOrder(ctx, owner, {
+          ...historical,
+          mode: 'instant',
+          inputTokens: 4129,
+          quoteId: historicalQuote.quoteId,
+        });
+        const historicalPack = (await tokenOrderDetail(ctx, owner, historicalOrder.id)).pack!;
+        await transaction(pool, async (db) => {
+          await db.query(
+            "UPDATE broker_token_orders SET mode='auction',input_tokens=4128,input_fingerprint=$2 WHERE id=$1",
+            [historicalOrder.id, operationFingerprint(historical)],
+          );
+          await db.query(
+            'UPDATE broker_token_packs SET input_tokens=4128,available_input=4128 WHERE id=$1',
+            [historicalPack.id],
+          );
+          await db.query(
+            "UPDATE broker_inference_routes SET outstanding_input=outstanding_input-1 WHERE provider='baseten'",
+          );
+        });
+        const historicalWallet = await creditWalletView(pool, owner.id);
+        const historicalLedger = (
+          await pool.query('SELECT count(*)::int n FROM broker_credit_ledger')
+        ).rows[0].n;
+        expect(await createTokenOrder(ctx, owner, historical)).toMatchObject({
+          id: historicalOrder.id,
+          inputTokens: 4128,
+          status: 'awarded',
+        });
+        expect(await creditWalletView(pool, owner.id)).toEqual(historicalWallet);
+        expect(
+          (await pool.query('SELECT count(*)::int n FROM broker_credit_ledger')).rows[0].n,
+        ).toBe(historicalLedger);
+        const historicalKey = await issuePackKey(ctx, owner, historicalPack.id, {
+          operationKey: randomUUID(),
+        });
+        await complete(
+          ctx,
+          {
+            ...owner,
+            apiKey: {
+              id: historicalKey.key.id,
+              grantId: historicalPack.grantId,
+              packId: historicalPack.id,
+              scopes: historicalKey.key.scopes,
+              limits: {},
+            },
+          },
+          {
+            ...call,
+            messages: [{ role: 'user', content: '' }],
+            max_tokens: 256,
+            operationKey: randomUUID(),
+          },
+        );
+        expect(
+          (
+            await pool.query(
+              'SELECT reserved_input FROM broker_inference_requests WHERE grant_id=$1',
+              [historicalPack.grantId],
+            )
+          ).rows,
+        ).toEqual([{ reserved_input: 4128 }]);
+
+        // These are valid historical agent quantities. Only the added byte is
+        // purchased; imposing standalone floors on the top-up would break it.
+        const g = await grant(100, { allowedProviders: ['baseten'] });
+        await buy(g.id, { inputTokens: 4128, outputTokens: 256 });
+        expect(await buy(g.id, { inputTokens: 1, outputTokens: 1 })).toMatchObject({
+          inputTokens: 1,
+          outputTokens: 1,
+        });
+        expect((await quotes(ctx, owner, { inputTokens: 1, outputTokens: 1 })).items).toEqual([]);
+        const key = await agent(g.id);
+        await complete(ctx, key.actor, {
+          ...call,
+          messages: [{ role: 'user', content: 'a' }],
+          max_tokens: 256,
+          operationKey: randomUUID(),
+        });
+        expect(ctx.inference.dispatch).toHaveBeenCalledTimes(4);
       } finally {
         ctx.config = oldConfig;
       }

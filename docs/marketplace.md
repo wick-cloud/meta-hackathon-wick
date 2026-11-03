@@ -30,7 +30,7 @@ Provider Earnings reads only the authenticated provider's invoices with indexed 
 
 ## Cleanup and recovery
 
-A termination response is only acceptance. Supplier capacity is released only after observing Wick `terminated`, or after a definitive initial create rejection before admission. Cancelling before the first create attempt allocates nothing. If any create attempt was uncertain, cleanup reconciles that same key before terminating the discovered environment.
+A termination response is only acceptance. Supplier capacity is released after observing Wick `terminated`, after an owned failed launch explicitly reports `launch.state: failed`, `launch.cleanup: complete` and a valid past `terminatedAt`, or after a definitive initial create rejection before admission. A failed status alone never proves cleanup. Persistent disks must independently confirm that the environment is no longer attached. Cancelling before the first create attempt allocates nothing. If any create attempt was uncertain, cleanup reconciles that same key before terminating the discovered environment.
 
 Provisioning and cleanup each have a maximum of 60 durable attempts, with bounded delays and upstream timeouts. Unresolved cleanup retains the reservation and appears in administrator configuration. The administrator can explicitly retry reconciliation. Startup restores work for open auctions and unresolved VMs without changing their key or expiry. Queue inserts and related domain changes use one PostgreSQL transaction.
 

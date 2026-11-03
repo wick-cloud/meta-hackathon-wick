@@ -40,6 +40,10 @@ export interface InferenceRoute {
   qualified: boolean;
   reason: string;
   minimumInputReservation: number;
+  minimumPackInputTokens?: number;
+  minimumOutputTokens?: number;
+  inputAccounting?: 'utf8-bytes-v1';
+  maximumInputReservation?: number;
   maximumOutputTokens: number;
 }
 export interface InferenceCatalog {
