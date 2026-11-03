@@ -25,6 +25,16 @@ const navigation = {
     ['API keys', '/keys', 'API keys'],
   ],
 } as const;
+const walkthroughPaths = {
+  buyer: ['/new/vm', '/vms', '/studio?new=1'],
+  seller: ['/provider/capacity', '/provider/requests', '/provider/earnings'],
+} as const;
+
+function walkthroughStep(page: Page, role: Role, step: number) {
+  return page
+    .locator('#demo-console-guide')
+    .locator(`a[href="/demo/${role}${walkthroughPaths[role][step]}"]`);
+}
 
 /** Demo traffic must stay inside its local transport, not be fulfilled by these tests. */
 async function guardDemo(page: Page) {
@@ -149,6 +159,134 @@ for (const role of ['buyer', 'seller'] as const) {
     guard.assertLocal();
   });
 }
+
+for (const role of ['buyer', 'seller'] as const) {
+  test(`${role} walkthrough opens real screens, navigates steps, and can finish and replay`, async ({
+    page,
+  }, info) => {
+    const guard = await guardDemo(page);
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.goto(`/demo/${role}`);
+    const guide = page.locator('#demo-console-guide');
+    await expect(guide).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Hide guide', exact: true })).toHaveAttribute(
+      'aria-expanded',
+      'true',
+    );
+    await expect(page.locator('.main-content h1')).toHaveText(
+      role === 'buyer' ? 'Orders' : 'Capacity',
+    );
+    await expect(guide.getByRole('button', { name: 'Previous step', exact: true })).toBeDisabled();
+    await guide.screenshot({ path: info.outputPath(`walkthrough-${role}-step-1-1440.png`) });
+    await walkthroughStep(page, role, 0).click();
+    await expect(page).toHaveURL(
+      new URL(`/demo/${role}${walkthroughPaths[role][0]}`, page.url()).href,
+    );
+    await guide.getByRole('button', { name: 'Next step', exact: true }).click();
+    await expect(page).toHaveURL(
+      new URL(`/demo/${role}${walkthroughPaths[role][1]}`, page.url()).href,
+    );
+    await expect(walkthroughStep(page, role, 1)).toBeVisible();
+    await expect(guide.getByRole('heading', { level: 2 })).toBeFocused();
+    await guide.screenshot({ path: info.outputPath(`walkthrough-${role}-step-2-1440.png`) });
+    await navigate(page, role === 'buyer' ? 'Disks' : 'Policy');
+    await expect(walkthroughStep(page, role, 1)).toBeVisible();
+    await walkthroughStep(page, role, 1).click();
+    await expect(page).toHaveURL(
+      new URL(`/demo/${role}${walkthroughPaths[role][1]}`, page.url()).href,
+    );
+    await guide.getByRole('button', { name: 'Previous step', exact: true }).click();
+    await expect(page).toHaveURL(
+      new URL(`/demo/${role}${walkthroughPaths[role][0]}`, page.url()).href,
+    );
+    await expect(walkthroughStep(page, role, 0)).toBeVisible();
+    await expect(guide.getByRole('heading', { level: 2 })).toBeFocused();
+    await guide.getByRole('button', { name: 'Next step', exact: true }).click();
+    await guide.getByRole('button', { name: 'Next step', exact: true }).click();
+    await expect(page).toHaveURL(
+      new URL(`/demo/${role}${walkthroughPaths[role][2]}`, page.url()).href,
+    );
+    await guide.screenshot({ path: info.outputPath(`walkthrough-${role}-step-3-1440.png`) });
+    await walkthroughStep(page, role, 2).click();
+    await settled(page);
+    await guide.getByRole('button', { name: 'Finish walkthrough', exact: true }).click();
+    await expect(guide.getByRole('heading', { level: 2 })).toHaveText('You’re ready to explore');
+    await expect(guide.getByRole('heading', { level: 2 })).toBeFocused();
+    await expect(
+      guide.getByRole('button', { name: 'Replay walkthrough', exact: true }),
+    ).toBeVisible();
+    await expect(page).toHaveURL(
+      new URL(`/demo/${role}${walkthroughPaths[role][2]}`, page.url()).href,
+    );
+    await guide.screenshot({ path: info.outputPath(`walkthrough-${role}-complete-1440.png`) });
+    await guide.getByRole('button', { name: 'Keep exploring', exact: true }).click();
+    await expect(guide).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Show guide', exact: true })).toBeFocused();
+    await page.getByRole('button', { name: 'Show guide', exact: true }).click();
+    await guide.getByRole('button', { name: 'Replay walkthrough', exact: true }).click();
+    await expect(walkthroughStep(page, role, 0)).toBeVisible();
+    await expect(guide.getByRole('heading', { level: 2 })).toBeFocused();
+    await expect(page).toHaveURL(
+      new URL(`/demo/${role}${walkthroughPaths[role][0]}`, page.url()).href,
+    );
+    await guide.getByRole('button', { name: 'Dismiss walkthrough', exact: true }).click();
+    await expect(guide).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Show guide', exact: true })).toBeFocused();
+    await page.getByRole('button', { name: 'Show guide', exact: true }).click();
+    await expect(walkthroughStep(page, role, 0)).toBeVisible();
+    guard.assertLocal();
+  });
+}
+
+test('walkthrough progress and visibility belong to each role, and reset restores both guides and sample workspaces', async ({
+  page,
+}) => {
+  const guard = await guardDemo(page);
+  const guide = page.locator('#demo-console-guide');
+  await page.goto('/demo/buyer/disks');
+  await page.getByRole('button', { name: 'Create disk', exact: true }).first().click();
+  await page
+    .getByRole('dialog')
+    .getByLabel('Disk name', { exact: true })
+    .fill('walkthrough-temporary-disk');
+  await page.getByRole('dialog').getByRole('button', { name: 'Create disk', exact: true }).click();
+  await expect(page.locator('.main-content')).toContainText('walkthrough-temporary-disk');
+  await guide.getByRole('button', { name: 'Next step', exact: true }).click();
+  await expect(walkthroughStep(page, 'buyer', 1)).toBeVisible();
+  await guide.getByRole('button', { name: 'Dismiss walkthrough', exact: true }).click();
+  await page.getByRole('link', { name: 'Seller', exact: true }).click();
+  await expect(walkthroughStep(page, 'seller', 0)).toBeVisible();
+  const initialCapacity = await page.getByLabel('Total VM slots').inputValue();
+  await page.getByLabel('Total VM slots').fill('15');
+  await page.getByRole('button', { name: 'Save capacity', exact: true }).click();
+  await expect(page.getByText('Capacity updated.', { exact: true })).toBeVisible();
+  await guide.getByRole('button', { name: 'Next step', exact: true }).click();
+  await guide.getByRole('button', { name: 'Next step', exact: true }).click();
+  await guide.getByRole('button', { name: 'Finish walkthrough', exact: true }).click();
+  await page.getByRole('link', { name: 'Buyer', exact: true }).click();
+  await expect(guide).toHaveCount(0);
+  await page.getByRole('button', { name: 'Show guide', exact: true }).click();
+  await expect(walkthroughStep(page, 'buyer', 1)).toBeVisible();
+  await guide.getByRole('button', { name: 'Next step', exact: true }).click();
+  await page.getByRole('link', { name: 'Seller', exact: true }).click();
+  await expect(
+    guide.getByRole('button', { name: 'Replay walkthrough', exact: true }),
+  ).toBeVisible();
+  await page.getByRole('button', { name: 'Reset demo', exact: true }).click();
+  await expect(walkthroughStep(page, 'seller', 0)).toBeVisible();
+  await walkthroughStep(page, 'seller', 0).click();
+  await expect(page.getByLabel('Total VM slots')).toHaveValue(initialCapacity);
+  await page.getByRole('link', { name: 'Buyer', exact: true }).click();
+  await expect(walkthroughStep(page, 'buyer', 0)).toBeVisible();
+  await navigate(page, 'Disks');
+  await settled(page);
+  await expect(page.locator('.main-content')).not.toContainText('walkthrough-temporary-disk');
+  await guide.getByRole('button', { name: 'Next step', exact: true }).click();
+  await guide.getByRole('button', { name: 'Dismiss walkthrough', exact: true }).click();
+  await page.reload();
+  await expect(walkthroughStep(page, 'buyer', 0)).toBeVisible();
+  guard.assertLocal();
+});
 
 test('buyer follows the regular VM purchase and terminal flow without changing the real draft or connecting a socket', async ({
   page,
@@ -306,12 +444,35 @@ test('mobile console uses the regular navigation drawer and keeps content within
         await settled(page);
         await fits(page);
       }
+      const guide = page.locator('#demo-console-guide');
+      for (let step = 0; step < walkthroughPaths[role].length; step++) {
+        await expect(walkthroughStep(page, role, step)).toBeVisible();
+        await guide.screenshot({
+          path: info.outputPath(`walkthrough-${role}-step-${step + 1}-${width}.png`),
+        });
+        const card = await guide.boundingBox();
+        expect(card?.x).toBeGreaterThanOrEqual(0);
+        expect(card!.x + card!.width).toBeLessThanOrEqual(width);
+        await fits(page);
+        await guide
+          .getByRole('button', {
+            name: step < 2 ? 'Next step' : 'Finish walkthrough',
+            exact: true,
+          })
+          .click();
+        await settled(page);
+      }
+      await expect(
+        guide.getByRole('button', { name: 'Replay walkthrough', exact: true }),
+      ).toBeVisible();
+      await fits(page);
+      await capture(page, info, `walkthrough-${role}-complete-${width}`);
     }
   }
   guard.assertLocal();
 });
 
-test('deep links, browser history, optional guide and exit preserve the real auth boundary', async ({
+test('deep links, browser history, dismissible guide and exit preserve the real auth boundary', async ({
   page,
 }) => {
   const guard = await guardDemo(page);
@@ -320,9 +481,11 @@ test('deep links, browser history, optional guide and exit preserve the real aut
   );
   await page.goto('/demo');
   await expect(page.locator('.main-content h1')).toHaveText('Orders');
-  await page.getByRole('button', { name: 'Show guide', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Hide guide', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Hide guide', exact: true }).click();
+  await expect(page.locator('#demo-console-guide')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Show guide', exact: true }).click();
+  await expect(walkthroughStep(page, 'buyer', 0)).toBeVisible();
   await page.getByRole('link', { name: 'Seller', exact: true }).click();
   await navigate(page, 'Policy');
   await expect(page).toHaveURL(/\/demo\/seller\/provider\/policy$/);

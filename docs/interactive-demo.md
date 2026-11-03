@@ -1,6 +1,6 @@
 # Interactive console demo
 
-Visitors explore the regular Wick Broker console with an in-memory sample account. The demo renders the same navigation, pages, forms, tables, dialogs, and terminal panel as the authenticated console. A small toolbar provides the perspective switch, optional guide, reset, and exit.
+Visitors explore the regular Wick Broker console with an in-memory sample account. The demo renders the same navigation, pages, forms, tables, dialogs, and terminal panel as the authenticated console. A small toolbar provides the perspective switch, walkthrough, reset, and exit.
 
 | Perspective | Shareable route | Starting screen |
 | ----------- | --------------- | --------------- |
@@ -8,6 +8,12 @@ Visitors explore the regular Wick Broker console with an in-memory sample accoun
 | Seller      | `/demo/seller`  | Capacity        |
 
 Internal links stay within the selected perspective, for example `/demo/buyer/vms` or `/demo/seller/provider/policy`. The homepage and `/demos` link to both workspaces.
+
+## Guided first steps
+
+A compact three-step walkthrough opens above the console for each perspective. Buyers can launch a sample VM, try the ready-to-use terminal, and run a Muse Studio task. Sellers can change capacity, submit a sample bid, and inspect earnings. Each step includes concrete instructions and a link to the relevant screen. Next and Previous navigate between step screens; advancing only changes the guide and never submits a form or starts a purchase.
+
+Visitors can hide the guide, reopen it from **Show guide**, or replay it after the last step. Each perspective keeps its own position and visibility while navigating within the tab. **Reset demo** restarts both walkthroughs along with their sample data; reload also starts fresh. The guide never blocks or replaces the regular console controls.
 
 ## Mocked data, regular controls
 
