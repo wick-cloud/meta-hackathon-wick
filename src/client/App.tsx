@@ -36,6 +36,7 @@ import { ErrorBox, Link, NavigationContext, SessionContext, Spinner } from './co
 import { Brand } from './brand';
 import { FormPanel } from './form-layout';
 import { HomePage } from './homepage';
+import { DemoLanding } from './demos';
 import './auth.css';
 import { NewEnvironment, RequestReview, AuctionPage, VMDetail, Invoices } from './buyer';
 import { MyVMs } from './vm-inventory';
@@ -63,6 +64,14 @@ import {
 } from './provider';
 
 type NavigationItem = { path: string; label: string; icon: typeof Box; group?: string };
+function browserLocation() {
+  if (
+    window.location.pathname === '/' &&
+    ['#live-demo', '#demo-overview'].includes(window.location.hash)
+  )
+    window.history.replaceState({}, '', `/demos${window.location.search}${window.location.hash}`);
+  return window.location.pathname + window.location.search;
+}
 const buyerNavigation: NavigationItem[] = [
   { path: '/orders', label: 'Orders', icon: ListOrdered, group: 'WORKSPACE' },
   { path: '/studio', label: 'Muse Studio', icon: Sparkles, group: 'WORKSPACE' },
@@ -240,7 +249,7 @@ export default function App() {
   const environmentRef = useRef<HTMLDetailsElement>(null);
   const [session, setSession] = useState<Session | null>(null),
     [bootError, setBootError] = useState(''),
-    [location, setLocation] = useState(window.location.pathname + window.location.search),
+    [location, setLocation] = useState(browserLocation),
     [mobileOpen, setMobileOpen] = useState(false),
     [signingOut, setSigningOut] = useState(false);
   useEffect(() => {
@@ -288,7 +297,7 @@ export default function App() {
   const navigate = (next: string) => {
     if (next !== window.location.pathname + window.location.search)
       window.history.pushState({}, '', next);
-    setLocation(window.location.pathname + window.location.search);
+    setLocation(browserLocation());
     setMobileOpen(false);
     window.scrollTo(0, 0);
   };
@@ -321,15 +330,17 @@ export default function App() {
   useEffect(() => {
     void refreshSession();
     const onPop = () => {
-      setLocation(window.location.pathname + window.location.search);
+      setLocation(browserLocation());
       setMobileOpen(false);
     };
     window.addEventListener('popstate', onPop);
+    window.addEventListener('hashchange', onPop);
     const timer = setInterval(() => {
       void refreshSession();
     }, 30000);
     return () => {
       window.removeEventListener('popstate', onPop);
+      window.removeEventListener('hashchange', onPop);
       clearInterval(timer);
     };
   }, []);
@@ -361,6 +372,14 @@ export default function App() {
   const path = location.split('?')[0]!;
   const search = location.includes('?') ? location.slice(location.indexOf('?')) : '';
   const intent = new URLSearchParams(search).get('intent');
+  if (path === '/demos' || path === '/demos/')
+    return (
+      <NavigationContext.Provider value={navigate}>
+        <SessionContext.Provider value={session}>
+          <DemoLanding />
+        </SessionContext.Provider>
+      </NavigationContext.Provider>
+    );
   if (!session.user)
     return (
       <NavigationContext.Provider value={navigate}>

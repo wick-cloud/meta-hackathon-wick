@@ -1,3 +1,4 @@
+import { reconcileDemoStudio } from './studio.js';
 import { randomUUID } from 'node:crypto';
 import type { AppContext } from '../context.js';
 import { transaction, enqueue } from '../marketplace/db.js';
@@ -70,6 +71,11 @@ async function discover(ctx: AppContext, run: Row): Promise<Row> {
 async function cleanup(ctx: AppContext, run: Row): Promise<void> {
   if (run.source_mode !== ctx.wick.mode || run.source_mode !== ctx.inference?.mode) return;
   const actor = demoActor(run);
+  if (run.kind === 'studio')
+    await ctx.pool.query(
+      "UPDATE broker_demo_studio SET status='needs_attention',failure_code='session_ended',updated_at=clock_timestamp() WHERE run_id=$1 AND status NOT IN('passed','needs_attention')",
+      [run.id],
+    );
   // Never hold a demo row lock while taking grant/key locks; inference uses grant → demo.
   await ctx.pool.query(
     'UPDATE broker_api_keys SET revoked_at=COALESCE(revoked_at,clock_timestamp()) WHERE user_id=$1 AND grant_id=$2',
@@ -280,7 +286,15 @@ async function advance(ctx: AppContext, run: Row) {
     return;
   }
   if (run.bootstrap_completed_at) {
-    await phase(ctx, run, 'ready', 'Your Modal terminal and Baseten Muse tokens are ready.');
+    await phase(
+      ctx,
+      run,
+      'ready',
+      run.kind === 'studio'
+        ? 'Your guided Muse Studio workspace and terminal are ready.'
+        : 'Your Modal terminal and Baseten Muse tokens are ready.',
+    );
+    if (run.kind === 'studio') await reconcileDemoStudio(ctx, run.id, run.lease_token);
     return;
   }
   // Reserve time for initialization without shortening an already-ready VM's lease.
@@ -315,7 +329,7 @@ async function advance(ctx: AppContext, run: Row) {
   ).rowCount;
   if (!authority) return;
   const initialized = await ctx.wick.runCommand!(vm.environment_id, {
-    command: demoBootstrapCommand(ctx.config.appUrl),
+    command: demoBootstrapCommand(ctx.config.appUrl, run.kind),
     cwd: '/workspace',
   });
   if (
@@ -332,7 +346,14 @@ async function advance(ctx: AppContext, run: Row) {
     'bootstrap_completed_at=clock_timestamp(),expires_at=LEAST(expires_at,$3::timestamptz)',
     [vm.expires_at],
   );
-  await phase(ctx, run, 'ready', 'Your Modal terminal and Baseten Muse tokens are ready.');
+  await phase(
+    ctx,
+    run,
+    'ready',
+    run.kind === 'studio'
+      ? 'Your guided Muse Studio workspace and terminal are ready.'
+      : 'Your Modal terminal and Baseten Muse tokens are ready.',
+  );
 }
 
 /** Leased orchestrator; purchases and native provisioning retain their existing durable owners. */

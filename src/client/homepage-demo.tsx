@@ -14,7 +14,7 @@ import {
   Sparkles,
   Square,
 } from 'lucide-react';
-import type { DemoState, DemoKeyResponse } from '../shared/demo';
+import type { DemoState, DemoKeyResponse, DemoKind, DemoRun } from '../shared/demo';
 import { api, money, post } from './api';
 import './homepage-demo.css';
 
@@ -48,6 +48,7 @@ export function useHomepageDemo() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [busy, setBusy] = useState<'start' | 'end' | 'key' | null>(null);
+  const [startKind, setStartKind] = useState<DemoKind | null>(null);
   const [key, setKey] = useState<DemoKey | null>(null);
   const [keyUncertain, setKeyUncertain] = useState(false);
   const [now, setNow] = useState(Date.now());
@@ -58,6 +59,7 @@ export function useHomepageDemo() {
     actionLock = useRef(false);
   const startOperation = useRef(crypto.randomUUID()),
     endOperation = useRef(crypto.randomUUID());
+  const attemptedKind = useRef<DemoKind | null>(null);
   const keyRun = useRef<string | null>(null);
   const wasCooling = useRef(false);
   const accept = useCallback((next: DemoState) => {
@@ -68,6 +70,11 @@ export function useHomepageDemo() {
       setKeyUncertain(false);
     }
     keyRun.current = next.run?.id ?? null;
+    if (attemptedKind.current && ongoing(next.run?.status)) {
+      attemptedKind.current = null;
+      startOperation.current = crypto.randomUUID();
+      setStartKind(null);
+    }
     setData(next);
   }, []);
   const refresh = useCallback(async () => {
@@ -103,6 +110,7 @@ export function useHomepageDemo() {
     };
   }, [refresh]);
   const active = ongoing(data?.run?.status);
+  const blockedWithoutRun = !!data?.enabled && !data.run && !data.available;
   const cooldown = !!data?.cooldownUntil && Date.parse(data.cooldownUntil) > now;
   useEffect(() => {
     if (wasCooling.current && !cooldown && !actionLock.current) void refresh();
@@ -110,24 +118,32 @@ export function useHomepageDemo() {
   }, [cooldown, refresh]);
   useEffect(() => {
     // A paused demo still needs to show the cleanup of an existing run.
-    if (!active && (!data?.enabled || !cooldown)) return;
+    // A blocked no-run response can precede a pending start's guest cookie after navigation.
+    if (!active && (!data?.enabled || (!cooldown && !blockedWithoutRun))) return;
     const poll = () => {
       if (document.visibilityState !== 'hidden' && !actionLock.current) void refresh();
     };
-    const timer = setInterval(poll, active ? 2500 : 15000);
+    const timer = setInterval(poll, active || blockedWithoutRun ? 2500 : 15000);
     document.addEventListener('visibilitychange', poll);
     return () => {
       clearInterval(timer);
       document.removeEventListener('visibilitychange', poll);
     };
-  }, [data?.enabled, active, cooldown, refresh]);
+  }, [data?.enabled, active, cooldown, blockedWithoutRun, refresh]);
   useEffect(() => {
     if (!active && !cooldown) return;
     const timer = setInterval(() => setNow(Date.now() + offset.current), 1000);
     return () => clearInterval(timer);
   }, [active, cooldown]);
-  async function act(action: 'start' | 'end' | 'key') {
+  async function act(action: 'start' | 'end' | 'key', kind: DemoKind = 'terminal') {
     if (actionLock.current) return;
+    if (action === 'start') {
+      // An uncertain start must retry the same kind with the same operation key.
+      if (attemptedKind.current && attemptedKind.current !== kind) return;
+      attemptedKind.current = kind;
+      setStartKind(kind);
+    }
+    if (action === 'key' && data?.run?.kind === 'studio') return;
     actionLock.current = true;
     revision.current++;
     readController.current?.abort();
@@ -146,12 +162,15 @@ export function useHomepageDemo() {
       } else {
         const next = await post<DemoState>(`/api/demo/${action}`, {
           operationKey: action === 'start' ? startOperation.current : endOperation.current,
+          ...(action === 'start' ? { kind: attemptedKind.current } : {}),
         });
         if (mounted.current) {
           accept(next);
           if (action === 'start') {
             startOperation.current = crypto.randomUUID();
             endOperation.current = crypto.randomUUID();
+            attemptedKind.current = null;
+            setStartKind(null);
           }
         }
       }
@@ -175,6 +194,7 @@ export function useHomepageDemo() {
     loading,
     refreshing,
     busy,
+    startKind,
     key,
     keyUncertain,
     now,
@@ -186,27 +206,45 @@ export function useHomepageDemo() {
 }
 export type HomepageDemo = ReturnType<typeof useHomepageDemo>;
 
-export function DemoAction({ demo }: { demo: HomepageDemo }) {
+export function DemoAction({ demo, kind = 'terminal' }: { demo: HomepageDemo; kind?: DemoKind }) {
   const { data, loading, busy, active, cooldown } = demo;
-  if (data?.run && (active || cooldown))
+  if (data?.run && (active || cooldown)) {
+    if ((data.run.kind ?? 'terminal') !== kind)
+      return (
+        <button className="button secondary" disabled>
+          {active ? 'Another demo is active' : 'Shared cooldown'}
+        </button>
+      );
     return (
       <a className="button primary" href="#live-demo">
-        {active ? 'Return to your demo' : 'View your demo receipt'} <ArrowDown size={16} />
+        {active
+          ? kind === 'studio'
+            ? 'Return to Muse Studio demo'
+            : 'Return to your demo'
+          : 'View your demo receipt'}{' '}
+        <ArrowDown size={16} />
       </a>
     );
+  }
   return (
     <button
       className="button primary"
-      onClick={() => void demo.act('start')}
-      disabled={loading || !!busy || !data?.available || !data?.enabled}
+      onClick={() => void demo.act('start', kind)}
+      disabled={
+        loading ||
+        !!busy ||
+        !data?.available ||
+        !data?.enabled ||
+        (!!demo.startKind && demo.startKind !== kind)
+      }
     >
-      {busy === 'start' ? (
+      {busy === 'start' && demo.startKind === kind ? (
         <>
           <LoaderCircle size={16} className="demo-spinner" /> Starting your demo
         </>
       ) : (
         <>
-          Try live demo <ArrowRight size={16} />
+          {kind === 'studio' ? 'Start Muse Studio demo' : 'Try live demo'} <ArrowRight size={16} />
         </>
       )}
     </button>
@@ -219,7 +257,8 @@ export function DemoOverview({ demo }: { demo: HomepageDemo }) {
     <section id="demo-overview" className="demo-overview" aria-labelledby="demo-overview-title">
       <div className="demo-card-top">
         <span>
-          <i className="demo-live-dot" /> HACKATHON LIVE DEMO
+          <i className="demo-live-dot" />{' '}
+          {data?.mode === 'fixture' ? 'FIXTURE DEMO PREVIEW' : 'HACKATHON LIVE DEMO'}
         </span>
         <span className="demo-sponsored">Sponsored</span>
       </div>
@@ -229,8 +268,13 @@ export function DemoOverview({ demo }: { demo: HomepageDemo }) {
           “Hello, Muse.”
         </h2>
         <p>
-          A real VM. Real Meta inference.
-          <br />A small experiment, on us.
+          {data?.mode === 'fixture'
+            ? 'A simulated VM. Fixture model responses.'
+            : 'A real VM. Real Meta inference.'}
+          <br />
+          {data?.mode === 'fixture'
+            ? 'Explore the flow without live resources.'
+            : 'A small experiment, on us.'}
         </p>
       </div>
       <div className="demo-included">
@@ -473,6 +517,152 @@ export function DemoError({ demo }: { demo: HomepageDemo }) {
   );
 }
 
+function GuidedStudio({
+  run,
+  mode,
+  maxRequests,
+  terminalReady,
+}: {
+  run: DemoRun;
+  mode: DemoState['mode'];
+  maxRequests: number;
+  terminalReady: boolean;
+}) {
+  const studio = run.studio;
+  const status = studio?.status ?? 'waiting';
+  const verified =
+    status === 'passed' &&
+    studio?.exitCode === 0 &&
+    !!studio.verifiedAt &&
+    studio.stdout === 'Hello, World!\n';
+  const finished = verified || status === 'needs_attention';
+  const label = verified
+    ? mode === 'fixture'
+      ? 'Fixture check passed'
+      : 'Native check passed'
+    : status === 'needs_attention'
+      ? 'Needs attention'
+      : status === 'generating'
+        ? 'Muse is writing Python'
+        : status === 'running'
+          ? 'Running and checking in the VM'
+          : 'Waiting for the guided task';
+  return (
+    <section className="demo-studio" aria-labelledby="demo-studio-title">
+      <div className="demo-studio-heading">
+        <div>
+          <span className="demo-small-label">GUIDED MUSE STUDIO</span>
+          <h3 id="demo-studio-title">A small task. A visible result.</h3>
+        </div>
+        <span className={`demo-state-tag ${verified ? 'is-success' : ''}`} role="status">
+          {verified ? (
+            <Check size={13} />
+          ) : status === 'needs_attention' ? (
+            <RefreshCw size={13} />
+          ) : (
+            <LoaderCircle size={13} className="demo-spinner" />
+          )}
+          {label}
+        </span>
+      </div>
+      <p className="demo-studio-task">
+        The task: write <code>hello_world.py</code> to print <code>Hello, World!</code>, then run it
+        and check the result.
+      </p>
+      <p className="demo-studio-explanation">
+        This guided demo generates one Python file. It uses the purchased Muse allowance
+        automatically, with up to {maxRequests} calls including a repair attempt.
+      </p>
+      <div className="demo-studio-evidence">
+        <section aria-label="Generated Python source">
+          <div className="demo-studio-file-heading">
+            <strong>{studio?.filename ?? 'hello_world.py'}</strong>
+            <span>
+              {mode === 'fixture'
+                ? 'Fixture source'
+                : verified
+                  ? 'Verified file'
+                  : 'Muse model output'}
+            </span>
+          </div>
+          {studio?.source != null ? (
+            <pre>
+              <code>{studio.source}</code>
+            </pre>
+          ) : (
+            <p className="demo-studio-pending">
+              The generated file will appear here after Muse responds.
+            </p>
+          )}
+        </section>
+        <section aria-label="Python execution result">
+          <div className="demo-studio-file-heading">
+            <strong>Command output</strong>
+            <span>{mode === 'fixture' ? 'Simulated execution' : 'Native VM execution'}</span>
+          </div>
+          {studio?.stdout != null ? (
+            <pre>{studio.stdout || '(No output)'}</pre>
+          ) : (
+            <p className="demo-studio-pending">Waiting for the VM’s execution receipt.</p>
+          )}
+          <dl className="demo-studio-result">
+            <div>
+              <dt>Exit code</dt>
+              <dd>{studio?.exitCode ?? 'Pending'}</dd>
+            </div>
+            <div>
+              <dt>Model calls used</dt>
+              <dd>
+                {studio?.requestsUsed ?? 0} / {maxRequests}
+              </dd>
+            </div>
+            <div>
+              <dt>Verification</dt>
+              <dd>
+                {verified
+                  ? mode === 'fixture'
+                    ? 'Simulated pass'
+                    : 'Output matches the task'
+                  : 'Not confirmed'}
+              </dd>
+            </div>
+          </dl>
+        </section>
+      </div>
+      <div className="demo-studio-next">
+        <div>
+          <strong>
+            {status === 'needs_attention'
+              ? terminalReady
+                ? 'Inspect your workspace in the terminal.'
+                : 'Your Studio result needs attention.'
+              : finished && terminalReady
+                ? 'Keep building in your terminal.'
+                : finished
+                  ? 'Your Studio result is saved.'
+                  : 'The guided task is running for you.'}
+          </strong>
+          <p>
+            {status === 'needs_attention'
+              ? `The task is unverified, and the generated file may not have been installed. ${terminalReady ? 'Your terminal remains available until the session timer expires.' : 'The saved result remains available.'}`
+              : terminalReady
+                ? 'Inspect or edit the files, then run Python or shell commands until the session timer expires.'
+                : finished
+                  ? 'The source and execution receipt stay available after your VM ends.'
+                  : 'Terminal access opens when this check finishes. No API key is needed.'}
+          </p>
+        </div>
+        {verified && terminalReady && (
+          <CopyButton text="python3 /workspace/hello_world.py" label="Copy run command" />
+        )}
+      </div>
+      {verified && terminalReady && (
+        <code className="demo-studio-command">python3 /workspace/hello_world.py</code>
+      )}
+    </section>
+  );
+}
+
 export function HomepageDemoSession({ demo }: { demo: HomepageDemo }) {
   const { data, key, busy, now } = demo;
   const run = data?.run;
@@ -491,19 +681,27 @@ export function HomepageDemoSession({ demo }: { demo: HomepageDemo }) {
     setShowKey(false);
   }, [run?.id]);
   if (!run || !data) return null;
+  const isStudio = run.kind === 'studio';
+  const studioFinished = ['passed', 'needs_attention'].includes(run.studio?.status ?? 'waiting');
   const ready = run.status === 'ready',
     ending = run.status === 'ending',
     done = run.status === 'ended',
     failed = run.status === 'failed';
   const terminalReady =
-    ready && !!run.vm?.id && !!run.vm.terminalPath && Date.parse(run.expiresAt ?? '') > now;
+    ready &&
+    !!run.vm?.id &&
+    !!run.vm.terminalPath &&
+    Date.parse(run.expiresAt ?? '') > now &&
+    (!isStudio || studioFinished);
   const step = ready ? 2 : ending || done || failed ? 3 : run.status === 'provisioning' ? 1 : 0;
   const callsRemaining = run.tokens
     ? Math.max(0, data.limits.maxRequests - run.tokens.requestsUsed)
     : 0;
   const museCallsUsed = terminalReady && !!run.tokens && callsRemaining === 0;
   const title = ready
-    ? 'Your live workspace is ready.'
+    ? isStudio
+      ? 'Your guided Studio workspace.'
+      : 'Your live workspace is ready.'
     : ending
       ? 'Wrapping up your demo.'
       : done
@@ -518,7 +716,8 @@ export function HomepageDemoSession({ demo }: { demo: HomepageDemo }) {
       <div className="demo-session-heading">
         <div>
           <span className="home-eyebrow">
-            YOUR LIVE DEMO <span /> {run.id.slice(0, 8)}
+            {isStudio ? 'YOUR GUIDED STUDIO DEMO' : 'YOUR TERMINAL DEMO'} <span />{' '}
+            {run.id.slice(0, 8)}
           </span>
           <h2 id="live-demo-title" ref={heading} tabIndex={-1}>
             {title}
@@ -543,18 +742,21 @@ export function HomepageDemoSession({ demo }: { demo: HomepageDemo }) {
         </p>
       )}
       <ol className="demo-progress" aria-label="Demo progress">
-        {['Live auctions', 'Prepare workspace', 'Run Hello, Muse', 'Finish & cooldown'].map(
-          (label, i) => (
-            <li
-              key={label}
-              className={i === step ? 'is-current' : i < step ? 'is-complete' : ''}
-              aria-current={i === step ? 'step' : undefined}
-            >
-              <span>{i < step ? <Check size={12} /> : `0${i + 1}`}</span>
-              {label}
-            </li>
-          ),
-        )}
+        {[
+          'Live auctions',
+          'Prepare workspace',
+          isStudio ? 'Generate & verify' : 'Run Hello, Muse',
+          'Finish & cooldown',
+        ].map((label, i) => (
+          <li
+            key={label}
+            className={i === step ? 'is-current' : i < step ? 'is-complete' : ''}
+            aria-current={i === step ? 'step' : undefined}
+          >
+            <span>{i < step ? <Check size={12} /> : `0${i + 1}`}</span>
+            {label}
+          </li>
+        ))}
       </ol>
       <DemoError demo={demo} />
       {!ready && !ending && !done && !failed && (
@@ -569,7 +771,9 @@ export function HomepageDemoSession({ demo }: { demo: HomepageDemo }) {
               <strong>{run.disk ? run.disk.name : 'Your private demo disk'}</strong>
               <p>
                 {run.status === 'provisioning'
-                  ? 'Waiting for the disk mount and hello_muse.py setup to be confirmed.'
+                  ? isStudio
+                    ? 'Waiting for the private disk and guided task environment.'
+                    : 'Waiting for the disk mount and hello_muse.py setup to be confirmed.'
                   : 'Your script and workspace will be prepared after the awards.'}
               </p>
             </div>
@@ -596,7 +800,13 @@ export function HomepageDemoSession({ demo }: { demo: HomepageDemo }) {
             </span>
             <span>
               <Sparkles size={14} />
-              {callsRemaining} {callsRemaining === 1 ? 'call' : 'calls'} left
+              {isStudio ? (
+                `${run.studio?.requestsUsed ?? run.tokens?.requestsUsed ?? 0} / ${data.limits.maxRequests} model calls used`
+              ) : (
+                <>
+                  {callsRemaining} {callsRemaining === 1 ? 'call' : 'calls'} left
+                </>
+              )}
             </span>
           </div>
           {museCallsUsed ? (
@@ -610,7 +820,7 @@ export function HomepageDemoSession({ demo }: { demo: HomepageDemo }) {
                 </p>
               </div>
             </div>
-          ) : (
+          ) : !isStudio ? (
             <div className="demo-run-instructions">
               <div className="demo-instruction">
                 <span className="demo-step-number">1</span>
@@ -647,8 +857,16 @@ export function HomepageDemoSession({ demo }: { demo: HomepageDemo }) {
                 <CopyButton text={command} label="Copy command" />
               </div>
             </div>
+          ) : null}
+          {isStudio && (
+            <GuidedStudio
+              run={run}
+              mode={data.mode}
+              maxRequests={data.limits.maxRequests}
+              terminalReady={terminalReady}
+            />
           )}
-          {key && !museCallsUsed && (
+          {key && !museCallsUsed && !isStudio && (
             <div className="demo-key-reveal">
               <button className="demo-text-button" onClick={() => setShowKey(!showKey)}>
                 {showKey ? 'Hide key' : 'Reveal key'}
@@ -668,7 +886,7 @@ export function HomepageDemoSession({ demo }: { demo: HomepageDemo }) {
               </p>
             </div>
           )}
-          {confirmKey && !museCallsUsed && (
+          {confirmKey && !museCallsUsed && !isStudio && (
             <div className="demo-confirm" role="group" aria-label="Replace demo key">
               <p>
                 Replacing this key immediately revokes the previous one. Update the key in your
@@ -691,7 +909,7 @@ export function HomepageDemoSession({ demo }: { demo: HomepageDemo }) {
               </div>
             </div>
           )}
-          {run.vm?.id && (
+          {run.vm?.id && (!isStudio || studioFinished) && (
             <Suspense
               fallback={
                 <section className="terminal-panel">
@@ -724,7 +942,9 @@ export function HomepageDemoSession({ demo }: { demo: HomepageDemo }) {
             <span>
               {museCallsUsed
                 ? 'Muse call limit reached'
-                : `Up to ${data.limits.maxOutputTokens} output tokens per call`}
+                : isStudio
+                  ? 'Studio uses this allowance automatically'
+                  : `Up to ${data.limits.maxOutputTokens} output tokens per call`}
             </span>
           </div>
         </>
@@ -770,6 +990,14 @@ export function HomepageDemoSession({ demo }: { demo: HomepageDemo }) {
             </small>
           </div>
         </div>
+      )}
+      {isStudio && !ready && (ending || done || failed) && (
+        <GuidedStudio
+          run={run}
+          mode={data.mode}
+          maxRequests={data.limits.maxRequests}
+          terminalReady={false}
+        />
       )}
       <details className="demo-receipts">
         <summary>Auction receipts & resource status</summary>
@@ -906,7 +1134,7 @@ export function HomepageDemoSession({ demo }: { demo: HomepageDemo }) {
       )}
       {!demo.active && !demo.cooldown && (
         <div className="demo-again">
-          <DemoAction demo={demo} />
+          <DemoAction demo={demo} kind={run.kind ?? 'terminal'} />
           <p>{data.reason || 'A fresh run uses a new VM and token allowance.'}</p>
         </div>
       )}

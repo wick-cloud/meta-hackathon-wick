@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
 import { setTimeout as pause } from 'node:timers/promises';
 import WebSocket from 'ws';
@@ -9,9 +9,12 @@ import { isMoneyCents, moneyUnits } from '../src/shared/money.js';
 
 /**
  * APP_URL=https://your-app.example npx tsx scripts/verify-homepage-demo.ts --live
+ * APP_URL=https://your-app.example npx tsx scripts/verify-homepage-demo.ts --live-studio
  * npx tsx scripts/verify-homepage-demo.ts --self-test
  *
- * One ordinary guest run, two bounded paid model calls, and a rejected third call.
+ * --live: one terminal demo, two bounded paid model calls, and a rejected third call.
+ * --live-studio: one guided Studio demo, at most two paid model calls, and an actual
+ * terminal rerun/hash check of its generated Hello World file. No batch key is issued.
  * Uses public HTTP/WebSocket APIs only. No provider credentials, database access,
  * clock changes, retries of model calls, or quota overrides. Never loads .env.
  * JSON output contains allowlisted metadata only; terminal text and keys stay in memory.
@@ -111,6 +114,59 @@ function scriptReceipt(output: string, marker: string): { usage: Usage; answerCh
     usage: parse(usageSchema, rawUsage, 'python_usage_invalid'),
     answerCharacters: match[1].trim().length,
   };
+}
+
+function studioReceipt(value: unknown) {
+  const receipt = parse(
+    z.object({
+      kind: z.literal('studio'),
+      status: z.literal('ready'),
+      canIssueKey: z.literal(false),
+      keyIssued: z.literal(false),
+      tokens: z.object({
+        provider: z.literal('baseten'),
+        requestsUsed: z.number().int().min(1).max(2),
+        availableInput: z.number().int().min(0).max(4999),
+        availableOutput: z.number().int().min(0).max(2047),
+      }),
+      studio: z.object({
+        status: z.literal('passed'),
+        filename: z.literal('hello_world.py'),
+        source: z
+          .string()
+          .min(1)
+          .refine((source) => Buffer.byteLength(source) <= 256),
+        stdout: z.literal('Hello, World!\n'),
+        exitCode: z.literal(0),
+        requestsUsed: z.number().int().min(1).max(2),
+        verifiedAt: z.string().datetime(),
+      }),
+    }),
+    value,
+    'studio_verified_receipt_invalid',
+  );
+  check(
+    receipt.studio.requestsUsed === receipt.tokens.requestsUsed,
+    'studio_request_count_mismatch',
+  );
+  return {
+    requestsUsed: receipt.studio.requestsUsed,
+    sourceSha256: createHash('sha256').update(receipt.studio.source, 'utf8').digest('hex'),
+    availableInput: receipt.tokens.availableInput,
+    availableOutput: receipt.tokens.availableOutput,
+  };
+}
+
+function studioFileReceipt(output: string, marker: string, expectedHash: string) {
+  check(/^[a-f0-9]{64}$/.test(expectedHash), 'studio_expected_hash_invalid');
+  const match = plainTerminal(output).match(
+    new RegExp(
+      `(?:^|\\n)${marker}:BEGIN\\nHello, World!\\n${marker}:SHA256:([a-f0-9]{64})\\n\\n${marker}:EXIT:0:0(?:\\n|$)`,
+    ),
+  );
+  check(match, 'studio_terminal_file_execution_invalid');
+  check(match[1] === expectedHash, 'studio_terminal_source_hash_mismatch');
+  return { sourceSha256: match[1], exitCode: 0 as const, outputVerified: true as const };
 }
 
 /** Public guest receipts expose the immutable VM gross quote, never invoice-list authority. */
@@ -262,6 +318,25 @@ class LiveTerminal {
     );
     return scriptReceipt(this.output, marker);
   }
+  async runStudioFile(expectedHash: string) {
+    await this.wait(() => this.ready, 20000, 'terminal_ready_timeout');
+    this.output = '';
+    const marker = `WICK_STUDIO_FILE_${randomUUID().replaceAll('-', '')}`;
+    // Generated source never becomes a shell command. Both paths and commands are fixed.
+    this.socket.send(
+      JSON.stringify({
+        type: 'input',
+        data: `printf '\\n${marker}:BEGIN\\n'; python3 -I -S /workspace/hello_world.py; wick_demo_file_rc=$?; python3 -I -S -c 'import hashlib,pathlib; print("${marker}:SHA256:"+hashlib.sha256(pathlib.Path("/workspace/hello_world.py").read_bytes()).hexdigest())'; wick_demo_hash_rc=$?; printf '\\n${marker}:EXIT:%s:%s\\n' "$wick_demo_file_rc" "$wick_demo_hash_rc"\r`,
+      }),
+    );
+    await this.wait(
+      () =>
+        new RegExp(`(?:^|\\n)${marker}:EXIT:\\d+:\\d+(?:\\n|$)`).test(plainTerminal(this.output)),
+      20000,
+      'studio_terminal_file_timeout',
+    );
+    return studioFileReceipt(this.output, marker, expectedHash);
+  }
   async assertInteractive() {
     await this.wait(() => this.ready, 20000, 'terminal_ready_timeout');
     this.output = '';
@@ -286,7 +361,7 @@ class LiveTerminal {
   }
 }
 
-async function verify(origin: string) {
+async function verify(origin: string, kind: 'terminal' | 'studio' = 'terminal') {
   const began = performance.now();
   const log = (event: string, data: Record<string, unknown> = {}) =>
     console.log(
@@ -296,6 +371,7 @@ async function verify(origin: string) {
   let key = '';
   let startAttempted = false;
   let admitted = false;
+  let ownedRunId: string | undefined;
   let interrupted = false;
   let cleanupConfirmed = false;
   let mainPassed = false;
@@ -367,7 +443,8 @@ async function verify(origin: string) {
     while (performance.now() < deadline) {
       if (!cleanup) active();
       const value = await state();
-      const phase = `${value.run?.status}/${value.run?.tokens?.status}/${value.run?.vm?.status}/${value.run?.disk?.status}`;
+      if (ownedRunId) check(value.run?.id === ownedRunId, 'demo_run_changed');
+      const phase = `${value.run?.status}/${value.run?.tokens?.status}/${value.run?.vm?.status}/${value.run?.disk?.status}/${value.run?.studio?.status}`;
       if (phase !== previous) {
         // Status fields are checked before logging so arbitrary server text cannot enter the output.
         const known = (status: unknown) =>
@@ -387,6 +464,10 @@ async function verify(origin: string) {
             'terminated',
             'deleting',
             'deleted',
+            'waiting',
+            'generating',
+            'passed',
+            'needs_attention',
           ].includes(status)
             ? status
             : null;
@@ -395,6 +476,7 @@ async function verify(origin: string) {
           tokens: known(value.run?.tokens?.status),
           vm: known(value.run?.vm?.status),
           disk: known(value.run?.disk?.status),
+          ...(kind === 'studio' ? { studio: known(value.run?.studio?.status) } : {}),
         });
         previous = phase;
       }
@@ -405,6 +487,12 @@ async function verify(origin: string) {
     throw new CheckFailure(cleanup ? 'cleanup_unconfirmed_timeout' : 'demo_ready_timeout');
   }
   async function cleanup(): Promise<DemoState> {
+    const current = await state();
+    // The cookie was minted by this probe's initial start. Recover a missing
+    // response ID only from that cookie; never end a different known run.
+    if (!ownedRunId && current.run)
+      ownedRunId = parse(z.string().uuid(), current.run.id, 'cleanup_owned_run_id_invalid');
+    check(!current.run || current.run.id === ownedRunId, 'cleanup_refuses_unowned_run');
     // End is retried only with the same idempotency key. Paid inference is never retried.
     const operationKey = randomUUID();
     let accepted = false;
@@ -443,7 +531,8 @@ async function verify(origin: string) {
     active();
     startAttempted = true;
     const operationKey = randomUUID();
-    const start = await request('/api/demo/start', { operationKey });
+    const startBody = { operationKey, ...(kind === 'studio' ? { kind } : {}) };
+    const start = await request('/api/demo/start', startBody);
     if (start.status >= 400 && start.status < 500 && !cookie) startAttempted = false;
     check(start.status === 200 && cookie, `demo_start_http_${start.status}`);
     admitted = true;
@@ -452,8 +541,13 @@ async function verify(origin: string) {
       start.value,
       'demo_start_run_id_invalid',
     );
-    log('admitted', { runId: admittedRun.run.id });
-    const replay = await request('/api/demo/start', { operationKey });
+    ownedRunId = admittedRun.run.id;
+    check(
+      kind === 'terminal' || (start.value as DemoState).run?.kind === 'studio',
+      'studio_kind_not_admitted',
+    );
+    log('admitted', { runId: ownedRunId, kind });
+    const replay = await request('/api/demo/start', startBody);
     check(
       replay.status === 200 && (replay.value as DemoState).run?.id === admittedRun.run.id,
       'start_replay_not_idempotent',
@@ -480,7 +574,11 @@ async function verify(origin: string) {
     check(
       run.tokens.inputTokens === 5000 &&
         run.tokens.outputTokens === 2048 &&
-        run.tokens.requestsUsed === 0 &&
+        (kind === 'terminal'
+          ? run.tokens.requestsUsed === 0
+          : Number.isInteger(run.tokens.requestsUsed) &&
+            run.tokens.requestsUsed >= 0 &&
+            run.tokens.requestsUsed <= 2) &&
         run.tokens.priceCents !== null &&
         run.tokens.priceCents <= 5 &&
         run.vm.priceCents !== null &&
@@ -494,6 +592,8 @@ async function verify(origin: string) {
     );
     compute = computeReceipt(run.vm);
     log('ready', {
+      runId: ownedRunId,
+      kind,
       ...ownedIds,
       tokenPriceCents: run.tokens.priceCents,
       vmPriceCents: run.vm.priceCents,
@@ -507,23 +607,6 @@ async function verify(origin: string) {
       invoiceLedgerVerified: false,
     });
     active();
-    const issued = await request('/api/demo/key', { operationKey: randomUUID() });
-    check(issued.status === 200, 'demo_key_http');
-    const connection = parse(
-      z.object({
-        token: z.string().regex(KEY_PATTERN),
-        connection: z.object({
-          packId: z.string().uuid(),
-          baseUrl: z.string(),
-          model: z.literal(MODEL),
-        }),
-      }),
-      issued.value,
-      'demo_key_response_invalid',
-    );
-    key = connection.token;
-    check(connection.connection.packId === run.tokens.packId, 'demo_key_wrong_pack');
-    sameOriginPath(origin, connection.connection.baseUrl, /^\/api\/v1\/?$/);
     check(run.vm.terminalPath, 'terminal_path_missing');
     const wsUrl = sameOriginPath(
       origin,
@@ -531,59 +614,113 @@ async function verify(origin: string) {
       /^\/api\/vms\/[0-9a-f-]{36}\/terminal$/,
     );
     wsUrl.protocol = wsUrl.protocol === 'https:' ? 'wss:' : 'ws:';
-    terminal = new LiveTerminal(wsUrl, origin, cookie);
-    const python = await terminal.runPython(key);
-    log('python_model_call', python);
-    active();
-    check((await state()).run?.tokens?.requestsUsed === 1, 'python_request_not_counted_once');
-    const response = await request('/api/v1/chat/completions', modelCall, key, 120000);
-    check(response.status === 200, 'second_model_http_no_retry');
-    const answer = parse(
-      z.object({
-        model: z.literal(MODEL),
-        choices: z
-          .array(z.object({ message: z.object({ content: z.string().trim().min(1) }) }))
-          .min(1),
-        usage: usageSchema,
-        broker: z.object({
-          mode: z.literal('real'),
-          provider: z.literal('baseten'),
-          packId: z.string(),
+    let expectedRequests = 2;
+    let studioUsage: ReturnType<typeof studioReceipt> | undefined;
+    if (kind === 'studio') {
+      const finished = await poll((value) => {
+        check(value.run?.kind === 'studio', 'studio_kind_changed');
+        check(value.run.studio?.status !== 'needs_attention', 'studio_needs_attention');
+        return value.run.studio?.status === 'passed';
+      });
+      check(
+        finished.run?.vm?.id === run.vm.id &&
+          finished.run.disk?.id === run.disk.id &&
+          finished.run.tokens?.packId === run.tokens.packId &&
+          finished.run.expiresAt === run.expiresAt,
+        'studio_resources_or_lease_changed',
+      );
+      studioUsage = studioReceipt(finished.run);
+      expectedRequests = studioUsage.requestsUsed;
+      const denied = await request('/api/demo/key', { operationKey: randomUUID() });
+      check(denied.status === 403, 'studio_key_issuance_not_denied');
+      check(key === '', 'studio_must_never_hold_api_key');
+      terminal = new LiveTerminal(wsUrl, origin, cookie);
+      const file = await terminal.runStudioFile(studioUsage.sourceSha256);
+      log('studio_verified', {
+        runId: ownedRunId,
+        ...ownedIds,
+        ...file,
+        requestsUsed: studioUsage.requestsUsed,
+        keyStatus: 403,
+        inputTokensUsed: 5000 - studioUsage.availableInput,
+        outputTokensUsed: 2048 - studioUsage.availableOutput,
+      });
+    } else {
+      const issued = await request('/api/demo/key', { operationKey: randomUUID() });
+      check(issued.status === 200, 'demo_key_http');
+      const connection = parse(
+        z.object({
+          token: z.string().regex(KEY_PATTERN),
+          connection: z.object({
+            packId: z.string().uuid(),
+            baseUrl: z.string(),
+            model: z.literal(MODEL),
+          }),
         }),
-      }),
-      response.value,
-      'second_model_real_receipt_invalid',
-    );
-    check(answer.broker.packId === run.tokens.packId, 'second_model_wrong_pack');
-    check(
-      !answer.choices[0].message.content.includes('Fixture response:'),
-      'fixture_answer_rejected',
-    );
-    log('second_model_call', {
-      usage: answer.usage,
-      answerCharacters: answer.choices[0].message.content.length,
-    });
-    active();
-    const third = await request('/api/v1/chat/completions', modelCall, key, 120000);
-    check(
-      third.status === 429 && (third.value as { code?: unknown }).code === 'demo_request_limit',
-      'third_model_call_not_rejected_by_demo_cap',
-    );
-    const used = (await state()).run?.tokens;
-    check(
-      used?.requestsUsed === 2 &&
-        used.availableInput === 5000 - python.usage.prompt_tokens - answer.usage.prompt_tokens &&
-        used.availableOutput ===
-          2048 - python.usage.completion_tokens - answer.usage.completion_tokens,
-      'token_usage_did_not_match_pack',
-    );
-    log('token_cap_verified', { requestsUsed: 2, rejectedStatus: 429 });
+        issued.value,
+        'demo_key_response_invalid',
+      );
+      key = connection.token;
+      check(connection.connection.packId === run.tokens.packId, 'demo_key_wrong_pack');
+      sameOriginPath(origin, connection.connection.baseUrl, /^\/api\/v1\/?$/);
+      terminal = new LiveTerminal(wsUrl, origin, cookie);
+      const python = await terminal.runPython(key);
+      log('python_model_call', python);
+      active();
+      check((await state()).run?.tokens?.requestsUsed === 1, 'python_request_not_counted_once');
+      const response = await request('/api/v1/chat/completions', modelCall, key, 120000);
+      check(response.status === 200, 'second_model_http_no_retry');
+      const answer = parse(
+        z.object({
+          model: z.literal(MODEL),
+          choices: z
+            .array(z.object({ message: z.object({ content: z.string().trim().min(1) }) }))
+            .min(1),
+          usage: usageSchema,
+          broker: z.object({
+            mode: z.literal('real'),
+            provider: z.literal('baseten'),
+            packId: z.string(),
+          }),
+        }),
+        response.value,
+        'second_model_real_receipt_invalid',
+      );
+      check(answer.broker.packId === run.tokens.packId, 'second_model_wrong_pack');
+      check(
+        !answer.choices[0].message.content.includes('Fixture response:'),
+        'fixture_answer_rejected',
+      );
+      log('second_model_call', {
+        usage: answer.usage,
+        answerCharacters: answer.choices[0].message.content.length,
+      });
+      active();
+      const third = await request('/api/v1/chat/completions', modelCall, key, 120000);
+      check(
+        third.status === 429 && (third.value as { code?: unknown }).code === 'demo_request_limit',
+        'third_model_call_not_rejected_by_demo_cap',
+      );
+      const used = (await state()).run?.tokens;
+      check(
+        used?.requestsUsed === 2 &&
+          used.availableInput === 5000 - python.usage.prompt_tokens - answer.usage.prompt_tokens &&
+          used.availableOutput ===
+            2048 - python.usage.completion_tokens - answer.usage.completion_tokens,
+        'token_usage_did_not_match_pack',
+      );
+      log('token_cap_verified', { requestsUsed: 2, rejectedStatus: 429 });
+    }
     const afterQuota = (await state()).run;
     check(
       afterQuota?.status === 'ready' &&
         afterQuota.vm?.id === run.vm.id &&
         afterQuota.vm.terminalPath === run.vm.terminalPath &&
-        afterQuota.expiresAt === run.expiresAt,
+        afterQuota.expiresAt === run.expiresAt &&
+        afterQuota.tokens?.requestsUsed === expectedRequests &&
+        (!studioUsage ||
+          (afterQuota.tokens.availableInput === studioUsage.availableInput &&
+            afterQuota.tokens.availableOutput === studioUsage.availableOutput)),
       'token_exhaustion_changed_terminal_lease',
     );
     await terminal.assertInteractive();
@@ -591,7 +728,20 @@ async function verify(origin: string) {
     await terminal.assertRevoked();
     terminal = new LiveTerminal(wsUrl, origin, cookie);
     await terminal.assertInteractive();
-    log('terminal_after_token_cap', { interactive: true, reconnected: true, leaseUnchanged: true });
+    if (kind === 'studio') {
+      const reconnected = (await state()).run;
+      check(
+        reconnected?.tokens?.requestsUsed === expectedRequests &&
+          reconnected.expiresAt === run.expiresAt,
+        'studio_reconnection_changed_usage_or_lease',
+      );
+    }
+    log(kind === 'studio' ? 'terminal_after_studio' : 'terminal_after_token_cap', {
+      interactive: true,
+      reconnected: true,
+      leaseUnchanged: true,
+      requestsUsed: expectedRequests,
+    });
     mainPassed = true;
   } catch (error) {
     failure = error;
@@ -616,6 +766,16 @@ async function verify(origin: string) {
           try {
             const blocked = await request('/api/demo/start', { operationKey: randomUUID() });
             restartRejected = blocked.status === 429;
+            if (blocked.status === 200) {
+              // This negative test unexpectedly admitted another run owned by
+              // this probe. Record its exact ID before attempting its cleanup.
+              ownedRunId = parse(
+                z.object({ run: z.object({ id: z.string().uuid() }) }),
+                blocked.value,
+                'unexpected_restart_id_invalid',
+              ).run.id;
+              log('unexpected_restart_admitted', { runId: ownedRunId });
+            }
             check(restartRejected, 'cooldown_restart_not_blocked');
           } finally {
             if (!restartRejected) {
@@ -625,11 +785,14 @@ async function verify(origin: string) {
               cleanupConfirmed = true;
             }
           }
-          const revoked = await request('/api/v1/chat/completions', modelCall, key);
-          check(revoked.status === 401, 'ended_key_not_revoked');
+          if (kind === 'terminal') {
+            check(key, 'ended_terminal_key_missing');
+            const revoked = await request('/api/v1/chat/completions', modelCall, key);
+            check(revoked.status === 401, 'ended_key_not_revoked');
+          } else check(key === '', 'studio_must_never_hold_api_key');
           log('revocation_and_cooldown_verified', {
             cooldownSeconds,
-            keyStatus: 401,
+            ...(kind === 'terminal' ? { keyStatus: 401 } : { keyNeverIssued: true }),
             startStatus: 429,
           });
         }
@@ -711,6 +874,73 @@ function selfTest() {
       ),
     CheckFailure,
   );
+  const studio = {
+    kind: 'studio',
+    status: 'ready',
+    canIssueKey: false,
+    keyIssued: false,
+    tokens: { provider: 'baseten', requestsUsed: 1, availableInput: 4920, availableOutput: 2018 },
+    studio: {
+      status: 'passed',
+      filename: 'hello_world.py',
+      source: 'print("Hello, World!")\n',
+      stdout: 'Hello, World!\n',
+      exitCode: 0,
+      requestsUsed: 1,
+      verifiedAt: '2026-11-03T06:02:00.000Z',
+    },
+  };
+  const studioMetadata = studioReceipt(studio);
+  assert.equal(
+    studioMetadata.sourceSha256,
+    createHash('sha256').update(studio.studio.source).digest('hex'),
+  );
+  assert.equal(studioMetadata.requestsUsed, 1);
+  assert.equal(Object.hasOwn(studioMetadata, 'source'), false);
+  assert.equal(
+    studioReceipt({
+      ...studio,
+      tokens: { ...studio.tokens, requestsUsed: 2 },
+      studio: { ...studio.studio, requestsUsed: 2 },
+    }).requestsUsed,
+    2,
+  );
+  for (const invalid of [
+    { ...studio, kind: 'terminal' },
+    { ...studio, canIssueKey: true },
+    { ...studio, keyIssued: true },
+    { ...studio, tokens: { ...studio.tokens, requestsUsed: 2 } },
+    { ...studio, tokens: { ...studio.tokens, availableInput: 5001 } },
+    ...[
+      { status: 'needs_attention' },
+      { verifiedAt: null },
+      { exitCode: 1 },
+      { stdout: 'Hello, World!\nextra output\n' },
+      { requestsUsed: 0 },
+      { requestsUsed: 3 },
+      { source: '' },
+      { source: 'x'.repeat(257) },
+    ].map((change) => ({ ...studio, studio: { ...studio.studio, ...change } })),
+  ])
+    assert.throws(() => studioReceipt(invalid), CheckFailure);
+  const studioMarker = 'WICK_STUDIO_FILE_test';
+  const studioTranscript = `echoed fixed command\r\n${studioMarker}:BEGIN\r\nHello, World!\r\n${studioMarker}:SHA256:${studioMetadata.sourceSha256}\r\n\r\n${studioMarker}:EXIT:0:0\r\n$ `;
+  assert.deepEqual(studioFileReceipt(studioTranscript, studioMarker, studioMetadata.sourceSha256), {
+    sourceSha256: studioMetadata.sourceSha256,
+    exitCode: 0,
+    outputVerified: true,
+  });
+  for (const invalid of [
+    studioTranscript.replace(`${studioMarker}:EXIT:0:0`, `${studioMarker}:EXIT:1:0`),
+    studioTranscript.replace(`${studioMarker}:EXIT:0:0`, `${studioMarker}:EXIT:0:1`),
+    studioTranscript.replace('Hello, World!\r\n', 'Hello, World!\r\nextra\r\n'),
+    studioTranscript.replace(studioMetadata.sourceSha256, '0'.repeat(64)),
+    studioTranscript.replace(`${studioMarker}:BEGIN\r\n`, ''),
+  ])
+    assert.throws(
+      () => studioFileReceipt(invalid, studioMarker, studioMetadata.sourceSha256),
+      CheckFailure,
+    );
   const compute = {
     provider: 'modal',
     catalogId: 'modal:micro:auto',
@@ -775,8 +1005,14 @@ function selfTest() {
 try {
   if (process.argv.length === 3 && process.argv[2] === '--self-test') selfTest();
   else {
-    check(process.argv.length === 3 && process.argv[2] === '--live', 'pass_live_or_self_test');
-    await verify(appOrigin(process.env.APP_URL));
+    check(
+      process.argv.length === 3 && ['--live', '--live-studio'].includes(process.argv[2]),
+      'pass_live_live_studio_or_self_test',
+    );
+    await verify(
+      appOrigin(process.env.APP_URL),
+      process.argv[2] === '--live-studio' ? 'studio' : 'terminal',
+    );
   }
 } catch (error) {
   console.error(

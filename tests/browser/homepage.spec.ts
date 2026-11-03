@@ -77,15 +77,16 @@ async function review(page: Page, info: TestInfo, name: string) {
   if (process.env.HOME_REVIEW !== '1') return;
   await page.evaluate(() => document.fonts.ready);
   await page.screenshot({ path: info.outputPath(`${name}.png`), fullPage: true });
+  await page.screenshot({ path: info.outputPath(`${name}-viewport.png`) });
 }
 
-test('anonymous home explains both resources and both sides without private reads or writes', async ({
+test('marketing home explains the platform without demo polling or private reads and writes', async ({
   page,
 }) => {
   const requests = await marketplace(page);
   await page.goto('/');
   await expect(page.getByRole('heading', { level: 1 })).toHaveText(
-    'Compute and AI tokens. Providers compete for your workload.',
+    'Compute and AI. On your terms.',
   );
   await expect(page.getByRole('heading', { name: 'Virtual machines', exact: true })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'AI token packs', exact: true })).toBeVisible();
@@ -94,8 +95,16 @@ test('anonymous home explains both resources and both sides without private read
   await expect(page.getByRole('heading', { name: 'Scheduled capacity', exact: true })).toHaveCount(
     0,
   );
-  await expect(page.getByText('Live demo is currently unavailable.')).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Try live demo' })).toBeDisabled();
+  await expect(page.getByText('Wick compute', { exact: true })).toBeVisible();
+  await expect(page.getByText('Meta Muse tokens', { exact: true })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Explore live demos', exact: true })).toHaveAttribute(
+    'href',
+    '/demos',
+  );
+  await expect(
+    page.getByRole('link', { name: 'Join buyer beta (opens in a new tab)', exact: true }),
+  ).toHaveAttribute('href', 'https://app.wick-cloud.com/waitlist');
+  await expect(page.getByRole('button', { name: 'Try live demo' })).toHaveCount(0);
   await expect(
     page.getByRole('link', { name: 'Buy resources', exact: true }).first(),
   ).toHaveAttribute('href', '/login?intent=buy');
@@ -107,11 +116,9 @@ test('anonymous home explains both resources and both sides without private read
     '/login',
   );
   expect(requests.length).toBeGreaterThan(0);
-  expect(
-    requests.every(
-      (request) => request.method === 'GET' && ['/api/me', '/api/demo'].includes(request.path),
-    ),
-  ).toBe(true);
+  expect(requests.every((request) => request.method === 'GET' && request.path === '/api/me')).toBe(
+    true,
+  );
 });
 
 for (const intent of ['buy', 'sell'] as const) {
@@ -164,7 +171,7 @@ for (const [role, destination] of [
     await expect(page).toHaveURL(new RegExp(`${destination}$`));
     await expect(
       page.getByRole('heading', {
-        name: 'Compute and AI tokens. Providers compete for your workload.',
+        name: 'Compute and AI. On your terms.',
       }),
     ).toHaveCount(0);
   });
@@ -182,7 +189,30 @@ test('an anonymous protected deep link stays intact through sign-in', async ({ p
   await expect(page.getByRole('heading', { name: 'Virtual machines', exact: true })).toBeVisible();
 });
 
-for (const width of [1440, 1280, 390]) {
+test('the demos page is public for signed-in visitors without a workspace sidebar', async ({
+  page,
+}) => {
+  const requests = await marketplace(page, { signedIn: 'buyer' });
+  await page.goto('/demos');
+  await expect(page).toHaveURL(/\/demos$/);
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText(
+    'Meet the market. Then put it to work.',
+  );
+  await expect(page.getByRole('button', { name: 'Start Muse Studio demo' })).toBeDisabled();
+  await expect(
+    page.getByText(
+      'A guided Hello World task with visible source and execution results. Then explore the files in your terminal. No API key to copy.',
+    ),
+  ).toBeVisible();
+  await expect(page.locator('.app-shell')).toHaveCount(0);
+  expect(
+    requests.every(
+      (request) => request.method === 'GET' && ['/api/me', '/api/demo'].includes(request.path),
+    ),
+  ).toBe(true);
+});
+
+for (const width of [1440, 1280, 390, 320]) {
   test(`marketplace and sign-in fit ${width}px with keyboard-accessible controls`, async ({
     page,
   }, info) => {
@@ -190,7 +220,7 @@ for (const width of [1440, 1280, 390]) {
     await page.setViewportSize({ width, height: 960 });
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await page.goto('/');
-    await expect(page.getByRole('button', { name: 'Try live demo' })).toBeVisible();
+    await expect(page.getByRole('link', { name: 'Explore live demos', exact: true })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
       true,
     );
