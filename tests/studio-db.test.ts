@@ -1091,6 +1091,9 @@ describe.skipIf(!url)('Studio task budget and lifecycle (disposable Postgres)', 
       { task: t, vm } = await ready(task.id);
     await processCodingJob(ctx, t.coding_job_id);
     await tick(task.id);
+    // The planning repair consumes prepaid quota; drive any metered refill
+    // auction before verification and VM cleanup, just as the worker does.
+    await finishExecution(task.id);
     await cleaned(task.id, vm.id);
     const detail = await studioDetail(ctx, owner, task.id);
     expect(detail.task.status).toBe('completed');
@@ -1098,7 +1101,18 @@ describe.skipIf(!url)('Studio task budget and lifecycle (disposable Postgres)', 
     expect(detail.vm?.cleanupConfirmedAt).toBeTruthy();
     expect(detail.task.reservedCents).toBe(0);
     expect(detail.task.spentCents + detail.task.returnedCents).toBeCloseTo(200, 2);
-    expect(detail.modelPurchases).toHaveLength(1);
+    expect(detail.modelPurchases).toHaveLength(2);
+    expect(detail.modelPurchases.map((purchase) => purchase.status)).toEqual([
+      'awarded',
+      'awarded',
+    ]);
+    expect(
+      (
+        await pool.query(
+          "SELECT count(*)::int n FROM broker_credit_ledger WHERE kind='token_purchase'",
+        )
+      ).rows[0].n,
+    ).toBe(2);
     expect(modelCalls).toBe(6);
     for (const [, call] of vi.mocked(ctx.inference!.dispatch).mock.calls) {
       expect(call).not.toHaveProperty('reasoning_effort');
