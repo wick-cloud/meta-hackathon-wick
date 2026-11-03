@@ -249,9 +249,13 @@ test('buyer Muse fixture prepares an editable review with an honest receipt', as
     .fill('A Linux environment with 2 vCPUs and 4 GB memory for 30 minutes.');
   await page.getByRole('button', { name: 'Prepare with Muse' }).click();
   await expect(page).toHaveURL(/\/requests\/review$/);
-  await expect(page.getByLabel('Rental duration')).toHaveValue('30');
+  await expect(page.getByRole('button', { name: '30 minutes', exact: true })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
   await expect(page.getByLabel('Minimum vCPUs')).toHaveValue('2');
   await expect(page.getByLabel('Minimum memory (GiB)')).toHaveValue('4');
+  await page.getByText('How Muse prepared this request', { exact: true }).click();
   await expect(page.getByText(/no Meta model call was made/i)).toBeVisible();
   await page.getByLabel('Maximum total price (USD)').fill('7.50');
   await expect(page.getByLabel('Maximum total price (USD)')).toHaveValue(/^7\.50?$/);
