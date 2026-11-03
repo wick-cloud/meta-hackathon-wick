@@ -4,14 +4,14 @@ Deploy `wick-cloud/meta-hackathon-wick`, branch **`main`**, repository root `/`.
 
 ## Build and service settings
 
-`Dockerfile` builds Node 24 client/server artifacts without database or API credentials. The runtime installs production dependencies only, runs as the `node` user, and includes compiled migration, seed and real-configuration commands. Private environment files, local build output and the Railway SDK are excluded from the runtime image.
+`Dockerfile` builds Node 24 client/server artifacts without database or API credentials. The final runtime contains Node and production dependencies without npm or Yarn, runs as the `node` user, and includes compiled migration, seed and real-configuration commands. Operator commands run directly with Node. Private environment files, local build output and the Railway SDK are excluded from the runtime image.
 
 Current Railway projects can use [`.railway/railway.ts`](../.railway/railway.ts), evaluated by the official Railway SDK pinned in `devDependencies`. It declares the branch, Docker build, app and Postgres, database reference and these settings:
 
 | Setting                  | Value                           |
 | ------------------------ | ------------------------------- |
 | Builder                  | Dockerfile at `Dockerfile`      |
-| Pre-deploy command       | `npm run db:migrate:production` |
+| Pre-deploy command       | `node dist/scripts/migrate.js`  |
 | Pre-deploy timeout       | 120 seconds                     |
 | Start command            | `node dist/src/server/index.js` |
 | Healthcheck              | `/ready`, 120-second timeout    |
@@ -20,6 +20,8 @@ Current Railway projects can use [`.railway/railway.ts`](../.railway/railway.ts)
 | Extra deployment overlap | 0 seconds                       |
 | Graceful draining        | 30 seconds                      |
 | Restart policy           | On failure, at most 5 retries   |
+
+Before deploying this image to an existing service, change its pre-deploy command to `node dist/scripts/migrate.js`; the preceding image supports that command too.
 
 The old `railway.toml` was removed because current Railway uses [Infrastructure as Code](https://docs.railway.com/infrastructure-as-code) for new services. You can also enter the settings above in the dashboard after connecting the GitHub branch; the Dockerfile builds the same image either way.
 
@@ -68,7 +70,7 @@ SEED_ADMIN_PASSWORD
 Optional `SEED_*_EMAIL` variables override the demo email addresses listed in the main README. Once the fixture app is running, select `wick-broker` in your linked CLI and run the compiled seed **once** in its container:
 
 ```sh
-railway ssh --service wick-broker -- npm run seed:production
+railway ssh --service wick-broker -- node dist/scripts/seed.js
 ```
 
 The seed is never part of build, migrations, pre-deploy or startup. Re-running it resets the invited passwords and revokes their sessions, so ordinary redeploys must not run it. It refuses real Wick mode. `railway run` runs a command locally; use `railway ssh` for the private Railway database connection.
@@ -86,20 +88,20 @@ WICK_GROUP_ID
 `WICK_API_BASE` defaults to `https://app.wick-cloud.com/api`. Keep `MUSE_MODE=fixture`. Review the catalog from the running container without allocating a VM:
 
 ```sh
-railway ssh --service wick-broker -- npm run configure:real:production -- --list
+railway ssh --service wick-broker -- node dist/scripts/configure-real.js --list
 ```
 
 The registry supports E2B, Daytona, Baseten (native Blaxel), Modal, Sail, Tenki, Freestyle, and Boat.dev. Supply private `REAL_PROVIDER_<KEY>_EMAIL` and `_CATALOG_IDS` only for the selected providers, plus `_PASSWORD` for newly created accounts. Keys are `E2B`, `DAYTONA`, `BLAXEL`, `MODAL`, `SAIL`, `TENKI`, `FREESTYLE`, and `BOAT`; catalog IDs must come from a fresh `--list`. Per-provider `_CAPACITY` overrides `REAL_PROVIDER_CAPACITY` and defaults to one slot. Staged account creation is explicit:
 
 ```sh
-railway ssh --service wick-broker -- npm run configure:real:production -- --apply-providers --providers sail,tenki,freestyle,boat --stage
+railway ssh --service wick-broker -- node dist/scripts/configure-real.js --apply-providers --providers sail,tenki,freestyle,boat --stage
 ```
 
 An explicit subset is required (`REAL_PROVIDER_IDS` is an alternative). Staging creates missing accounts/bindings with new catalog rows unapproved, new offerings inactive, and automatic bidding disabled. Default retries preserve existing passwords, sessions, custom policies, capacity, approval/activity state, prices and frozen history. Existing passwords can be omitted and are never reset. Role or cloud-binding conflicts fail atomically. These configured slots are not measured upstream capacity; the shared global limit remains 20 VMs.
 
 After service-credential and live lifecycle/terminal qualification, use `--apply-providers --providers <qualified-subset> --activate`. Activation preserves custom prices/capacity and fails if an existing offering is below the current floor. `--update-existing` explicitly replaces selected defaults/prices; use it only for an intended policy update. `_AUTO_BID=false` can keep automation disabled during activation. New account base/offer prices are 120% of the 30-minute cost-covered quote, rounded upward to $0.0001. One-slot accounts use base-only bidding; see [provider strategies](provider-marketplace.md).
 
-Only set `REAL_RETIRED_SUPPLIER_EMAILS` when deliberately retiring existing unbound suppliers. Setup allocates no VMs and does not deploy the app. Never leave setup in startup or a permanent pre-deploy hook; keep `npm run db:migrate:production` as the permanent command. Migration 032 expands identities and quarantines historical real Boat approvals/offerings while preserving rentals and cleanup.
+Only set `REAL_RETIRED_SUPPLIER_EMAILS` when deliberately retiring existing unbound suppliers. Setup allocates no VMs and does not deploy the app. Never leave setup in startup or a permanent pre-deploy hook; keep `node dist/scripts/migrate.js` as the permanent command. Migration 032 expands identities and quarantines historical real Boat approvals/offerings while preserving rentals and cleanup.
 
 Baseten remains the requested compute-account display alias for native `provider-blaxel`; the actual Baseten Muse API is separate. Native provider names are routing identities, not company-operated accounts. Real buyer allocations consume Wick credits; invoices/earnings remain demo accounting without collected payments or payouts. The [expansion record](provider-expansion-plan.md) distinguishes implemented support from deployment and live qualification.
 
