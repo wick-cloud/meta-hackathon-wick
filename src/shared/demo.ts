@@ -5,6 +5,7 @@ export interface DemoBid {
   priceCents: number;
   grossPriceCents?: number;
   sponsorCreditCents?: number;
+  operatorSponsored?: boolean;
   catalogId?: string;
   acceptedAt: string;
 }
@@ -24,6 +25,7 @@ export interface DemoRun {
     priceCents: number | null;
     grossPriceCents?: number | null;
     sponsorCreditCents?: number | null;
+    operatorSponsored?: boolean;
     auctionEndsAt: string | null;
     bids: DemoBid[];
     cleanupConfirmed: boolean;

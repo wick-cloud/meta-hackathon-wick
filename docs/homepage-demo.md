@@ -6,12 +6,13 @@ Python example. Judges do not need an account, payment details, Wick credentials
 or a Baseten service key. Both auctions retain their normal 30-second deadlines.
 The token auction has one eligible provider: Baseten. The compute auction invites
 qualified Modal and E2B Micro supply and displays only bids actually accepted by
-the server. Modal receives a disclosed demo sponsorship that brings its effective
-bid to **$0.01**; the receipt shows the original gross bid and sponsor credit.
+the server. Modal's effective bid is **$0.01**, through its operator-funded
+provider promotion or a disclosed homepage credit. The receipt shows the original
+gross bid and any additional demo credit.
 Modal has priority on a one-cent tie. A missing valid Modal bid ends that attempt;
 the demo never invents competing bids or silently switches provider or VM size.
-The demo uses each invited supplier's valid base bid, subject to its cost floor,
-policy and available capacity. It does not spend extra Muse calls on compute bid
+The demo uses each invited supplier's valid base bid or fixed provider promotion,
+subject to its pricing policy and available capacity. It does not spend extra Muse calls on compute bid
 discount proposals; the terminal example demonstrates the real Muse integration.
 
 ## Judge experience
@@ -48,8 +49,12 @@ retain their reservations and cannot be automatically retried.
 | Daily sponsorship  | $5 per America/New_York calendar day; reserve $0.50 per admitted run                                                         |
 
 The one-cent display price does not reduce the provider's accepted gross price,
-cost floor, invoice, or commission calculation. Judges pay nothing. Normal buyer
-auctions do not receive this sponsorship or the demo's Modal tie priority.
+invoice, or commission calculation. If the separate operator-funded Modal provider
+promotion is enabled, its genuine gross bid is already one cent and the homepage
+adds no further credit. That provider promotion retains its recorded native cost
+estimate and subsidy. The homepage still enforces its stricter $0.25 cost-covered
+compute ceiling. Judges pay nothing. Normal buyer auctions retain their existing
+pricing rules, including any separately configured provider promotion.
 
 The conservative $0.50 reservation covers the compute and token purchase
 ceilings plus $0.20 reserved for disk/operational overhead. Once a run attempts
@@ -120,7 +125,8 @@ and these judge instructions alongside the public GitHub repo and demo video.
 
 The opt-in verifier runs that journey through public HTTP and terminal WebSocket
 APIs. It allocates one real demo VM/disk, makes two bounded Baseten requests,
-checks that a third request is rejected, then explicitly ends its own test run
+checks that a third request is rejected and the terminal still accepts commands
+and reconnects without changing the lease, then explicitly ends its own test run
 to verify cleanup and cooldown. Ordinary judge sessions stay open after token
 exhaustion until their lease expires or the judge selects **End demo**.
 It requires no provider or account credentials and never logs the key or terminal

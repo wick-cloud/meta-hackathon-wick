@@ -9,6 +9,11 @@ import {
   TableViewport,
 } from './table';
 import './provider-console.css';
+import {
+  ComputePromotionBadge,
+  ComputePromotionNotice,
+  modalPromotionPreview,
+} from './compute-promotion';
 import { FormLayout, FormPage, FormPanel, FormSection, FormSummary } from './form-layout';
 import { isMoneyCents, moneyUnits } from '../shared/money';
 import { Fragment, useEffect, useState, type FormEvent, type ReactNode } from 'react';
@@ -339,7 +344,7 @@ export function ProviderCapacity() {
 
 export function ProviderPolicy() {
   const { data, error, loading, reload } = useResource<Dashboard>('/api/provider/dashboard', 5000),
-    { catalog, modes } = useSession();
+    { catalog, modes, computePromotion } = useSession();
   const [policy, setPolicy] = useState<SupplierPolicy | null>(null),
     [baseRevision, setBaseRevision] = useState<number | null>(null),
     [applyAttempt, setApplyAttempt] = useState<
@@ -449,6 +454,11 @@ export function ProviderPolicy() {
         )}
       </ProviderPageState>
     );
+  const promotedProvider =
+    !!computePromotion &&
+    modes.wick === 'real' &&
+    data?.provider.cloudProvider === 'modal' &&
+    data.provider.simulated === false;
   const ownCatalog = catalog.filter(
     (c) =>
       c.approved && (!data?.provider.cloudProvider || c.provider === data.provider.cloudProvider),
@@ -471,6 +481,7 @@ export function ProviderPolicy() {
           {modes.muse === 'fixture' ? 'Fixture Muse · no model calls' : museLabel}
         </span>
       </PageHeader>
+      <ComputePromotionNotice available={promotedProvider} audience="provider" />
       <FormPanel>
         <FormSection
           title="Your selling strategy"
@@ -674,10 +685,10 @@ export function ProviderPolicy() {
                 />
                 <p className="field-hint">
                   These limits are the gross total the buyer pays, before Broker’s 15% commission.
-                  You keep 85% before compute costs. The buyer’s budget also applies; real Wick bids
-                  must leave enough after commission to cover the estimated compute cost. Automatic
-                  bids use your base or that cost floor, whichever is higher. The last free slot
-                  stays at base.
+                  You keep 85% before compute costs. The buyer’s budget also applies.{' '}
+                  {promotedProvider
+                    ? 'Eligible sponsored Modal bids cost the buyer $0.01 when your saved limits allow it; the operator’s Wick account covers compute beyond your share. Other bids use your base or the ordinary compute cost floor, whichever is higher.'
+                    : 'Real Wick bids must leave enough after commission to cover the estimated compute cost. Automatic bids use your base or that cost floor, whichever is higher. The last free slot stays at base.'}
                 </p>
                 <ProviderRevenueSplit grossCents={policy.basePriceCents} />
                 <div className="form-divider" />
@@ -1091,7 +1102,7 @@ export function ProviderRequests() {
 export function ProviderOfferings() {
   const { data, error, loading, reload, nextCursor, loadingMore, loadMore, moreError } =
       usePagedResource<Offering>('/api/provider/offerings'),
-    { catalog, modes } = useSession(),
+    { catalog, modes, computePromotion } = useSession(),
     dashboard = useResource<Dashboard>('/api/provider/dashboard'),
     approved = catalog.filter(
       (item) =>
@@ -1119,6 +1130,11 @@ export function ProviderOfferings() {
       mode: Mode;
       modelCalled?: boolean;
     } | null>(null);
+  const promotedProvider =
+    !!computePromotion &&
+    modes.wick === 'real' &&
+    dashboard.data?.provider.cloudProvider === 'modal' &&
+    dashboard.data.provider.simulated === false;
   const selected = approved.find((item) => item.id === draft.catalogId);
   const firstApprovedId = approved[0]?.id ?? '';
   useEffect(() => {
@@ -1139,10 +1155,18 @@ export function ProviderOfferings() {
   if (modes.wick === 'real' && draft.priceBasis !== 'server-priced-candidate') {
     try {
       if (!selected || !dashboard.data) throw new Error(quoteError);
-      publishPrice = Math.max(
-        fixedQuote(managedPricing(selected), 30).totalPriceCents,
-        dashboard.data.policy.minimumPriceCents,
-      );
+      const promotion = promotedProvider && modalPromotionPreview(selected, 30);
+      const policyAllowsPromotion =
+        dashboard.data.policy.minimumPriceCents <= 1 &&
+        (dashboard.data.policy.maxPriceCents === undefined ||
+          dashboard.data.policy.maxPriceCents >= 1);
+      publishPrice =
+        promotion && policyAllowsPromotion
+          ? promotion.totalPriceCents
+          : Math.max(
+              fixedQuote(managedPricing(selected), 30).totalPriceCents,
+              dashboard.data.policy.minimumPriceCents,
+            );
     } catch (error) {
       publishPrice = undefined;
       quoteError =
@@ -1220,6 +1244,7 @@ export function ProviderOfferings() {
           {showForm ? 'Close form' : 'New offering'}
         </button>
       </PageHeader>
+      <ComputePromotionNotice available={promotedProvider} audience="provider" />
       <div className="provider-assist-bar">
         <span className="icon-tile violet">
           <Sparkles size={22} />
@@ -1391,8 +1416,10 @@ export function ProviderOfferings() {
                     <p className="field-hint">
                       Publishing stores this example total. A changed rate or policy is rejected for
                       a fresh review. Each rental gets a duration-specific fixed quote. Binding bids
-                      may differ within your policy and the buyer’s budget. Your 85% share must
-                      cover the estimated upstream compute cost.
+                      may differ within your policy and the buyer’s budget.{' '}
+                      {promotedProvider
+                        ? 'Eligible sponsored Modal offers charge buyers $0.01; the operator’s Wick account covers compute beyond your 85% share. Other offers must cover the estimated upstream compute cost.'
+                        : 'Your 85% share must cover the estimated upstream compute cost.'}
                     </p>
                   </div>
                 )}
@@ -1716,7 +1743,10 @@ export function ProviderEarnings() {
                     </td>
                     <td>{item.catalogName || item.vmId.slice(0, 8)}</td>
                     <td>{shortDate(item.createdAt)}</td>
-                    <td className="money-cell numeric-cell">{money(item.totalCents)}</td>
+                    <td className="money-cell numeric-cell">
+                      {money(item.totalCents)}
+                      <ComputePromotionBadge pricing={item.pricing} />
+                    </td>
                     <td className="money-cell numeric-cell">
                       {item.revenueShare
                         ? moneyMicros(item.revenueShare.brokerFeeMicros)

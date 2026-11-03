@@ -7,7 +7,12 @@ import { transaction, enqueue } from '../marketplace/db.js';
 import { iso, type Row } from '../marketplace/data.js';
 import { clientOperationKey } from '../operations.js';
 import { diskCatalogEligible, diskOptions } from '../disks/service.js';
-import { requireFreshManagedRate, fixedQuote, managedPricing } from '../../shared/pricing.js';
+import {
+  requireFreshManagedRate,
+  fixedQuote,
+  managedPricing,
+  isSponsoredComputeQuote,
+} from '../../shared/pricing.js';
 import { applyCreditEntry } from '../agreements/credits.js';
 import { createGrantInTransaction } from '../inference/grants.js';
 import { OFFER_SELECT, offeringOpen, packPrice } from '../inference/market.js';
@@ -468,6 +473,9 @@ export async function demoState(
               vm?.quote_snapshot?.demoSponsorship?.effectivePriceCents ??
               vm?.quote_snapshot?.totalPriceCents ??
               null,
+            ...(isSponsoredComputeQuote(vm?.quote_snapshot?.pricing)
+              ? { operatorSponsored: true }
+              : {}),
             ...(vm?.quote_snapshot?.demoSponsorship
               ? {
                   grossPriceCents: Number(vm.quote_snapshot.totalPriceCents),
@@ -483,6 +491,9 @@ export async function demoState(
               priceCents:
                 b.offering_snapshot?.demoSponsorship?.effectivePriceCents ??
                 Number(b.total_price_cents),
+              ...(isSponsoredComputeQuote(b.offering_snapshot?.pricing)
+                ? { operatorSponsored: true }
+                : {}),
               ...(b.offering_snapshot?.demoSponsorship
                 ? {
                     grossPriceCents: Number(b.total_price_cents),

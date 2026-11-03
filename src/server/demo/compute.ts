@@ -6,6 +6,7 @@ import { HttpError, type AppContext } from '../context.js';
 import { diskCatalogEligible } from '../disks/service.js';
 import type { Row } from '../marketplace/data.js';
 import { availableForBids } from '../marketplace/policy.js';
+import { modalComputePromotionQuote } from '../marketplace/compute-promotion.js';
 
 export const DEMO_COMPUTE_CATALOG_IDS = ['modal:micro:auto', 'e2b:micro:us'] as const;
 const VERSION = 'homepage-modal-credit-v1';
@@ -74,13 +75,21 @@ export async function demoComputeProviders(
           requireCurrentRate(candidate.pricing, catalog);
           floor = fixedQuote(commissionPricing(candidate.pricing), 15).upstreamCostFloorCents!;
         }
-        const base = Math.max(
-          floor,
-          candidate.policy.minimumPriceCents,
-          candidate.policy.basePriceCents,
+        const promotion = modalComputePromotionQuote(
+          ctx,
+          candidate,
+          catalog,
+          candidate.pricing,
+          15,
         );
+        const base =
+          promotion?.totalPriceCents ??
+          Math.max(floor, candidate.policy.minimumPriceCents, candidate.policy.basePriceCents);
         return (
+          // The broader promotion's upstream allowance must never widen this demo's budget.
+          floor <= 25 &&
           isMoneyCents(base) &&
+          base >= candidate.policy.minimumPriceCents &&
           base <= 25 &&
           (candidate.policy.maxPriceCents === undefined ||
             base <= candidate.policy.maxPriceCents) &&

@@ -4,6 +4,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import { loadConfig } from '../src/server/config.js';
 import type { AppContext } from '../src/server/context.js';
 import { migrate, transaction } from '../src/server/db.js';
+import { demoState } from '../src/server/demo/service.js';
 import { observeVmDisk } from '../src/server/disks/service.js';
 import type { WickEnvironment } from '../src/server/integrations/types.js';
 import {
@@ -73,6 +74,7 @@ describe.skipIf(!url)('demo sponsorship with real pricing contracts and no nativ
     vi.mocked(ctx.boss.send).mockClear();
     vi.mocked(ctx.muse.proposeBid).mockClear();
     ctx.config.liveDemoEnabled = true;
+    ctx.config.modalComputePromotionEnabled = false;
     suppliers = [];
     for (const [provider, profile, region, rate, base] of [
       ['modal', 'micro', 'auto', 34, 8],
@@ -267,113 +269,171 @@ describe.skipIf(!url)('demo sponsorship with real pricing contracts and no nativ
     expect(ctx.wick.create).not.toHaveBeenCalled();
   }
 
-  it('atomically binds exactly two native Micro suppliers, preserves gross invoices and never calls a bidding model', async () => {
-    const policies = (await pool.query('SELECT id,policy FROM broker_providers ORDER BY id')).rows;
-    const request = await create();
-    expect(await create()).toEqual(request);
-    expect(
-      (await pool.query('SELECT request_id FROM broker_demo_runs WHERE id=$1', [runId])).rows[0]
-        .request_id,
-    ).toBe(request.id);
-    expect(
-      (await row(request.id)).catalog_snapshot.eligibleCatalogs
-        .map((c: CatalogItem) => c.id)
-        .sort(),
-    ).toEqual(['e2b:micro:us', 'modal:micro:auto']);
-    expect(
-      vi.mocked(ctx.boss.send).mock.calls.filter(([queue]) => queue === QUEUES.auto),
-    ).toHaveLength(2);
-    for (const [index, expected] of [
-      [0, 8],
-      [1, 5],
-    ] as const) {
-      const proposal = await proposeBid(ctx, suppliers[index]!.actor, request.id);
-      expect(proposal).toMatchObject({
-        decision: 'bid',
-        totalPriceCents: expected,
-        modelCalled: false,
+  it.each([false, true])(
+    'atomically binds two suppliers and preserves gross invoices with global promotion=%s',
+    async (promotion) => {
+      ctx.config.modalComputePromotionEnabled = promotion;
+      if (promotion) {
+        await pool.query(
+          `UPDATE broker_providers SET policy=policy || '{"minimumPriceCents":1,"basePriceCents":1,"maxPriceCents":1}'::jsonb WHERE id=$1`,
+          [suppliers[0]!.actor.providerId],
+        );
+        await pool.query('UPDATE broker_offerings SET price_cents=1 WHERE provider_id=$1', [
+          suppliers[0]!.actor.providerId,
+        ]);
+      }
+      const modalGross = promotion ? 1 : 8;
+      const policies = (await pool.query('SELECT id,policy FROM broker_providers ORDER BY id'))
+        .rows;
+      const request = await create();
+      expect(await create()).toEqual(request);
+      expect(
+        (await pool.query('SELECT request_id FROM broker_demo_runs WHERE id=$1', [runId])).rows[0]
+          .request_id,
+      ).toBe(request.id);
+      expect(
+        (await row(request.id)).catalog_snapshot.eligibleCatalogs
+          .map((c: CatalogItem) => c.id)
+          .sort(),
+      ).toEqual(['e2b:micro:us', 'modal:micro:auto']);
+      expect(
+        vi.mocked(ctx.boss.send).mock.calls.filter(([queue]) => queue === QUEUES.auto),
+      ).toHaveLength(2);
+      for (const [index, expected] of [
+        [0, modalGross],
+        [1, 5],
+      ] as const) {
+        const proposal = await proposeBid(ctx, suppliers[index]!.actor, request.id);
+        expect(proposal).toMatchObject({
+          decision: 'bid',
+          totalPriceCents: expected,
+          modelCalled: false,
+        });
+        await submitBid(
+          ctx,
+          suppliers[index]!.actor,
+          request.id,
+          { totalPriceCents: proposal.totalPriceCents!, offeringId: proposal.offeringId },
+          'auto',
+        );
+      }
+      expect(ctx.muse.proposeBid).not.toHaveBeenCalled();
+      expect(
+        (await pool.query('SELECT count(*)::int n FROM broker_holds WHERE released_at IS NULL'))
+          .rows[0].n,
+      ).toBe(2);
+      // Already accepted global promotion quotes retain their terms after the flag turns off.
+      ctx.config.modalComputePromotionEnabled = false;
+      await close(request.id);
+      await closeAuction(ctx, request.id);
+      const vm = (await pool.query('SELECT * FROM broker_vms WHERE request_id=$1', [request.id]))
+        .rows[0];
+      expect(vm.create_input).toMatchObject({
+        provider: 'modal',
+        profile: 'micro',
+        region: 'auto',
+        ttlSeconds: 900,
+        maximumPriceMicrosPerSecond: 34,
       });
-      await submitBid(
-        ctx,
-        suppliers[index]!.actor,
-        request.id,
-        { totalPriceCents: proposal.totalPriceCents!, offeringId: proposal.offeringId },
-        'auto',
+      expect(vm.quote_snapshot).toMatchObject({
+        totalPriceCents: modalGross,
+        revenueShare: revenueShare(modalGross),
+        demoSponsorship: {
+          grossPriceCents: modalGross,
+          sponsorCreditCents: modalGross - 1,
+          effectivePriceCents: 1,
+        },
+      });
+      expect(vm.quote_snapshot.pricing.upstreamEstimatedComputeMicros).toBe('30600');
+      if (promotion)
+        expect(vm.quote_snapshot.pricing).toMatchObject({
+          priceBasis: 'operator-sponsored',
+          upstreamCostFloorCents: 4,
+          promotion: { id: 'modal-one-cent-v1', estimatedSubsidyMicros: '22100' },
+        });
+      expect((await bids(request.id)).map((b) => [b.total_price_cents, b.status])).toEqual([
+        [modalGross, 'won'],
+        [5, 'lost'],
+      ]);
+      const disk = (await pool.query('SELECT upstream_id FROM broker_disks WHERE id=$1', [diskId]))
+        .rows[0];
+      const environment: WickEnvironment = {
+        id: `offline-${randomUUID()}`,
+        name: vm.create_input.name,
+        status: 'running',
+        provider: 'modal',
+        profile: 'micro',
+        organizationId: 'offline-org',
+        groupId: 'offline-group',
+        billingMode: 'wick_managed',
+        createdAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 900000).toISOString(),
+        raw: {},
+        workspaceDrive: {
+          driveId: disk.upstream_id,
+          accessMode: 'mount',
+          attachmentMode: 'shared',
+          generation: 'offline-generation',
+          status: 'mounted',
+          workspacePath: '/workspace',
+        },
+      };
+      await pool.query('UPDATE broker_vms SET environment_id=$2,expires_at=$3 WHERE id=$1', [
+        vm.id,
+        environment.id,
+        environment.expiresAt,
+      ]);
+      expect(await observeVmDisk(ctx, { ...vm, environment_id: environment.id }, environment)).toBe(
+        true,
       );
-    }
-    expect(ctx.muse.proposeBid).not.toHaveBeenCalled();
-    expect(
-      (await pool.query('SELECT count(*)::int n FROM broker_holds WHERE released_at IS NULL'))
-        .rows[0].n,
-    ).toBe(2);
-    await close(request.id);
-    await closeAuction(ctx, request.id);
-    const vm = (await pool.query('SELECT * FROM broker_vms WHERE request_id=$1', [request.id]))
-      .rows[0];
-    expect(vm.create_input).toMatchObject({
-      provider: 'modal',
-      profile: 'micro',
-      region: 'auto',
-      ttlSeconds: 900,
-      maximumPriceMicrosPerSecond: 34,
-    });
-    expect(vm.quote_snapshot).toMatchObject({
-      totalPriceCents: 8,
-      revenueShare: revenueShare(8),
-      demoSponsorship: { grossPriceCents: 8, sponsorCreditCents: 7, effectivePriceCents: 1 },
-    });
-    expect(vm.quote_snapshot.pricing.upstreamEstimatedComputeMicros).toBe('30600');
-    expect((await bids(request.id)).map((b) => [b.total_price_cents, b.status])).toEqual([
-      [8, 'won'],
-      [5, 'lost'],
+      expect(await markReady(ctx, vm.id, environment, true)).toBe(true);
+      await markReady(ctx, vm.id, environment, true);
+      expect(
+        (
+          await pool.query('SELECT total_cents,revenue_share FROM broker_invoices WHERE vm_id=$1', [
+            vm.id,
+          ])
+        ).rows,
+      ).toEqual([{ total_cents: modalGross, revenue_share: revenueShare(modalGross) }]);
+      await pool.query('UPDATE broker_demo_runs SET vm_id=$2 WHERE id=$1', [runId, vm.id]);
+      ctx.config.liveDemoEnabled = false;
+      const receipt = await demoState(ctx, {
+        visitorDigest: 'a'.repeat(64),
+        ipDigest: 'b'.repeat(64),
+      });
+      expect(receipt.run!.vm).toMatchObject({
+        priceCents: 1,
+        grossPriceCents: modalGross,
+        sponsorCreditCents: modalGross - 1,
+      });
+      expect(receipt.run!.vm!.operatorSponsored).toBe(promotion ? true : undefined);
+      expect(
+        receipt.run!.vm!.bids.find((entry) => entry.provider === 'modal')!.operatorSponsored,
+      ).toBe(promotion ? true : undefined);
+      expect((await pool.query('SELECT id,policy FROM broker_providers ORDER BY id')).rows).toEqual(
+        policies,
+      );
+      expect(
+        (await pool.query('SELECT reserved_cents FROM broker_demo_days')).rows[0].reserved_cents,
+      ).toBe(50);
+      expect(ctx.wick.create).not.toHaveBeenCalled();
+    },
+  );
+
+  it('does not inherit the global promotion’s larger upstream cost allowance', async () => {
+    ctx.config.modalComputePromotionEnabled = true;
+    const expensive = { ...suppliers[0]!.catalog, rateMicrosPerSecond: 300 };
+    await pool.query('UPDATE broker_catalog SET item=$2 WHERE id=$1', [expensive.id, expensive]);
+    await pool.query('UPDATE broker_offerings SET pricing=$2,price_cents=1 WHERE catalog_id=$1', [
+      expensive.id,
+      managedPricing(expensive),
     ]);
-    const disk = (await pool.query('SELECT upstream_id FROM broker_disks WHERE id=$1', [diskId]))
-      .rows[0];
-    const environment: WickEnvironment = {
-      id: `offline-${randomUUID()}`,
-      name: vm.create_input.name,
-      status: 'running',
-      provider: 'modal',
-      profile: 'micro',
-      organizationId: 'offline-org',
-      groupId: 'offline-group',
-      billingMode: 'wick_managed',
-      createdAt: new Date().toISOString(),
-      expiresAt: new Date(Date.now() + 900000).toISOString(),
-      raw: {},
-      workspaceDrive: {
-        driveId: disk.upstream_id,
-        accessMode: 'mount',
-        attachmentMode: 'shared',
-        generation: 'offline-generation',
-        status: 'mounted',
-        workspacePath: '/workspace',
-      },
-    };
-    await pool.query('UPDATE broker_vms SET environment_id=$2,expires_at=$3 WHERE id=$1', [
-      vm.id,
-      environment.id,
-      environment.expiresAt,
-    ]);
-    expect(await observeVmDisk(ctx, { ...vm, environment_id: environment.id }, environment)).toBe(
-      true,
+    await pool.query(
+      `UPDATE broker_providers SET policy=policy || '{"minimumPriceCents":1,"basePriceCents":1,"maxPriceCents":1}'::jsonb WHERE id=$1`,
+      [suppliers[0]!.actor.providerId],
     );
-    expect(await markReady(ctx, vm.id, environment, true)).toBe(true);
-    await markReady(ctx, vm.id, environment, true);
-    expect(
-      (
-        await pool.query('SELECT total_cents,revenue_share FROM broker_invoices WHERE vm_id=$1', [
-          vm.id,
-        ])
-      ).rows,
-    ).toEqual([{ total_cents: 8, revenue_share: revenueShare(8) }]);
-    expect((await pool.query('SELECT id,policy FROM broker_providers ORDER BY id')).rows).toEqual(
-      policies,
-    );
-    expect(
-      (await pool.query('SELECT reserved_cents FROM broker_demo_days')).rows[0].reserved_cents,
-    ).toBe(50);
-    expect(ctx.wick.create).not.toHaveBeenCalled();
+    await expect(create()).rejects.toThrow(/gross limit/);
+    expect((await pool.query('SELECT count(*)::int n FROM broker_requests')).rows[0].n).toBe(0);
   });
 
   it('rejects forged source fields, a stale worker fence and unqualified second supply without creating an auction', async () => {

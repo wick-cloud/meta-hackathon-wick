@@ -276,6 +276,50 @@ test('compute auction renders only accepted bids, ranks sponsorship honestly, an
   expect(f.writes).toEqual([]);
 });
 
+test('an operator-sponsored provider price shows the promotion without inventing another demo credit', async ({
+  page,
+}) => {
+  const promoted = sponsoredReceipt('provisioning');
+  promoted.vm!.grossPriceCents = 1;
+  promoted.vm!.sponsorCreditCents = 0;
+  promoted.vm!.operatorSponsored = true;
+  const modal = promoted.vm!.bids.find((bid) => bid.provider === 'modal')!;
+  modal.grossPriceCents = 1;
+  modal.sponsorCreditCents = 0;
+  modal.operatorSponsored = true;
+  const f = await fixture(page, state(promoted));
+  await page.goto('/');
+  const compute = page.getByRole('article', { name: 'Compute auction' });
+  const rows = compute.locator('.demo-provider-bid');
+  await expect(rows).toHaveCount(2);
+  await expect(rows.first()).toContainText('Modal');
+  await expect(rows.first()).toContainText('1¢provider promotion');
+  await expect(rows.first()).toContainText('Selected');
+  await expect(rows.nth(1)).toContainText('E2B');
+  await expect(rows.nth(1)).toContainText('$0.05');
+  await expect(compute.getByText('after demo sponsorship', { exact: true })).toHaveCount(0);
+  await expect(compute.locator('.demo-bid-sponsorship')).toHaveCount(0);
+  await page.getByText('Auction receipts & resource status', { exact: true }).click();
+  const receiptGrid = page.locator('.demo-receipt-grid');
+  await expect(
+    receiptGrid
+      .locator('div')
+      .filter({ has: page.getByText('Provider compute price', { exact: true }) }),
+  ).toContainText('$0.01');
+  await expect(
+    receiptGrid
+      .locator('div')
+      .filter({ has: page.getByText('Demo sponsorship credit', { exact: true }) }),
+  ).toContainText('$0.00');
+  await expect(
+    receiptGrid
+      .locator('div')
+      .filter({ has: page.getByText('Accepted compute bid', { exact: true }) }),
+  ).toContainText('1¢operator-sponsored provider price');
+  await expect(receiptGrid.getByText('after demo sponsorship', { exact: true })).toHaveCount(0);
+  expect(f.writes).toEqual([]);
+});
+
 test('ready demo opens the existing owned terminal and keeps a revealed key out of browser storage', async ({
   page,
 }) => {

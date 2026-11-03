@@ -1,3 +1,4 @@
+import { modalComputePromotionQuote } from './compute-promotion.js';
 import { CLOUD_PROVIDERS, isCloudProvider } from '../../shared/providers.js';
 import { assertManagedCustomerRoute } from './matching.js';
 import { diskCatalogEligible, requireDisk } from '../disks/service.js';
@@ -355,19 +356,29 @@ function quoteCandidate(
   if (ctx.wick.mode === 'real') {
     if (!offering.pricing) throw new HttpError(409, 'A current managed-rate offering is required.');
     requireCurrentRate(offering.pricing, item);
-    const target = fixedQuote(commissionPricing(offering.pricing), duration);
-    price = target.totalPriceCents;
-    pricing = acceptedBidQuote(
-      offering.pricing,
-      duration,
-      Math.max(price, p.policy.minimumPriceCents),
-    );
+    const promotion = modalComputePromotionQuote(ctx, p, item, offering.pricing, duration);
+    if (
+      promotion &&
+      p.policy.minimumPriceCents <= 1 &&
+      (p.policy.maxPriceCents === undefined || p.policy.maxPriceCents >= 1)
+    ) {
+      price = 1;
+      pricing = promotion;
+    } else {
+      const target = fixedQuote(commissionPricing(offering.pricing), duration);
+      price = target.totalPriceCents;
+      pricing = acceptedBidQuote(
+        offering.pricing,
+        duration,
+        Math.max(price, p.policy.minimumPriceCents),
+      );
+    }
   }
   price = Math.max(
     MIN_ORDER_PRICE_CENTS,
     price,
     p.policy.minimumPriceCents,
-    pricing?.upstreamCostFloorCents ?? 0,
+    pricing?.promotion ? 0 : (pricing?.upstreamCostFloorCents ?? 0),
   );
   if (
     !isMoneyCents(price) ||
@@ -784,7 +795,13 @@ export async function acceptCounteroffer(
       throw new HttpError(409, 'The alternative exceeds your reviewed flexibility or budget.');
     let quote;
     try {
-      quote = quoteCandidate(ctx, p, offering, catalog.item, snap.after.durationMinutes);
+      quote = quoteCandidate(
+        ctx,
+        p,
+        offering,
+        { ...catalog.item, approved: catalog.approved },
+        snap.after.durationMinutes,
+      );
     } catch {
       throw new HttpError(409, 'The managed rate is stale or changed. Review a new alternative.');
     }
@@ -838,7 +855,13 @@ export async function acceptCounteroffer(
       );
     // Time-based rate validity must also survive waits for provider/global locks.
     try {
-      quoteCandidate(ctx, p, offering, catalog.item, snap.after.durationMinutes);
+      quoteCandidate(
+        ctx,
+        p,
+        offering,
+        { ...catalog.item, approved: catalog.approved },
+        snap.after.durationMinutes,
+      );
     } catch {
       throw new HttpError(409, 'The managed rate became stale. Review a new alternative.');
     }

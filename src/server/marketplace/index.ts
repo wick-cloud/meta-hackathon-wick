@@ -1,7 +1,9 @@
 import { assertManagedCustomerRoute } from './matching.js';
 import { CLOUD_PROVIDERS } from '../../shared/providers.js';
 import { cancelRequest } from './auction.js';
+import { modalComputePromotionQuote, compareComputeBidPriority } from './compute-promotion.js';
 import { moneyCents } from './data.js';
+import { registerComputePromotionAdmin } from './compute-promotion-admin.js';
 import { registerVmInventory } from './inventory.js';
 import { clientOperationKey, recordKeyAction, withOperation } from '../operations.js';
 import type { FastifyInstance } from 'fastify';
@@ -51,6 +53,7 @@ export { markReady, confirmCleanup } from './lifecycle.js';
 
 export async function registerMarketplace(app: FastifyInstance, ctx: AppContext) {
   registerVmInventory(app, ctx);
+  registerComputePromotionAdmin(app, ctx);
   const proposalCalls = new Map<string, { count: number; resetsAt: number }>();
   app.post('/api/requests', async (request) =>
     createRequest(ctx, await ctx.requireActor(request, ['buyer']), {
@@ -91,7 +94,11 @@ export async function registerMarketplace(app: FastifyInstance, ctx: AppContext)
         actor.id,
       ])
     ).rows[0];
-    return { request: requestView(row), bids: bids.map(bidView), vm: vm ? vmView(vm) : null };
+    return {
+      request: requestView(row),
+      bids: bids.sort(compareComputeBidPriority).map(bidView),
+      vm: vm ? vmView(vm) : null,
+    };
   });
   app.post<{ Params: { id: string } }>('/api/requests/:id/cancel', async (request) => {
     const actor = await ctx.requireActor(request, ['buyer']);
@@ -199,7 +206,7 @@ export async function registerMarketplace(app: FastifyInstance, ctx: AppContext)
     const { limit, cursor, cursorId } = pagination(request.query);
     const rows = (
       await ctx.pool.query(
-        `SELECT i.*,i.created_at::text AS cursor_created_at,v.catalog_snapshot->>'name' AS catalog_name
+        `SELECT i.*,i.created_at::text AS cursor_created_at,v.catalog_snapshot->>'name' AS catalog_name,v.quote_snapshot
          FROM broker_invoices i JOIN broker_vms v ON v.id=i.vm_id
          WHERE i.provider_id=$1 AND ($2::timestamptz IS NULL OR (i.created_at,i.id)<($2,$3::uuid))
          ORDER BY i.created_at DESC,i.id DESC LIMIT $4`,
@@ -215,6 +222,7 @@ export async function registerMarketplace(app: FastifyInstance, ctx: AppContext)
       currency: r.currency,
       status: r.status,
       label: 'No payment due',
+      ...(r.quote_snapshot?.pricing ? { pricing: r.quote_snapshot.pricing } : {}),
       legacy: !r.revenue_share,
       ...(r.revenue_share ? { revenueShare: r.revenue_share } : {}),
     }));
@@ -545,9 +553,18 @@ export async function registerMarketplace(app: FastifyInstance, ctx: AppContext)
               throw new HttpError(400, (error as Error).message);
             }
           }
-          const price = pricing
-            ? Math.max(p.policy.minimumPriceCents, fixedQuote(pricing, 30).totalPriceCents)
-            : fixturePrice!;
+          const promotion = pricing
+            ? modalComputePromotionQuote(ctx, p, { ...c.item, approved: c.approved }, pricing, 30)
+            : undefined;
+          const promoted =
+            promotion &&
+            p.policy.minimumPriceCents <= 1 &&
+            (p.policy.maxPriceCents === undefined || p.policy.maxPriceCents >= 1);
+          const price = promoted
+            ? 1
+            : pricing
+              ? Math.max(p.policy.minimumPriceCents, fixedQuote(pricing, 30).totalPriceCents)
+              : fixturePrice!;
           if (pricing && b.priceBasis === 'server-priced-candidate' && b.priceCents !== price)
             throw new HttpError(
               409,

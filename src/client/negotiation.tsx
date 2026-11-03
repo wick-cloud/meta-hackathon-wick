@@ -9,6 +9,8 @@ import {
   TableViewport,
 } from './table';
 import './negotiation.css';
+import type { FixedQuote } from '../shared/types';
+import { ComputePromotionNotice } from './compute-promotion';
 import {
   FormDisclosure,
   FormLayout,
@@ -79,6 +81,7 @@ interface Offer {
   before: Desired;
   after: Desired;
   totalPriceCents: number;
+  pricing?: FixedQuote;
   tradeoffs: string[];
   expiresAt: string;
   mode: 'fixture' | 'real';
@@ -936,6 +939,7 @@ export function AlternativeDetail({ id }: { id: string }) {
               <DetailRow label="Fixed full rental total">
                 {money(selected.totalPriceCents)} · No payment due
               </DetailRow>
+              <ComputePromotionNotice pricing={selected.pricing} />
               <DetailRow label="Added buyer fee">$0.00 · Provider pays Broker’s 15%</DetailRow>
               <DetailRow label="Offer expires">{dateTime(selected.expiresAt)}</DetailRow>
               <ul>

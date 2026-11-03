@@ -123,6 +123,7 @@ function computeReceipt(value: unknown) {
       priceCents: z.literal(1),
       grossPriceCents: cents.min(1),
       sponsorCreditCents: cents,
+      operatorSponsored: z.boolean().optional(),
       auctionEndsAt: z.string().datetime(),
       bids: z
         .array(
@@ -132,6 +133,7 @@ function computeReceipt(value: unknown) {
             priceCents: cents.min(1),
             grossPriceCents: cents.min(1),
             sponsorCreditCents: cents,
+            operatorSponsored: z.boolean().optional(),
             acceptedAt: z.string().datetime(),
           }),
         )
@@ -151,9 +153,13 @@ function computeReceipt(value: unknown) {
     modal.priceCents === 1 &&
       modal.priceCents <= e2b.priceCents &&
       e2b.sponsorCreditCents === 0 &&
+      e2b.operatorSponsored !== true &&
       e2b.priceCents === e2b.grossPriceCents &&
       receipt.grossPriceCents === modal.grossPriceCents &&
       receipt.sponsorCreditCents === modal.sponsorCreditCents &&
+      Boolean(receipt.operatorSponsored) === Boolean(modal.operatorSponsored) &&
+      (!modal.operatorSponsored ||
+        (modal.grossPriceCents === 1 && modal.sponsorCreditCents === 0)) &&
       moneyUnits(modal.priceCents) + moneyUnits(modal.sponsorCreditCents) ===
         moneyUnits(modal.grossPriceCents),
     'compute_sponsorship_changed_gross_or_rival',
@@ -255,6 +261,17 @@ class LiveTerminal {
       'python_result_timeout_no_retry',
     );
     return scriptReceipt(this.output, marker);
+  }
+  async assertInteractive() {
+    await this.wait(() => this.ready, 20000, 'terminal_ready_timeout');
+    this.output = '';
+    const marker = `WICK_DEMO_INTERACTIVE_${randomUUID().replaceAll('-', '')}`;
+    this.socket.send(JSON.stringify({ type: 'input', data: `printf '\\n${marker}\\n'\r` }));
+    await this.wait(
+      () => plainTerminal(this.output).split('\n').includes(marker),
+      10000,
+      'terminal_not_interactive_after_token_cap',
+    );
   }
   async assertRevoked() {
     if (!this.closed) await this.wait(() => this.closed, 10000, 'terminal_revocation_timeout');
@@ -482,6 +499,7 @@ async function verify(origin: string) {
       vmPriceCents: run.vm.priceCents,
       vmGrossPriceCents: compute.grossPriceCents,
       vmSponsorCreditCents: compute.sponsorCreditCents,
+      operatorSponsored: compute.operatorSponsored === true,
     });
     log('compute_auction_verified', {
       bids: compute.bids,
@@ -560,6 +578,20 @@ async function verify(origin: string) {
       'token_usage_did_not_match_pack',
     );
     log('token_cap_verified', { requestsUsed: 2, rejectedStatus: 429 });
+    const afterQuota = (await state()).run;
+    check(
+      afterQuota?.status === 'ready' &&
+        afterQuota.vm?.id === run.vm.id &&
+        afterQuota.vm.terminalPath === run.vm.terminalPath &&
+        afterQuota.expiresAt === run.expiresAt,
+      'token_exhaustion_changed_terminal_lease',
+    );
+    await terminal.assertInteractive();
+    terminal.dispose();
+    await terminal.assertRevoked();
+    terminal = new LiveTerminal(wsUrl, origin, cookie);
+    await terminal.assertInteractive();
+    log('terminal_after_token_cap', { interactive: true, reconnected: true, leaseUnchanged: true });
     mainPassed = true;
   } catch (error) {
     failure = error;
@@ -706,10 +738,25 @@ function selfTest() {
     ],
   };
   assert.equal(computeReceipt(compute).bids[0].provider, 'e2b');
+  const promotion = {
+    ...compute,
+    grossPriceCents: 1,
+    sponsorCreditCents: 0,
+    operatorSponsored: true,
+    bids: compute.bids.map((bid) =>
+      bid.provider === 'modal'
+        ? { ...bid, grossPriceCents: 1, sponsorCreditCents: 0, operatorSponsored: true }
+        : bid,
+    ),
+  };
+  assert.equal(computeReceipt(promotion).operatorSponsored, true);
   for (const invalid of [
     { ...compute, bids: compute.bids.slice(0, 1) },
     { ...compute, grossPriceCents: 1 },
     { ...compute, sponsorCreditCents: 7 },
+    { ...compute, operatorSponsored: true },
+    { ...promotion, grossPriceCents: 8, sponsorCreditCents: 7 },
+    { ...promotion, operatorSponsored: false },
     { ...compute, auctionEndsAt: '2026-11-03T06:00:02.000Z' },
     { ...compute, bids: compute.bids.map((bid) => ({ ...bid, provider: 'modal' })) },
     {

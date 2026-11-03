@@ -19,6 +19,7 @@ import { randomUUID } from 'node:crypto';
 import { clientOperationKey, enforceKeyLimit, withOperation } from '../operations.js';
 import type { Pool, PoolClient } from 'pg';
 import { automaticBidPrices, availableForBids } from './policy.js';
+import { compareComputeBidPriority, modalComputePromotionQuote } from './compute-promotion.js';
 import { availableForInterval, globalAvailableForInterval } from '../agreements/calendar.js';
 import {
   acceptedBidQuote,
@@ -29,7 +30,7 @@ import {
   requireCurrentRate,
   requireFreshManagedRate,
 } from '../../shared/pricing.js';
-import type { Actor, CatalogItem } from '../../shared/types.js';
+import type { Actor, CatalogItem, FixedQuote } from '../../shared/types.js';
 import { HttpError, type AppContext } from '../context.js';
 import { transaction, enqueue, activity, QUEUES } from './db.js';
 import { assertProviderCatalog, CLOUD_PROVIDERS } from './provider-identity.js';
@@ -354,13 +355,15 @@ export async function createRequest(
          AND (p.cloud_provider IS NULL OR p.cloud_provider=c.item->>'provider')
          AND (p.policy->'allowedCatalogIds' IS NULL OR p.policy->'allowedCatalogIds'='null'::jsonb
               OR p.policy->'allowedCatalogIds' ? c.id))
-       ORDER BY (p.cloud_provider IS NOT NULL) DESC,p.id LIMIT $2`,
+       ORDER BY CASE WHEN $6 AND p.cloud_provider='modal' AND p.simulated=false THEN 0 ELSE 1 END,
+         (p.cloud_provider IS NOT NULL) DESC,p.id LIMIT $2`,
           [
             (eligibleCatalogs ?? [frozen]).map((item) => item.id),
             8,
             matchAcrossProviders,
             ctx.wick.mode,
             sponsorship?.providerIds ?? null,
+            ctx.wick.mode === 'real' && ctx.config.modalComputePromotionEnabled === true,
           ],
         );
         for (const p of providers.rows)
@@ -376,6 +379,7 @@ interface PublishedMatch {
   catalog: CatalogItem;
   frozen: CatalogItem;
   minimumPriceCents: number;
+  promotion?: FixedQuote;
 }
 
 /** At most one published offering per frozen configuration; no history-wide book load. */
@@ -428,6 +432,7 @@ async function publishedMatches(
       if (!sameCatalogAllocation(selected, catalog) || !catalogSatisfiesRequest(catalog, request))
         throw new HttpError(409, 'The reviewed configuration changed. Start a new request.');
       let minimumPriceCents = Math.max(MIN_ORDER_PRICE_CENTS, provider.policy.minimumPriceCents);
+      let promotion: FixedQuote | undefined;
       if (ctx.wick.mode === 'real') {
         assertManagedCustomerRoute(catalog);
         if ((request.catalog_snapshot.sourceMode ?? 'fixture') !== 'real' || !row.pricing)
@@ -437,13 +442,21 @@ async function publishedMatches(
           );
         requireCurrentRate(row.pricing, catalog);
         requireCurrentRate(row.pricing, selected);
-        minimumPriceCents = Math.max(
-          minimumPriceCents,
-          fixedQuote(commissionPricing(row.pricing), request.duration_minutes)
-            .upstreamCostFloorCents!,
+        promotion = modalComputePromotionQuote(
+          ctx,
+          provider,
+          catalog,
+          row.pricing,
+          request.duration_minutes,
         );
+        if (!promotion)
+          minimumPriceCents = Math.max(
+            minimumPriceCents,
+            fixedQuote(commissionPricing(row.pricing), request.duration_minutes)
+              .upstreamCostFloorCents!,
+          );
       }
-      matches.push({ offering: row, catalog, frozen: selected, minimumPriceCents });
+      matches.push({ offering: row, catalog, frozen: selected, minimumPriceCents, promotion });
     } catch (error) {
       invalid ??= error as Error;
     }
@@ -458,8 +471,14 @@ async function publishedMatches(
   }
   return matches.sort(
     (a, b) =>
-      Math.max(a.minimumPriceCents, provider.policy.basePriceCents) -
-        Math.max(b.minimumPriceCents, provider.policy.basePriceCents) ||
+      (a.promotion?.totalPriceCents ??
+        Math.max(a.minimumPriceCents, provider.policy.basePriceCents)) -
+        (b.promotion?.totalPriceCents ??
+          Math.max(b.minimumPriceCents, provider.policy.basePriceCents)) ||
+      (a.promotion && b.promotion
+        ? Number(a.promotion.upstreamEstimatedComputeMicros) -
+          Number(b.promotion.upstreamEstimatedComputeMicros)
+        : 0) ||
       a.offering.price_cents - b.offering.price_cents ||
       a.offering.id.localeCompare(b.offering.id),
   );
@@ -518,7 +537,10 @@ export async function submitBid(
         let pricing;
         if (ctx.wick.mode === 'real') {
           try {
-            pricing = acceptedBidQuote(offering.pricing, request.duration_minutes, price);
+            pricing =
+              match.promotion?.totalPriceCents === price
+                ? match.promotion
+                : acceptedBidQuote(offering.pricing, request.duration_minutes, price);
           } catch (error) {
             throw new HttpError(409, (error as Error).message);
           }
@@ -542,12 +564,15 @@ export async function submitBid(
         if (availableCapacity < 1)
           throw new HttpError(409, 'All simulated supplier slots are already reserved.');
         if (source === 'auto') {
-          const currentPrices = automaticBidPrices(
-            policy,
-            match.minimumPriceCents,
-            p.total_capacity,
-            availableCapacity,
-          );
+          const currentPrices: { basePriceCents: number; discountPriceCents?: number } =
+            match.promotion
+              ? { basePriceCents: match.promotion.totalPriceCents }
+              : automaticBidPrices(
+                  policy,
+                  match.minimumPriceCents,
+                  p.total_capacity,
+                  availableCapacity,
+                );
           if (![currentPrices.basePriceCents, currentPrices.discountPriceCents].includes(price))
             throw new HttpError(
               409,
@@ -646,7 +671,7 @@ export async function closeAuction(ctx: AppContext, requestId: string) {
         "SELECT * FROM broker_bids WHERE request_id=$1 AND status='held' ORDER BY total_price_cents,created_at,id FOR UPDATE",
         [requestId],
       )
-    ).rows;
+    ).rows.sort(compareComputeBidPriority);
     if ((request.catalog_snapshot.sourceMode ?? 'fixture') !== ctx.wick.mode) {
       await db.query(
         "UPDATE broker_requests SET status='failed',failure_reason='The Wick integration mode changed. Create a new request with the current approved catalog.' WHERE id=$1",
@@ -950,7 +975,7 @@ export async function proposeBid(ctx: AppContext, actor: Actor, requestId: strin
         constraints: ['No model call or capacity reservation.', 'No payment due.'],
       },
     };
-  if (sponsorship) {
+  if (sponsorship && !match.promotion) {
     // This disclosed demo strategy binds the supplier's existing allowed base.
     // It does not change policy or consume extra paid model calls for bid generation.
     const allowed =
@@ -994,6 +1019,35 @@ export async function proposeBid(ctx: AppContext, actor: Actor, requestId: strin
       409,
       'Too little auction time remains for a safe bid proposal. Manual bidding remains available while the auction is open.',
     );
+  if (match.promotion) {
+    const price = match.promotion.totalPriceCents;
+    const permitted =
+      availableCapacity > 0 &&
+      price >= minimumPriceCents &&
+      price <= request.max_price_cents &&
+      (provider.policy.maxPriceCents === undefined || price <= provider.policy.maxPriceCents);
+    return {
+      decision: permitted ? ('bid' as const) : ('decline' as const),
+      ...(permitted ? { totalPriceCents: price, catalogId: match.catalog.id } : {}),
+      offeringId: match.offering.id as string,
+      mode: ctx.muse.mode,
+      modelCalled: false,
+      receipt: {
+        observed: [
+          `${availableCapacity} available supplier capacity slots.`,
+          `Modal one-cent compute promotion; ${request.duration_minutes} minutes on ${match.catalog.name}.`,
+        ],
+        decision: permitted
+          ? 'Bid the fixed $0.01 buyer total. The operator Wick account funds upstream compute.'
+          : 'The fixed $0.01 promotion does not fit available capacity or supplier and buyer limits.',
+        constraints: [
+          'The published compute estimate and cost floor remain recorded separately from the buyer price.',
+          'No model call or capacity reservation. Submission rechecks eligibility, capacity and deadline.',
+          'The operator-funded promotion is capped at $1 of estimated upstream compute per rental.',
+        ],
+      },
+    };
+  }
   const proposal = await ctx.muse.proposeBid({
     timeoutMs: Math.min(8000, remainingMs),
     request: {

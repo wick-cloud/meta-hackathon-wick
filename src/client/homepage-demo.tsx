@@ -379,9 +379,12 @@ function AuctionCard({ type, demo }: { type: 'compute' | 'tokens'; demo: Homepag
             </span>
             <span className="demo-bid-price">
               <strong>{compute && bid.priceCents === 1 ? '1¢' : money(bid.priceCents)}</strong>
-              {compute && (bid.sponsorCreditCents ?? 0) > 0 && (
-                <small>after demo sponsorship</small>
-              )}
+              {compute &&
+                ((bid.sponsorCreditCents ?? 0) > 0 ? (
+                  <small>after demo sponsorship</small>
+                ) : bid.operatorSponsored && (bid.sponsorCreditCents ?? 0) === 0 ? (
+                  <small>provider promotion</small>
+                ) : null)}
             </span>
             <span className="demo-bid-status">
               {index === winner
@@ -801,9 +804,11 @@ export function HomepageDemoSession({ demo }: { demo: HomepageDemo }) {
                 {run.vm?.id && run.vm.priceCents != null ? (
                   <>
                     {run.vm.priceCents === 1 ? '1¢' : money(run.vm.priceCents)}
-                    {(run.vm.sponsorCreditCents ?? 0) > 0 && (
+                    {(run.vm.sponsorCreditCents ?? 0) > 0 ? (
                       <small className="demo-receipt-note">after demo sponsorship</small>
-                    )}
+                    ) : run.vm.operatorSponsored && (run.vm.sponsorCreditCents ?? 0) === 0 ? (
+                      <small className="demo-receipt-note">operator-sponsored provider price</small>
+                    ) : null}
                   </>
                 ) : (
                   'Pending'
