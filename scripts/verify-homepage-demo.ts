@@ -5,6 +5,7 @@ import { setTimeout as pause } from 'node:timers/promises';
 import WebSocket from 'ws';
 import { z } from 'zod';
 import type { DemoState } from '../src/shared/demo.js';
+import { isMoneyCents, moneyUnits } from '../src/shared/money.js';
 
 /**
  * APP_URL=https://your-app.example npx tsx scripts/verify-homepage-demo.ts --live
@@ -110,6 +111,58 @@ function scriptReceipt(output: string, marker: string): { usage: Usage; answerCh
     usage: parse(usageSchema, rawUsage, 'python_usage_invalid'),
     answerCharacters: match[1].trim().length,
   };
+}
+
+/** Public guest receipts expose the immutable VM gross quote, never invoice-list authority. */
+function computeReceipt(value: unknown) {
+  const cents = z.number().min(0).max(25).refine(isMoneyCents);
+  const receipt = parse(
+    z.object({
+      provider: z.literal('modal'),
+      catalogId: z.literal('modal:micro:auto'),
+      priceCents: z.literal(1),
+      grossPriceCents: cents.min(1),
+      sponsorCreditCents: cents,
+      auctionEndsAt: z.string().datetime(),
+      bids: z
+        .array(
+          z.object({
+            provider: z.enum(['modal', 'e2b']),
+            catalogId: z.enum(['modal:micro:auto', 'e2b:micro:us']),
+            priceCents: cents.min(1),
+            grossPriceCents: cents.min(1),
+            sponsorCreditCents: cents,
+            acceptedAt: z.string().datetime(),
+          }),
+        )
+        .length(2),
+    }),
+    value,
+    'compute_competition_receipt_invalid',
+  );
+  const modal = receipt.bids.find((bid) => bid.provider === 'modal');
+  const e2b = receipt.bids.find((bid) => bid.provider === 'e2b');
+  check(modal && e2b, 'compute_requires_two_actual_providers');
+  check(
+    modal.catalogId === 'modal:micro:auto' && e2b.catalogId === 'e2b:micro:us',
+    'compute_bid_provider_catalog_mismatch',
+  );
+  check(
+    modal.priceCents === 1 &&
+      modal.priceCents <= e2b.priceCents &&
+      e2b.sponsorCreditCents === 0 &&
+      e2b.priceCents === e2b.grossPriceCents &&
+      receipt.grossPriceCents === modal.grossPriceCents &&
+      receipt.sponsorCreditCents === modal.sponsorCreditCents &&
+      moneyUnits(modal.priceCents) + moneyUnits(modal.sponsorCreditCents) ===
+        moneyUnits(modal.grossPriceCents),
+    'compute_sponsorship_changed_gross_or_rival',
+  );
+  check(
+    receipt.bids.every((bid) => Date.parse(bid.acceptedAt) < Date.parse(receipt.auctionEndsAt)),
+    'compute_bid_accepted_after_deadline',
+  );
+  return { ...receipt, bids: [e2b, modal] };
 }
 
 class LiveTerminal {
@@ -229,6 +282,7 @@ async function verify(origin: string) {
   let interrupted = false;
   let cleanupConfirmed = false;
   let mainPassed = false;
+  let compute: ReturnType<typeof computeReceipt> | undefined;
   let terminal: LiveTerminal | undefined;
   let failure: unknown;
   const onInterrupt = () => {
@@ -421,10 +475,18 @@ async function verify(origin: string) {
       { vmId: run.vm.id, diskId: run.disk.id, packId: run.tokens.packId },
       'demo_resource_ids_invalid',
     );
+    compute = computeReceipt(run.vm);
     log('ready', {
       ...ownedIds,
       tokenPriceCents: run.tokens.priceCents,
       vmPriceCents: run.vm.priceCents,
+      vmGrossPriceCents: compute.grossPriceCents,
+      vmSponsorCreditCents: compute.sponsorCreditCents,
+    });
+    log('compute_auction_verified', {
+      bids: compute.bids,
+      grossReceiptSource: 'immutable_vm_quote',
+      invoiceLedgerVerified: false,
     });
     active();
     const issued = await request('/api/demo/key', { operationKey: randomUUID() });
@@ -508,6 +570,11 @@ async function verify(origin: string) {
         cleanupConfirmed = true;
         log('cleanup_confirmed');
         if (mainPassed && !interrupted) {
+          check(
+            JSON.stringify(computeReceipt(ended.run?.vm)) === JSON.stringify(compute),
+            'compute_quote_changed_during_cleanup',
+          );
+          log('compute_quote_preserved_after_cleanup');
           await terminal!.assertRevoked();
           const cooldownSeconds = Math.round(
             (Date.parse(ended.cooldownUntil!) - Date.parse(ended.serverTime)) / 1000,
@@ -612,6 +679,47 @@ function selfTest() {
       ),
     CheckFailure,
   );
+  const compute = {
+    provider: 'modal',
+    catalogId: 'modal:micro:auto',
+    priceCents: 1,
+    grossPriceCents: 7.2,
+    sponsorCreditCents: 6.2,
+    auctionEndsAt: '2026-11-03T06:00:30.000Z',
+    bids: [
+      {
+        provider: 'modal',
+        catalogId: 'modal:micro:auto',
+        priceCents: 1,
+        grossPriceCents: 7.2,
+        sponsorCreditCents: 6.2,
+        acceptedAt: '2026-11-03T06:00:03.000Z',
+      },
+      {
+        provider: 'e2b',
+        catalogId: 'e2b:micro:us',
+        priceCents: 4.5,
+        grossPriceCents: 4.5,
+        sponsorCreditCents: 0,
+        acceptedAt: '2026-11-03T06:00:02.000Z',
+      },
+    ],
+  };
+  assert.equal(computeReceipt(compute).bids[0].provider, 'e2b');
+  for (const invalid of [
+    { ...compute, bids: compute.bids.slice(0, 1) },
+    { ...compute, grossPriceCents: 1 },
+    { ...compute, sponsorCreditCents: 7 },
+    { ...compute, auctionEndsAt: '2026-11-03T06:00:02.000Z' },
+    { ...compute, bids: compute.bids.map((bid) => ({ ...bid, provider: 'modal' })) },
+    {
+      ...compute,
+      bids: compute.bids.map((bid) =>
+        bid.provider === 'e2b' ? { ...bid, priceCents: 1, sponsorCreditCents: 3.5 } : bid,
+      ),
+    },
+  ])
+    assert.throws(() => computeReceipt(invalid), CheckFailure);
   console.log(
     JSON.stringify({ event: 'self_test', passed: true, networkRequests: 0, paidCalls: 0 }),
   );

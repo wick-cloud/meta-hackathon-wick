@@ -43,6 +43,13 @@ const modalCatalog: CatalogItem = {
   organizationId: 'demo-organization',
   groupId: 'demo-group',
 };
+const e2bCatalog: CatalogItem = {
+  ...modalCatalog,
+  id: 'e2b:micro:us',
+  name: 'E2B Micro',
+  provider: 'e2b',
+  region: 'us',
+};
 
 describe.skipIf(!databaseUrl)(
   'homepage guest admission and lifecycle (disposable PostgreSQL)',
@@ -163,7 +170,7 @@ describe.skipIf(!databaseUrl)(
               basePriceCents: 8,
               minimumPriceCents: 1,
               maxPriceCents: 100,
-              allowedCatalogIds: [modalCatalog.id],
+              allowedCatalogIds: [i === 1 ? modalCatalog.id : e2bCatalog.id],
             },
             i === 1 ? 'modal' : 'e2b',
           ],
@@ -174,8 +181,16 @@ describe.skipIf(!databaseUrl)(
         [modalCatalog.id, modalCatalog],
       );
       await pool.query(
+        "INSERT INTO broker_catalog(id,item,approved,source_mode) VALUES($1,$2,true,'fixture')",
+        [e2bCatalog.id, e2bCatalog],
+      );
+      await pool.query(
         "INSERT INTO broker_offerings(provider_id,catalog_id,name,description,price_cents) VALUES($1,$2,'Modal Micro','Fixture demo supply',8)",
         [sellers[1]!.providerId, modalCatalog.id],
+      );
+      await pool.query(
+        "INSERT INTO broker_offerings(provider_id,catalog_id,name,description,price_cents) VALUES($1,$2,'E2B Micro','Fixture demo supply',5)",
+        [sellers[0]!.providerId, e2bCatalog.id],
       );
       await initializeInference(ctx);
     });
@@ -263,6 +278,7 @@ describe.skipIf(!databaseUrl)(
     }
     async function readyRun(client: Awaited<ReturnType<typeof visitor>>, bootstrap = true) {
       const current = await reachVmAuction(client);
+      await submitBid(ctx, sellers[0]!, current.request_id, { totalPriceCents: 5 });
       await submitBid(ctx, sellers[1]!, current.request_id, { totalPriceCents: 8 });
       await closeAuction(ctx, current.request_id);
       expect(
@@ -280,8 +296,8 @@ describe.skipIf(!databaseUrl)(
         ).rows[0];
         const bid = (
           await db.query(
-            "SELECT * FROM broker_bids WHERE request_id=$1 AND status='held' FOR UPDATE",
-            [current.request_id],
+            "SELECT * FROM broker_bids WHERE request_id=$1 AND provider_id=$2 AND status='held' FOR UPDATE",
+            [current.request_id, sellers[1]!.providerId],
           )
         ).rows[0];
         await awardHeldBid(ctx, db, request, bid);
@@ -607,7 +623,7 @@ describe.skipIf(!databaseUrl)(
       expect(request).toMatchObject({
         catalog_id: modalCatalog.id,
         duration_minutes: 15,
-        region: 'auto',
+        region: 'any',
         disk_id: current.disk_id,
       });
       expect(request.catalog_snapshot).toMatchObject({ provider: 'modal', profile: 'micro' });
@@ -621,6 +637,27 @@ describe.skipIf(!databaseUrl)(
       const view = await read(guest);
       expect(view.run!.tokens!.provider).toBe('baseten');
       expect(view.run!.vm!.provider).toBe('modal');
+      expect(view.run!.vm).toMatchObject({
+        priceCents: 1,
+        grossPriceCents: 8,
+        sponsorCreditCents: 7,
+      });
+      expect(view.run!.vm!.bids).toEqual([
+        expect.objectContaining({
+          provider: 'e2b',
+          catalogId: e2bCatalog.id,
+          priceCents: 5,
+          grossPriceCents: 5,
+          sponsorCreditCents: 0,
+        }),
+        expect.objectContaining({
+          provider: 'modal',
+          catalogId: modalCatalog.id,
+          priceCents: 1,
+          grossPriceCents: 8,
+          sponsorCreditCents: 7,
+        }),
+      ]);
       expect(view.run!.vm!.terminalPath).toBe(`/api/vms/${current.vm_id}/terminal`);
       expect(view.run!.canIssueKey).toBe(true);
       expect(JSON.stringify(view)).not.toContain('fixture_');

@@ -207,23 +207,30 @@ async function advance(ctx: AppContext, run: Row) {
       await fail(ctx, run, 'The fixed Modal Micro configuration is no longer available.');
       return;
     }
-    const request = await createRequest(ctx, actor, {
-      operationKey: `demo:${run.id}:vm`,
-      description: `Homepage demo ${run.id}`,
-      catalogId: DEMO_CATALOG_ID,
-      region: 'auto',
-      matchAcrossProviders: false,
-      durationMinutes: 15,
-      maxPriceCents: 25,
-      requirements: { cpu: catalog.cpu, memoryGb: catalog.memoryGb },
-      diskId: run.disk_id,
-    });
+    const request = await createRequest(
+      ctx,
+      actor,
+      {
+        operationKey: `demo:${run.id}:vm`,
+        description: `Homepage demo ${run.id}`,
+        catalogId: DEMO_CATALOG_ID,
+        region: 'any',
+        matchAcrossProviders: true,
+        durationMinutes: 15,
+        maxPriceCents: 25,
+        requirements: { cpu: catalog.cpu, memoryGb: catalog.memoryGb },
+        diskId: run.disk_id,
+      },
+      undefined,
+      undefined,
+      { runId: run.id, leaseToken: run.lease_token },
+    );
     await save(ctx, run, 'request_id=$3', [request.id]);
     await phase(
       ctx,
       run,
       'auction',
-      'Running the 30-second Modal Micro auction. Only this configuration is eligible.',
+      'Running the 30-second Modal and E2B Micro auction. Modal receives a disclosed sponsorship credit to one cent.',
     );
     return;
   }

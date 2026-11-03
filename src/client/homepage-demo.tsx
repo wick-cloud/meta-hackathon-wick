@@ -25,6 +25,15 @@ type DemoKey = DemoKeyResponse;
 const ongoing = (status?: string) => !!status && !['ended', 'failed'].includes(status);
 const command = 'python3 /workspace/hello_muse.py';
 const count = (n: number) => n.toLocaleString('en-US');
+const providerName = (provider: string) =>
+  ({ modal: 'Modal', e2b: 'E2B', baseten: 'Baseten' })[provider] ?? provider;
+function catalogLabel(catalogId?: string) {
+  if (!catalogId) return null;
+  const [, size, region] = catalogId.split(':');
+  return [size ? `${size[0]!.toUpperCase()}${size.slice(1)}` : null, region]
+    .filter(Boolean)
+    .join(' · ');
+}
 function clock(until: string | null | undefined, now: number) {
   const seconds = Math.max(0, Math.ceil(((until ? Date.parse(until) : now) - now) / 1000));
   return `${Math.floor(seconds / 60)
@@ -232,6 +241,7 @@ export function DemoOverview({ demo }: { demo: HomepageDemo }) {
           <div>
             <strong>Private Linux VM</strong>
             <span>Modal Micro · {data?.limits.durationMinutes ?? 15} minutes including setup</span>
+            <span>1¢ after demo sponsorship · $0 to you</span>
           </div>
           <span className="demo-included-mark">01</span>
         </div>
@@ -294,10 +304,25 @@ export function DemoOverview({ demo }: { demo: HomepageDemo }) {
 function AuctionCard({ type, demo }: { type: 'compute' | 'tokens'; demo: HomepageDemo }) {
   const resource = type === 'compute' ? demo.data?.run?.vm : demo.data?.run?.tokens;
   const compute = type === 'compute';
-  const won = resource?.priceCents != null;
+  const won =
+    resource?.priceCents != null &&
+    !!(compute ? demo.data?.run?.vm?.id : demo.data?.run?.tokens?.packId);
   const deadline = resource?.auctionEndsAt;
   const open = deadline && Date.parse(deadline) > demo.now && !won;
-  const bids = resource?.bids ?? [];
+  const bids = [...(resource?.bids ?? [])].sort(
+    (a, b) =>
+      a.priceCents - b.priceCents ||
+      (compute ? Number(b.provider === 'modal') - Number(a.provider === 'modal') : 0) ||
+      Date.parse(a.acceptedAt) - Date.parse(b.acceptedAt),
+  );
+  const winner = won
+    ? bids.findIndex(
+        (bid) =>
+          bid.provider === resource!.provider &&
+          bid.priceCents === resource!.priceCents &&
+          (!compute || !bid.catalogId || bid.catalogId === demo.data?.run?.vm?.catalogId),
+      )
+    : -1;
   return (
     <article
       className="demo-auction-card"
@@ -329,31 +354,66 @@ function AuctionCard({ type, demo }: { type: 'compute' | 'tokens'; demo: Homepag
       </div>
       <p className="demo-auction-spec">
         {compute
-          ? 'Modal Micro · 15-minute rental · private disk'
+          ? `Micro VM · ${demo.data?.limits.durationMinutes ?? 15}-minute rental · private disk`
           : '5,000 input + 2,048 output tokens · up to 2 calls'}
       </p>
       <div className="demo-bid-heading">
-        <span>Eligible provider</span>
-        <span>Bid total</span>
+        <span>Provider</span>
+        <span>{compute ? 'Demo bid' : 'Bid total'}</span>
         <span>Status</span>
       </div>
-      <div className="demo-provider-bid">
-        <span>
-          <b className="demo-provider-mark" aria-hidden="true">
-            {compute ? 'M' : 'B'}
-          </b>
-          <span>{compute ? 'Modal' : 'Baseten'}</span>
-        </span>
-        <strong>
-          {bids.length ? money(bids[0]!.priceCents) : won ? money(resource!.priceCents!) : '—'}
-        </strong>
-        <span>{won ? 'Selected' : bids.length ? 'Bid received' : 'Awaiting bid'}</span>
-      </div>
+      {bids.length ? (
+        bids.map((bid, index) => (
+          <div
+            className={`demo-provider-bid ${index === winner ? 'is-selected' : ''}`}
+            key={`${bid.provider}:${bid.catalogId ?? ''}:${bid.acceptedAt}`}
+          >
+            <span>
+              <b className="demo-provider-mark" aria-hidden="true">
+                {providerName(bid.provider).slice(0, 1)}
+              </b>
+              <span className="demo-bid-provider">
+                <span>{providerName(bid.provider)}</span>
+                {compute && bid.catalogId && <small>{catalogLabel(bid.catalogId)}</small>}
+              </span>
+            </span>
+            <span className="demo-bid-price">
+              <strong>{compute && bid.priceCents === 1 ? '1¢' : money(bid.priceCents)}</strong>
+              {compute && (bid.sponsorCreditCents ?? 0) > 0 && (
+                <small>after demo sponsorship</small>
+              )}
+            </span>
+            <span className="demo-bid-status">
+              {index === winner
+                ? 'Selected'
+                : won
+                  ? 'Not selected'
+                  : compute && index === 0
+                    ? 'Lowest bid'
+                    : 'Bid received'}
+            </span>
+            {compute && bid.grossPriceCents != null && (bid.sponsorCreditCents ?? 0) > 0 && (
+              <p className="demo-bid-sponsorship">
+                {money(bid.grossPriceCents)} provider price − {money(bid.sponsorCreditCents!)} demo
+                sponsorship
+              </p>
+            )}
+          </div>
+        ))
+      ) : (
+        <p className="demo-bids-empty">
+          {won
+            ? 'The award is confirmed. Bid details are not available.'
+            : 'Waiting for accepted provider bids.'}
+        </p>
+      )}
       <p className="demo-auction-note">
-        One eligible provider in this demo.{' '}
+        {compute
+          ? 'Actual bids, ranked by demo price. Modal has sponsored priority on equal bids. '
+          : 'One eligible token provider in this demo. '}
         {won
-          ? 'The accepted price is covered for you.'
-          : 'The auction keeps its real 30-second deadline.'}
+          ? 'The awarded price is covered for you.'
+          : 'The winner is confirmed after the 30-second auction closes.'}
       </p>
     </article>
   );
@@ -714,11 +774,41 @@ export function HomepageDemoSession({ demo }: { demo: HomepageDemo }) {
           <dl>
             <div>
               <dt>Compute provider</dt>
-              <dd>{run.vm ? 'Modal' : 'Not awarded'}</dd>
+              <dd>
+                {run.vm?.id && run.vm.priceCents != null
+                  ? providerName(run.vm.provider)
+                  : 'Not awarded'}
+              </dd>
             </div>
+            {run.vm?.id && run.vm.grossPriceCents != null && (
+              <div>
+                <dt>Provider compute price</dt>
+                <dd>{money(run.vm.grossPriceCents)}</dd>
+              </div>
+            )}
+            {run.vm?.id && run.vm.sponsorCreditCents != null && (
+              <div>
+                <dt>Demo sponsorship credit</dt>
+                <dd>
+                  {run.vm.sponsorCreditCents > 0 ? '−' : ''}
+                  {money(run.vm.sponsorCreditCents)}
+                </dd>
+              </div>
+            )}
             <div>
               <dt>Accepted compute bid</dt>
-              <dd>{run.vm?.priceCents != null ? money(run.vm.priceCents) : 'Pending'}</dd>
+              <dd>
+                {run.vm?.id && run.vm.priceCents != null ? (
+                  <>
+                    {run.vm.priceCents === 1 ? '1¢' : money(run.vm.priceCents)}
+                    {(run.vm.sponsorCreditCents ?? 0) > 0 && (
+                      <small className="demo-receipt-note">after demo sponsorship</small>
+                    )}
+                  </>
+                ) : (
+                  'Pending'
+                )}
+              </dd>
             </div>
             <div>
               <dt>VM cleanup</dt>
@@ -736,11 +826,19 @@ export function HomepageDemoSession({ demo }: { demo: HomepageDemo }) {
           <dl>
             <div>
               <dt>Model provider</dt>
-              <dd>{run.tokens ? 'Baseten' : 'Not awarded'}</dd>
+              <dd>
+                {run.tokens?.packId && run.tokens.priceCents != null
+                  ? providerName(run.tokens.provider)
+                  : 'Not awarded'}
+              </dd>
             </div>
             <div>
               <dt>Accepted token bid</dt>
-              <dd>{run.tokens?.priceCents != null ? money(run.tokens.priceCents) : 'Pending'}</dd>
+              <dd>
+                {run.tokens?.packId && run.tokens.priceCents != null
+                  ? money(run.tokens.priceCents)
+                  : 'Pending'}
+              </dd>
             </div>
             <div>
               <dt>Model calls used</dt>

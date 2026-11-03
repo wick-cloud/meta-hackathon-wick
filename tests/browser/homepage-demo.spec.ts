@@ -71,6 +71,39 @@ function state(run: DemoRun | null = null): DemoState {
     run,
   };
 }
+function sponsoredReceipt(status: 'auction' | 'provisioning' | 'ready') {
+  const run = receipt(status === 'auction' ? 'auction' : 'ready');
+  run.status = status;
+  run.vm!.bids = [
+    {
+      provider: 'e2b',
+      catalogId: 'e2b:micro:us',
+      priceCents: 5,
+      grossPriceCents: 5,
+      sponsorCreditCents: 0,
+      acceptedAt: date(-5),
+    },
+    {
+      provider: 'modal',
+      catalogId: 'modal:micro:auto',
+      priceCents: 1,
+      grossPriceCents: 7,
+      sponsorCreditCents: 6,
+      acceptedAt: date(-4),
+    },
+  ];
+  if (status !== 'auction') {
+    run.vm!.priceCents = 1;
+    run.vm!.grossPriceCents = 7;
+    run.vm!.sponsorCreditCents = 6;
+  }
+  if (status === 'provisioning') {
+    run.vm!.status = 'provisioning';
+    run.vm!.terminalPath = null;
+    run.canIssueKey = false;
+  }
+  return run;
+}
 async function fixture(page: Page, initial = state()) {
   let current = initial,
     readFailure = false,
@@ -135,7 +168,7 @@ async function fixture(page: Page, initial = state()) {
   };
 }
 
-test('homepage starts only on explicit action and shows real receipt-shaped single-provider auctions inline', async ({
+test('homepage starts only on explicit action and supports legacy single-provider receipts inline', async ({
   page,
 }) => {
   const f = await fixture(page);
@@ -151,9 +184,9 @@ test('homepage starts only on explicit action and shows real receipt-shaped sing
   await expect(
     page.getByRole('article', { name: 'Token auction' }).getByText('Baseten', { exact: true }),
   ).toBeVisible();
-  await expect(page.getByText('One eligible provider in this demo.', { exact: false })).toHaveCount(
-    2,
-  );
+  await expect(
+    page.getByText('One eligible token provider in this demo.', { exact: false }),
+  ).toHaveCount(1);
   await expect(
     page.getByRole('heading', {
       name: 'Compute and AI tokens. Providers compete for your workload.',
@@ -166,6 +199,81 @@ test('homepage starts only on explicit action and shows real receipt-shaped sing
   await expect(page.getByRole('heading', { name: 'Your resources, going once…' })).toBeVisible();
   expect(f.writes).toHaveLength(1);
   await expect(page).toHaveURL(/\/$/);
+});
+
+test('compute auction renders only accepted bids, ranks sponsorship honestly, and waits for the actual award', async ({
+  page,
+}) => {
+  const pending = sponsoredReceipt('auction');
+  pending.vm!.bids = [];
+  const f = await fixture(page, state(pending));
+  await page.goto('/');
+  const compute = page.getByRole('article', { name: 'Compute auction' });
+  const rows = compute.locator('.demo-provider-bid');
+  await expect(compute.getByText('Waiting for accepted provider bids.')).toBeVisible();
+  await expect(rows).toHaveCount(0);
+  await page.getByText('Auction receipts & resource status', { exact: true }).click();
+  const receiptGrid = page.locator('.demo-receipt-grid');
+  await expect(
+    receiptGrid.locator('div').filter({ has: page.getByText('Compute provider', { exact: true }) }),
+  ).toContainText('Not awarded');
+
+  const firstBid = sponsoredReceipt('auction');
+  firstBid.vm!.bids = firstBid.vm!.bids.filter((bid) => bid.provider === 'e2b');
+  f.set(state(firstBid));
+  await page.getByRole('button', { name: 'Refresh demo status' }).click();
+  await expect(rows).toHaveCount(1);
+  await expect(rows.first()).toContainText('E2B');
+  await expect(rows.first()).toContainText('Lowest bid');
+  await expect(compute.getByText('Modal', { exact: true })).toHaveCount(0);
+
+  f.set(state(sponsoredReceipt('auction')));
+  await page.getByRole('button', { name: 'Refresh demo status' }).click();
+  await expect(rows).toHaveCount(2);
+  await expect(rows.first()).toContainText('Modal');
+  await expect(rows.first()).toContainText('1¢');
+  await expect(rows.first()).toContainText('after demo sponsorship');
+  await expect(rows.first()).toContainText('$0.07 provider price − $0.06 demo sponsorship');
+  await expect(rows.nth(1)).toContainText('E2B');
+  await expect(rows.nth(1)).toContainText('$0.05');
+  await expect(compute.getByText('Selected', { exact: true })).toHaveCount(0);
+
+  // Equal prices retain the disclosed Modal sponsorship priority, but no winner is invented.
+  const tied = sponsoredReceipt('auction');
+  tied.vm!.bids[0]!.priceCents = 1;
+  tied.vm!.bids[0]!.grossPriceCents = 1;
+  tied.vm!.auctionEndsAt = date(-1);
+  f.set(state(tied));
+  await page.getByRole('button', { name: 'Refresh demo status' }).click();
+  await expect(rows.first()).toContainText('Modal');
+  await expect(compute.getByText('Awaiting result', { exact: true })).toBeVisible();
+  await expect(compute.getByText('Selected', { exact: true })).toHaveCount(0);
+  await expect(compute.getByText(/Modal has sponsored priority on equal bids/)).toBeVisible();
+
+  f.set(state(sponsoredReceipt('provisioning')));
+  await page.getByRole('button', { name: 'Refresh demo status' }).click();
+  await expect(compute.getByText('Awarded', { exact: true })).toBeVisible();
+  await expect(rows.first()).toContainText('Selected');
+  await expect(rows.nth(1)).toContainText('Not selected');
+  await expect(
+    receiptGrid.locator('div').filter({ has: page.getByText('Compute provider', { exact: true }) }),
+  ).toContainText('Modal');
+  await expect(
+    receiptGrid
+      .locator('div')
+      .filter({ has: page.getByText('Provider compute price', { exact: true }) }),
+  ).toContainText('$0.07');
+  await expect(
+    receiptGrid
+      .locator('div')
+      .filter({ has: page.getByText('Demo sponsorship credit', { exact: true }) }),
+  ).toContainText('−$0.06');
+  await expect(
+    receiptGrid
+      .locator('div')
+      .filter({ has: page.getByText('Accepted compute bid', { exact: true }) }),
+  ).toContainText('1¢after demo sponsorship');
+  expect(f.writes).toEqual([]);
 });
 
 test('ready demo opens the existing owned terminal and keeps a revealed key out of browser storage', async ({
@@ -363,6 +471,11 @@ for (const width of [1440, 390, 320]) {
     await page.getByRole('button', { name: 'Try live demo' }).focus();
     await page.keyboard.press('Enter');
     await expect(page.getByRole('heading', { name: 'Your resources, going once…' })).toBeVisible();
+    f.set(state(sponsoredReceipt('auction')));
+    await page.getByRole('button', { name: 'Refresh demo status' }).click();
+    await expect(
+      page.getByRole('article', { name: 'Compute auction' }).locator('.demo-provider-bid'),
+    ).toHaveCount(2);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
       true,
     );
@@ -371,7 +484,7 @@ for (const width of [1440, 390, 320]) {
     await page
       .locator('#live-demo')
       .screenshot({ path: info.outputPath(`demo-auction-panel-${width}.png`) });
-    f.set(state(receipt('ready')));
+    f.set(state(sponsoredReceipt('ready')));
     await page.getByRole('button', { name: 'Refresh demo status' }).click();
     await expect(
       page.getByRole('heading', { name: 'Your live workspace is ready.' }),
@@ -381,6 +494,12 @@ for (const width of [1440, 390, 320]) {
     );
     await page.getByRole('button', { name: 'Copy command', exact: true }).focus();
     await expect(page.getByRole('button', { name: 'Copy command', exact: true })).toBeFocused();
+    await expect(page.getByRole('button', { name: 'Connect terminal', exact: true })).toBeVisible();
+    await page.getByText('Auction receipts & resource status', { exact: true }).click();
+    await expect(page.getByText('Demo sponsorship credit', { exact: true })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+      true,
+    );
     await page.evaluate(() => window.scrollTo(0, 0));
     await page.screenshot({ path: info.outputPath(`demo-terminal-${width}.png`), fullPage: true });
     await page
