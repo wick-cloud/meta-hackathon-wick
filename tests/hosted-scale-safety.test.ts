@@ -2,7 +2,10 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { PROVIDER_CANARIES } from '../scripts/live-scale/provider-canary.js';
+import {
+  PROVIDER_CANARIES,
+  PROVIDER_SIZE_CANARIES,
+} from '../scripts/live-scale/provider-canary.js';
 import { revenueShare } from '../src/shared/pricing.js';
 
 const state = vi.hoisted(() => ({
@@ -226,28 +229,48 @@ describe('hosted live-run safety with inert settings and zero external calls', (
   }
   function qualificationFixture(
     failedProvider?: string,
-    faults: { lostBidReply?: string; restoreFailure?: string } = {},
+    faults: {
+      lostBidReply?: string;
+      restoreFailure?: string;
+      size?: 'medium' | 'large';
+      retry?: boolean;
+    } = {},
   ) {
     const at = new Date(state.now).toISOString();
-    const selected = Object.entries(PROVIDER_CANARIES).map(([provider, resources], i) => ({
-      ...resources,
-      provider,
-      name: provider,
-      region: 'auto',
-      capacity: 1,
-      catalogId: `${provider}:${resources.profile}:auto`,
-      offeringId: randomUUID(),
-      providerId: randomUUID(),
-      cookie: `fixture-${provider}`,
-      rateMicrosPerSecond: [12, 19, 38, 5][i],
-      basePriceCents: [3.6, 6, 10.8, 2.4][i],
-    }));
-    const input = { ...settings, mode: 'provider-canary', target: 4, providers: selected };
+    const size = faults.retry ? 'large' : faults.size;
+    const selected = Object.entries(size ? PROVIDER_SIZE_CANARIES[size] : PROVIDER_CANARIES)
+      .map(([provider, resources], i) => ({
+        ...resources,
+        provider,
+        name: provider,
+        region: 'auto',
+        capacity: 1,
+        catalogId: `${provider}:${resources.profile}:auto`,
+        offeringId: randomUUID(),
+        providerId: randomUUID(),
+        cookie: `fixture-${provider}`,
+        rateMicrosPerSecond:
+          size === 'medium' ? [44, 10][i] : size === 'large' ? [85, 20][i] : [12, 19, 38, 5][i],
+        basePriceCents:
+          size === 'medium' ? [5, 2.4][i] : size === 'large' ? [9, 3][i] : [3.6, 6, 10.8, 2.4][i],
+        configuredBasePriceCents: size ? [3.6, 2.4][i] : [3.6, 6, 10.8, 2.4][i],
+      }))
+      .filter((p) => !faults.retry || p.provider === 'boat');
+    const input = {
+      ...settings,
+      mode: faults.retry
+        ? 'provider-size-retry-canary'
+        : size
+          ? 'provider-size-canary'
+          : 'provider-canary',
+      target: selected.length,
+      providers: selected,
+    };
     writeFileSync(settingsPath, JSON.stringify(input), { mode: 0o600 });
     records[0] = {
       ...records[0],
       mode: input.mode,
-      target: 4,
+      target: input.target,
       fingerprint: createHash('sha256')
         .update(
           JSON.stringify({
@@ -261,7 +284,7 @@ describe('hosted live-run safety with inert settings and zero external calls', (
               p.rateMicrosPerSecond,
             ]),
             mode: input.mode,
-            target: 4,
+            target: input.target,
             quoteCeilingCents: 20,
             terminalHoldMs: 130000,
             canaries: selected.map((p) => [
@@ -394,7 +417,7 @@ describe('hosted live-run safety with inert settings and zero external calls', (
           capacity: { total: 1, held, available: 1 - held },
           policy: {
             autoBid: false,
-            basePriceCents: p!.basePriceCents,
+            basePriceCents: p!.configuredBasePriceCents,
             minimumPriceCents: 1,
             maxPriceCents: 20,
           },
@@ -480,6 +503,56 @@ describe('hosted live-run safety with inert settings and zero external calls', (
     vi.stubGlobal('fetch', fetcher);
     return { requests, manualBids, approved, active, unrelatedVm, selected };
   }
+  it('runs one Boat Large retry at its effective base with strict proofs and full cleanup', async () => {
+    const fixture = qualificationFixture(undefined, { retry: true });
+    const result = await invoke('run');
+    expect(result).toMatchObject({
+      validationPassed: true,
+      attemptedRequests: 1,
+      mode: 'provider-size-retry-canary',
+      providerResults: { boat: { nativeRunning: true, terminalPassed: true, invoicePassed: true } },
+      cleanup: { confirmed: true, listingsRestored: true, nativeConfirmed: 1 },
+    });
+    expect(result.terminalHoldMs).toBeGreaterThanOrEqual(130000);
+    expect(fixture.requests).toHaveLength(1);
+    expect(fixture.manualBids).toHaveLength(1);
+    expect(fixture.requests[0].body).toMatchObject({
+      catalogId: 'boat:large:auto',
+      durationMinutes: 15,
+      maxPriceCents: 3,
+    });
+    expect(fixture.manualBids[0].totalPriceCents).toBe(3);
+    expect(fixture.selected[0].configuredBasePriceCents).toBe(2.4);
+    expect(fixture.approved.size).toBe(0);
+    expect(fixture.active.size).toBe(0);
+    expect(fixture.unrelatedVm.status).toBe('running');
+    expect(state.create).not.toHaveBeenCalled();
+    expect(state.list).not.toHaveBeenCalled();
+  });
+  it.each(['medium', 'large'] as const)(
+    'qualifies only two exact %s routes at effective bases while preserving saved account prices',
+    async (size) => {
+      const fixture = qualificationFixture(undefined, { size });
+      const result = await invoke('run');
+      expect(result).toMatchObject({
+        validationPassed: true,
+        attemptedRequests: 2,
+        mode: 'provider-size-canary',
+        cleanup: { confirmed: true, listingsRestored: true, nativeConfirmed: 2 },
+      });
+      expect(result.terminalHoldMs).toBeGreaterThanOrEqual(130000);
+      expect(fixture.requests).toHaveLength(2);
+      expect(fixture.manualBids.map((b) => b.totalPriceCents).sort((a, b) => a - b)).toEqual(
+        size === 'medium' ? [2.4, 5] : [3, 9],
+      );
+      expect(fixture.selected.map((p) => p.configuredBasePriceCents)).toEqual([3.6, 2.4]);
+      expect(fixture.approved.size).toBe(0);
+      expect(fixture.active.size).toBe(0);
+      expect(fixture.unrelatedVm.status).toBe('running');
+      expect(state.create).not.toHaveBeenCalled();
+      expect(state.list).not.toHaveBeenCalled();
+    },
+  );
   it('reconciles a lost successful manual bid without an offeringId field or replay', async () => {
     const fixture = qualificationFixture(undefined, { lostBidReply: 'provider-freestyle' });
     const result = await invoke('run');

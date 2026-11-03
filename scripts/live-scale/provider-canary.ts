@@ -7,6 +7,17 @@ export const PROVIDER_CANARIES = {
   'provider-freestyle': { profile: 'small', cpu: 2, memoryGb: 4, diskGb: 16 },
   boat: { profile: 'small', cpu: 2, memoryGb: 3814 / 1024, diskGb: 8 },
 } as const;
+export const PROVIDER_SIZE_CANARIES = {
+  medium: {
+    sail: { profile: 'medium', cpu: 4, memoryGb: 8, diskGb: 32 },
+    boat: { profile: 'medium', cpu: 4, memoryGb: 7629 / 1024, diskGb: 32 },
+  },
+  large: {
+    sail: { profile: 'large', cpu: 8, memoryGb: 16, diskGb: 64 },
+    boat: { profile: 'large', cpu: 8, memoryGb: 15258 / 1024, diskGb: 116.4150390625 },
+  },
+} as const;
+export type CanaryMode = 'provider-canary' | 'provider-size-canary' | 'provider-size-retry-canary';
 export const CANARY_QUOTE_CEILING_CENTS = 20;
 export const CANARY_HOLD_MS = 130_000;
 
@@ -22,15 +33,32 @@ export interface CanaryRoute {
   capacity: number;
 }
 
-export function validateCanaryRoutes(target: number, providers: CanaryRoute[]) {
-  assert.equal(target, 4, 'Canary qualification permits exactly four request attempts.');
+export function validateCanaryRoutes(
+  target: number,
+  providers: CanaryRoute[],
+  mode: CanaryMode = 'provider-canary',
+) {
+  assert(
+    ['provider-canary', 'provider-size-canary', 'provider-size-retry-canary'].includes(mode),
+    'CANARY_MODE',
+  );
+  const sizeMode = mode === 'provider-size-canary';
+  const retryMode = mode === 'provider-size-retry-canary';
+  assert.equal(target, retryMode ? 1 : sizeMode ? 2 : 4, 'CANARY_REQUEST_LIMIT');
+  const profile = providers[0]?.profile;
+  if (sizeMode) assert(profile === 'medium' || profile === 'large', 'CANARY_SIZE_WAVE');
+  const routes = retryMode
+    ? { boat: PROVIDER_SIZE_CANARIES.large.boat }
+    : sizeMode
+      ? PROVIDER_SIZE_CANARIES[profile as keyof typeof PROVIDER_SIZE_CANARIES]
+      : PROVIDER_CANARIES;
   assert.deepEqual(
     providers.map((p) => p.provider).sort(),
-    Object.keys(PROVIDER_CANARIES).sort(),
-    'Canary qualification requires the four exact reviewed providers.',
+    Object.keys(routes).sort(),
+    'CANARY_REVIEWED_PROVIDERS',
   );
   for (const p of providers) {
-    const expected = PROVIDER_CANARIES[p.provider as keyof typeof PROVIDER_CANARIES];
+    const expected = routes[p.provider as keyof typeof routes];
     assert.equal(p.profile, expected.profile, 'CANARY_PROFILE');
     assert.equal(p.region, 'auto', 'CANARY_REGION');
     assert.equal(p.catalogId, `${p.provider}:${expected.profile}:auto`, 'CANARY_CATALOG');
@@ -54,4 +82,20 @@ export function validateCanaryBase(base: number, minimum: number, costFloor: num
     'CANARY_BASE_PRICE',
   );
   return base;
+}
+
+/** Size qualification follows production's effective base without rewriting saved account policy. */
+export function canaryQuote(
+  mode: CanaryMode,
+  configuredBase: number,
+  minimum: number,
+  costFloor: number,
+  max?: number,
+) {
+  return validateCanaryBase(
+    mode === 'provider-canary' ? configuredBase : Math.max(configuredBase, minimum, costFloor),
+    minimum,
+    costFloor,
+    max,
+  );
 }

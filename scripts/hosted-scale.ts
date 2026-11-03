@@ -24,8 +24,9 @@ import { fixedQuote, managedPricing, revenueShare } from '../src/shared/pricing.
 import {
   CANARY_HOLD_MS,
   CANARY_QUOTE_CEILING_CENTS,
-  validateCanaryBase,
+  canaryQuote,
   validateCanaryRoutes,
+  type CanaryMode,
 } from './live-scale/provider-canary.js';
 
 type Json = Record<string, any>;
@@ -52,7 +53,7 @@ interface Settings {
   buyerCookie: string;
   adminCookie: string;
   target: number;
-  mode?: 'provider-canary';
+  mode?: CanaryMode;
   providers: Provider[];
   wick: { baseUrl: string; token: string; organizationId: string; groupId: string };
 }
@@ -65,7 +66,7 @@ interface Header {
   fingerprint: string;
   at: string;
   terminalPolicy?: 'strict' | 'collect-blaxel-timeouts' | 'compute-with-blaxel-diagnostics';
-  mode?: 'provider-canary';
+  mode?: CanaryMode;
 }
 const IDS = ['e2b', 'daytona', 'modal', 'provider-blaxel'];
 const command = process.argv[2];
@@ -92,7 +93,10 @@ const settingsPath = flag('settings'),
   journalPath = flag('journal');
 assert((statSync(settingsPath).mode & 0o077) === 0, 'Settings must have private permissions.');
 const settings: Settings = JSON.parse(readFileSync(settingsPath, 'utf8'));
-const canaryMode = settings.mode === 'provider-canary';
+const canaryMode =
+  settings.mode === 'provider-canary' ||
+  settings.mode === 'provider-size-canary' ||
+  settings.mode === 'provider-size-retry-canary';
 assert(settings.mode === undefined || canaryMode, 'Unknown run mode.');
 const origin = new URL(settings.baseUrl);
 assert(
@@ -105,7 +109,7 @@ assert(
   'Use an approved credential-free HTTPS origin.',
 );
 if (canaryMode) {
-  validateCanaryRoutes(settings.target, settings.providers);
+  validateCanaryRoutes(settings.target, settings.providers, settings.mode);
   assert(
     requestedPolicy === undefined || requestedPolicy === 'strict',
     'Canaries require strict terminals.',
@@ -1127,7 +1131,15 @@ async function run(h: Header) {
       check();
       const dashboard = await api(p.cookie, '/api/provider/dashboard');
       assert(
-        dashboard.policy.autoBid === false && dashboard.policy.basePriceCents === p.basePriceCents,
+        dashboard.policy.autoBid === false &&
+          dashboard.policy.basePriceCents === baseline.configuredBasePriceCents &&
+          canaryQuote(
+            settings.mode!,
+            dashboard.policy.basePriceCents,
+            dashboard.policy.minimumPriceCents,
+            fixedQuote(managedPricing(baseline.catalog as any), 15).upstreamCostFloorCents ?? 0,
+            dashboard.policy.maxPriceCents,
+          ) === p.basePriceCents,
         'CANARY_POLICY_CHANGED',
       );
       const created = await request(item, p);
@@ -1314,7 +1326,7 @@ async function run(h: Header) {
       );
       assert(
         config.providers.reduce((n: number, p: Json) => n + p.held, 0) <=
-          config.maxConcurrentVms - 4,
+          config.maxConcurrentVms - settings.target,
         'CANARY_GLOBAL_CAPACITY',
       );
     }
@@ -1358,7 +1370,8 @@ async function run(h: Header) {
           offering?.catalogId === p.catalogId && offering.active === false,
           'CANARY_INACTIVE_OFFERING',
         );
-        const quote = validateCanaryBase(
+        const quote = canaryQuote(
+          settings.mode!,
           d.policy.basePriceCents,
           d.policy.minimumPriceCents,
           fixedQuote(managedPricing(c), 15).upstreamCostFloorCents ?? 0,
@@ -1377,6 +1390,7 @@ async function run(h: Header) {
           autoBid: false,
           policyRevision: d.policyRevision,
           basePriceCents: quote,
+          configuredBasePriceCents: d.policy.basePriceCents,
           capacity: d.capacity,
           catalog: c,
           offering,
@@ -1410,7 +1424,7 @@ async function run(h: Header) {
           .map((v) => v.id),
       });
     journal.append('preflight-passed', {
-      providers: 4,
+      providers: settings.providers.length,
       target: settings.target,
       maximumBuyerQuoteCents: budget,
     });

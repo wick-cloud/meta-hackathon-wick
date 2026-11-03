@@ -12,13 +12,14 @@ import {
   CANARY_HOLD_MS,
   CANARY_QUOTE_CEILING_CENTS,
   validateCanaryRoutes,
+  type CanaryMode,
   type CanaryRoute,
 } from './live-scale/provider-canary.js';
 
 type Json = Record<string, any>;
 interface Settings {
   baseUrl: string;
-  mode: 'provider-canary';
+  mode: CanaryMode;
   target: number;
   providers: (CanaryRoute & { rateMicrosPerSecond: number; basePriceCents?: number })[];
   wick: { baseUrl: string; token: string; organizationId: string; groupId: string };
@@ -279,8 +280,13 @@ async function observe(settings: Settings, journal: Journal, receipt: Json, star
 }
 
 export async function runRenewalObservers(settings: Settings, journal: Journal, vmId?: string) {
-  assert(settings.mode === 'provider-canary', 'CANARY_SETTINGS_REQUIRED');
-  validateCanaryRoutes(settings.target, settings.providers);
+  assert(
+    settings.mode === 'provider-canary' ||
+      settings.mode === 'provider-size-canary' ||
+      settings.mode === 'provider-size-retry-canary',
+    'CANARY_SETTINGS_REQUIRED',
+  );
+  validateCanaryRoutes(settings.target, settings.providers, settings.mode);
   const records = journal.read(),
     header = records[0],
     start = records.find((r) => r.kind === 'runner-start');
@@ -316,7 +322,7 @@ export async function runRenewalObservers(settings: Settings, journal: Journal, 
   assert(
     header?.kind === 'prepared' &&
       header.mode === settings.mode &&
-      header.target === 4 &&
+      header.target === settings.target &&
       header.maximumRunMs === 720000 &&
       header.baseUrl === origin.origin &&
       header.fingerprint === fingerprint &&
@@ -331,7 +337,7 @@ export async function runRenewalObservers(settings: Settings, journal: Journal, 
   ];
   assert(
     receipts.length > 0 &&
-      receipts.length <= 4 &&
+      receipts.length <= settings.target &&
       new Set(receipts.map((r) => r.environmentId)).size === receipts.length,
     'RECEIPT_BOUND',
   );
