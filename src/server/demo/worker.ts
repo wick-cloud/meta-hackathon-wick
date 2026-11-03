@@ -1,3 +1,4 @@
+import { warmDemoDisks, claimDemoDisk, demoDiskDetached } from './disks.js';
 import { reconcileDemoStudio } from './studio.js';
 import { randomUUID } from 'node:crypto';
 import type { AppContext } from '../context.js';
@@ -116,7 +117,9 @@ async function cleanup(ctx: AppContext, run: Row): Promise<void> {
       );
     } else if (request?.status === 'provisioning' || request?.status === 'ready') return;
   }
-  if (run.disk_id) {
+  if (run.disk_id && run.reusable_disk) {
+    if (!(await demoDiskDetached(ctx, run))) return;
+  } else if (run.disk_id) {
     const disk = await diskDetail(ctx, actor, run.disk_id);
     if (disk.disk.status !== 'deleted') {
       if (disk.disk.canDelete)
@@ -129,16 +132,23 @@ async function cleanup(ctx: AppContext, run: Row): Promise<void> {
   ).rows[0];
   if (grant?.status !== 'closed') return;
   await transaction(ctx.pool, async (db) => {
+    await db.query("SELECT pg_advisory_xact_lock(hashtext('demo-disk-pool'))");
     await db.query("SELECT pg_advisory_xact_lock(hashtext('homepage-demo-admission'))");
     const ended = await db.query(
       `UPDATE broker_demo_runs SET status=CASE WHEN failed THEN 'failed' ELSE 'ended' END,
-      message=CASE WHEN failed THEN 'The demo could not finish. Resources were cleaned up; try again after the cooldown.' ELSE 'Demo ended. Your VM, token access and private disk have been cleaned up.' END,
+      message=CASE WHEN failed THEN 'The demo could not finish. Resources were cleaned up; try again after the cooldown.' WHEN reusable_disk THEN 'Demo ended. Your VM and token access are closed; the demo disk is reserved for reuse.' ELSE 'Demo ended. Your VM, token access and private disk have been cleaned up.' END,
       ended_at=clock_timestamp(),vm_cleanup_at=COALESCE(vm_cleanup_at,clock_timestamp()),
       cooldown_until=COALESCE(cooldown_until,clock_timestamp()+interval '20 minutes'),updated_at=clock_timestamp()
       WHERE id=$1 AND lease_token=$2 AND ended_at IS NULL RETURNING id`,
       [run.id, run.lease_token],
     );
-    if (ended.rowCount) await demoEvent(db, run.id, 'cleanup_confirmed');
+    if (ended.rowCount) {
+      await db.query(
+        'UPDATE broker_demo_disk_pool SET run_id=NULL WHERE run_id=$1 AND disk_id=$2',
+        [run.id, run.disk_id],
+      );
+      await demoEvent(db, run.id, 'cleanup_confirmed');
+    }
   });
 }
 
@@ -179,6 +189,11 @@ async function advance(ctx: AppContext, run: Row) {
     return;
   }
   if (!run.pack_id) return; // Award checkpoint is discovered on the next tick.
+  if (!run.disk_id && ctx.config.liveDemoReuseDisks) {
+    await claimDemoDisk(ctx, run);
+    await phase(ctx, run, 'provisioning', 'Reserving a dedicated demo disk.');
+    return;
+  }
   if (!run.disk_id) {
     await save(ctx, run, 'native_attempted_at=COALESCE(native_attempted_at,clock_timestamp())');
     const disk = await createDisk(ctx, actor, {
@@ -329,7 +344,7 @@ async function advance(ctx: AppContext, run: Row) {
   ).rowCount;
   if (!authority) return;
   const initialized = await ctx.wick.runCommand!(vm.environment_id, {
-    command: demoBootstrapCommand(ctx.config.appUrl, run.kind),
+    command: demoBootstrapCommand(ctx.config.appUrl, run.kind, run.reusable_disk),
     cwd: '/workspace',
   });
   if (
@@ -401,6 +416,8 @@ export async function reconcileDemo(ctx: AppContext, id: string): Promise<void> 
 }
 
 export async function maintainDemo(ctx: AppContext): Promise<void> {
+  // A pool warming outage must not prevent cleanup of admitted runs.
+  await warmDemoDisks(ctx).catch(() => {});
   const runs = (
     await ctx.pool.query(`SELECT id FROM broker_demo_runs WHERE ended_at IS NULL
     AND (lease_until IS NULL OR lease_until<clock_timestamp()) ORDER BY updated_at,id LIMIT 20`)

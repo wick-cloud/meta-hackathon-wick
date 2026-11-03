@@ -556,7 +556,10 @@ export async function demoState(
             })),
           }
         : null,
-      disk: disks.rows[0] ?? null,
+      disk:
+        row.reusable_disk && row.ended_at
+          ? { id: row.disk_id, name: 'Dedicated demo disk', status: 'retained' }
+          : (disks.rows[0] ?? null),
       canIssueKey: Boolean(
         row.kind !== 'studio' &&
         live &&

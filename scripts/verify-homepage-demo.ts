@@ -464,6 +464,7 @@ async function verify(origin: string, kind: 'terminal' | 'studio' = 'terminal') 
             'terminated',
             'deleting',
             'deleted',
+            'retained',
             'waiting',
             'generating',
             'passed',
@@ -510,7 +511,7 @@ async function verify(origin: string, kind: 'terminal' | 'studio' = 'terminal') 
     );
     check(
       (!ended.run?.vm?.id || ended.run.vm.cleanupConfirmed) &&
-        (!ended.run?.disk || ended.run.disk.status === 'deleted') &&
+        (!ended.run?.disk || ['deleted', 'retained'].includes(ended.run.disk.status)) &&
         !ended.run?.canIssueKey &&
         !ended.run?.vm?.terminalPath,
       'cleanup_resources_not_confirmed',

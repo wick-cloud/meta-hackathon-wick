@@ -120,7 +120,7 @@ exposing the terminal. It does not expose a public arbitrary-command API.
 
 The durable demo worker reconciles auctions, provisioning, bootstrap, expiry,
 key revocation, grant closure, VM cleanup and disk deletion after process
-restarts. It deletes the disk only after confirmed detachment. Unknown native
+restarts. Per-run disks are deleted only after confirmed detachment; pooled demo disks are retained exclusively for reuse. Unknown native
 outcomes remain blocked rather than releasing their global capacity early.
 Turning off the feature blocks new admissions and key/terminal access while
 cleanup continues.
@@ -166,3 +166,20 @@ APP_URL=https://meta-hackathon-wick-production.up.railway.app npx tsx scripts/ve
 
 Run only one live verifier at a time and honor the shared cooldown between runs.
 Use `--self-test` without `APP_URL` for parser checks with no network calls.
+
+## Reusable demo disks
+
+Production may enable `LIVE_DEMO_REUSE_DISKS=true`. The demo worker pre-creates
+at most two dedicated disks per integration mode. Both demo choices use this same
+pool. Existing customer disks are never adopted. Each disk is leased exclusively;
+the next visitor cannot claim it until native VM termination and zero native
+attachments are confirmed. Ending a run closes its token grant and VM but retains
+the demo disk. The next VM clears all workspace files, including hidden files and
+prior Studio journals, before installing its instructions or allowing terminal or
+model access. A failed or uncertain reset never exposes the terminal.
+
+Disk creation is removed from subsequent runs; the two real auction deadlines,
+VM startup and mount confirmation still apply. The initial pool must finish
+provisioning before it is warm. Disabling reuse stops new checkouts, while existing
+pooled runs still release their exclusive leases safely. Persistent storage remains
+allocated to this bounded demo pool until explicitly retired by an operator.
