@@ -30,6 +30,7 @@ import {
   type AdapterResult,
 } from './runtime.js';
 import { retirePackLocked } from './market.js';
+import { INFERENCE_CONCURRENCY } from './limits.js';
 import { studioAuthority } from '../coding/studio-budget.js';
 import { seal } from '../coding/artifacts.js';
 import { demoStudioMessages } from '../demo/studio-script.js';
@@ -601,7 +602,7 @@ async function completeInternal(
     const routes = (
       await db.query('SELECT * FROM broker_inference_routes ORDER BY provider FOR UPDATE')
     ).rows;
-    if (routes.reduce((sum, r) => sum + r.held_calls, 0) >= 4)
+    if (routes.reduce((sum, r) => sum + r.held_calls, 0) >= INFERENCE_CONCURRENCY.global)
       failure(
         429,
         'inference_busy',
@@ -609,11 +610,11 @@ async function completeInternal(
       );
     const pending = (
       await db.query(
-        `SELECT 1 FROM broker_inference_requests WHERE grant_id=$1 AND status NOT IN('settled','rejected','written_off') LIMIT 2`,
-        [grantId],
+        `SELECT 1 FROM broker_inference_requests WHERE grant_id=$1 AND status NOT IN('settled','rejected','written_off') LIMIT $2`,
+        [grantId, INFERENCE_CONCURRENCY.perGrant],
       )
     ).rowCount;
-    if ((pending ?? 0) >= 2)
+    if ((pending ?? 0) >= INFERENCE_CONCURRENCY.perGrant)
       failure(429, 'grant_busy', 'This grant has two active or unresolved inference requests.');
     await repairLegacyAllowance(db, grantId);
     const packs = (
