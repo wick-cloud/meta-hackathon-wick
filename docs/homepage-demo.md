@@ -85,7 +85,7 @@ another demo.
 | Model requests     | At most two accepted attempts per run; at most 1,024 output tokens per request                                                                              |
 | Disk               | One private disk per run; `hello_muse.py` for terminal, generated `hello_world.py` for guided Studio                                                        |
 | Next run           | Both resources unlock 20 minutes after confirmed VM cleanup; pending cleanup remains blocked                                                                |
-| Concurrent runs    | At most five globally and one per browser; each network may have three runs active or cooling down                                                         |
+| Concurrent runs    | At most five globally and one per browser; each network may have three runs active or cooling down                                                          |
 | Daily sponsorship  | $5 per America/New_York calendar day; reserve $0.50 per admitted run                                                                                        |
 
 The one-cent display price does not reduce the provider's accepted gross price,

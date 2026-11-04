@@ -5,6 +5,17 @@ import { HttpError } from './context.js';
 
 type ProxyConfig = Pick<Config, 'authTrustRailwayProxy'>;
 
+/** Use the router's canonical path: encoded static segments still match API routes. */
+export function requestRoutePath(request: FastifyRequest): string {
+  if (request.routeOptions.url) return request.routeOptions.url;
+  const path = request.url.split('?')[0]!;
+  try {
+    return decodeURI(path);
+  } catch {
+    return path;
+  }
+}
+
 /** Forwarded headers are authoritative only at the explicitly configured Railway edge. */
 export function clientAddress(request: FastifyRequest, config: ProxyConfig): string {
   const edge = request.headers['x-real-ip'];
@@ -29,10 +40,11 @@ export function registerRequestLimits(app: FastifyInstance, config: ProxyConfig)
   let total = 0;
   const release = (request: FastifyRequest) => releases.get(request)?.();
   app.addHook('onRequest', async (request) => {
-    if (!request.url.startsWith('/api/') && request.headers.authorization === undefined) return;
+    const path = requestRoutePath(request);
+    if (!path.startsWith('/api/') && request.headers.authorization === undefined) return;
     const address = clientAddress(request, config);
     const now = Date.now();
-    const auth = request.url.split('?')[0].startsWith('/api/auth/');
+    const auth = path.startsWith('/api/auth/');
     const key = `${auth ? 'auth' : 'api'}:${address}`;
     let bucket = buckets.get(key);
     if (!bucket || bucket.until <= now) {
