@@ -223,6 +223,8 @@ export async function api<T>(url: string, options: RequestInit = {}): Promise<T>
       throw error;
     }
   }
+  if (import.meta.env.MODE === 'demo')
+    throw new ApiError('Open a buyer or seller demo workspace to try this action.', 422);
   const headers = new Headers(options.headers);
   if (options.body) headers.set('Content-Type', 'application/json');
   if (

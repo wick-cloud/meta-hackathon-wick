@@ -472,7 +472,7 @@ test('mobile console uses the regular navigation drawer and keeps content within
   guard.assertLocal();
 });
 
-test('deep links, browser history, dismissible guide and exit preserve the real auth boundary', async ({
+test('deep links, browser history, dismissible guide and exit preserve the real auth boundary @hosted', async ({
   page,
 }) => {
   const guard = await guardDemo(page);

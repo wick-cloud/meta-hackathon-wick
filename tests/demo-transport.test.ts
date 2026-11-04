@@ -45,9 +45,22 @@ beforeEach(() => {
 afterEach(() => {
   resetDemoStores();
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
 });
 
 describe('interactive console transport boundary', () => {
+  it('blocks backend calls outside a workspace in standalone demo mode', async () => {
+    vi.stubEnv('MODE', 'demo');
+    for (const path of ['/', '/demos', '/login', '/orders']) {
+      window.location.pathname = path;
+      await expect(api('/api/me')).rejects.toMatchObject({ status: 422 });
+      await expect(
+        api('/api/demo/start', { method: 'POST', body: JSON.stringify({}) }),
+      ).rejects.toMatchObject({ status: 422 });
+    }
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it('rejects unsupported mutations and external URLs without falling through to fetch', async () => {
     await expect(
       api('/api/unknown-demo-action', { method: 'POST', body: JSON.stringify({ amount: 100 }) }),
