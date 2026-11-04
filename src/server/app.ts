@@ -11,6 +11,7 @@ import { existsSync } from 'node:fs';
 import { ZodError } from 'zod';
 import type { Config } from './config.js';
 import { MAX_API_BODY_BYTES } from './http-limits.js';
+import { registerHttpSecurity } from './http-security.js';
 import { createPool, migrate, verifyMigrations } from './db.js';
 import { createReadinessProbe, workersReady } from './readiness.js';
 import { registerRequestLimits } from './request-limits.js';
@@ -86,6 +87,7 @@ export async function buildApp(
     inference: options.wrapInference ? options.wrapInference(inference) : inference,
     requireActor: createRequireActor(auth, pool),
   };
+  registerHttpSecurity(app, config);
   registerRequestLimits(app, config);
   registerBrokerKeyAccess(app, ctx.requireActor);
   let closing = false;
@@ -96,30 +98,6 @@ export async function buildApp(
   );
   app.addHook('preClose', async () => {
     closing = true;
-  });
-  app.addHook('onRequest', async (request, reply) => {
-    reply
-      .header('X-Request-Id', request.id)
-      .header('X-Content-Type-Options', 'nosniff')
-      .header('Referrer-Policy', 'same-origin')
-      .header('X-Frame-Options', 'DENY');
-    if (request.url.startsWith('/api/')) reply.header('Cache-Control', 'no-store');
-    if (config.nodeEnv === 'production')
-      reply.header(
-        'Content-Security-Policy',
-        `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self' ${config.appUrl.replace(/^http/, 'ws')}; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'`,
-      );
-    if (
-      !['GET', 'HEAD', 'OPTIONS'].includes(request.method) &&
-      request.url.startsWith('/api/') &&
-      !request.url.startsWith('/api/auth/')
-    ) {
-      const origin = request.headers.origin;
-      if (origin && origin !== new URL(config.appUrl).origin)
-        throw new HttpError(403, 'Request origin is not allowed.');
-      if (request.headers['sec-fetch-site'] === 'cross-site')
-        throw new HttpError(403, 'Cross-site requests are not allowed.');
-    }
   });
   app.setErrorHandler((error, request, reply) => {
     if (error instanceof ZodError)
