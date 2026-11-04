@@ -48,7 +48,7 @@ regexes = ["^persisted\\-key\\-123$"]
 description = "Bundled xterm property assignment, not a credential"
 condition = "AND"
 paths = ['''(^|/)dist/client/assets/terminal-[A-Za-z0-9_-]+\.js$''']
-regexes = ['''^r\.TwoKeyMap=void$''']
+regexes = ['''^r\.TwoKeyMap=void$''', '''^t\.TwoKeyMap=void$''']
 
 [[rules]]
 id = "private-key"
