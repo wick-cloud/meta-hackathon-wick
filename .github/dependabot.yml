@@ -5,6 +5,15 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    groups:
+      # These packages have coupled peer versions; update each pair together.
+      vite:
+        patterns:
+          - vite
+          - '@vitejs/plugin-react'
+      xterm:
+        patterns:
+          - '@xterm/*'
   - package-ecosystem: github-actions
     directory: /
     schedule:
