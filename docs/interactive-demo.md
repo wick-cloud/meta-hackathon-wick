@@ -7,7 +7,20 @@ Visitors explore the regular Wick Broker console with an in-memory sample accoun
 | Buyer       | `/demo/buyer`   | Orders          |
 | Seller      | `/demo/seller`  | Capacity        |
 
-Internal links stay within the selected perspective, for example `/demo/buyer/vms` or `/demo/seller/provider/policy`. The homepage and `/demos` link to both workspaces.
+Internal links stay within the selected perspective, for example `/demo/buyer/vms` or `/demo/seller/provider/policy`. The hosted homepage and `/demos` link to both workspaces.
+
+## Local quickstart
+
+Use Node 24 and run these commands from the repository root:
+
+```sh
+npm ci
+npm run demo
+```
+
+Open [http://localhost:5173](http://localhost:5173). This starts Vite in an explicit local demo mode, without the Broker server, PostgreSQL, `.env`, accounts, or service credentials. Both `/` and `/demos` show a chooser for the buyer and seller workspaces, plus a link to the hosted live demo. Home and **Exit demo** return to the chooser. Other non-demo destinations show the chooser instead of trying to sign in.
+
+The browser downloads local frontend assets and uses Vite's development connection; demo actions make no marketplace API requests or terminal WebSocket connections. The live-demo link opens the hosted service only when selected. The regular backend `npm run dev` and `npm start` commands remain separate; see [full-stack local development](local-development.md).
 
 ## Guided first steps
 
@@ -27,14 +40,17 @@ No demo action signs in, contacts the marketplace backend, starts a model call, 
 
 ## Existing live demos
 
-The terminal and guided Studio demos at `/demos` remain separate. They follow server availability, guest session limits, leases, and cooldowns, and use real resources when configured in real mode. Entering or resetting the console demo does not change a live demo session. See [live demo setup](homepage-demo.md).
+The terminal and guided Studio demos at the hosted `/demos` remain separate. In local demo mode, `/demos` is the offline chooser and links out to that hosted page. They follow server availability, guest session limits, leases, and cooldowns, and use real resources when configured in real mode. Entering or resetting the console demo does not change a live demo session. See [live demo setup](homepage-demo.md).
 
 ## Verification
 
-`tests/browser/interactive-demo.spec.ts` exercises the actual console with the mock transport, verifies no marketplace HTTP requests or terminal WebSockets, and checks navigation, forms, state changes, reset, mobile layout, and the existing authentication boundary. It needs only the frontend asset server.
-
-Run `npx vite --host 127.0.0.1 --port 4317` in one terminal, then:
+Install Chromium once, then run the dedicated frontend demo suite:
 
 ```sh
-E2E_BASE_URL=http://127.0.0.1:4317 npx playwright test tests/browser/interactive-demo.spec.ts
+npx playwright install --with-deps chromium
+npm run test:demo
 ```
+
+The command starts its own frontend server without a database or credentials. Tests cover chooser entry, buyer and seller journeys, deep links, history, reload, exit, reset, and mobile layout. They fail on backend requests, terminal WebSockets, or uncaught browser errors; Vite's development connection is allowed.
+
+The existing `tests/browser/interactive-demo.spec.ts` also exercises the normal console and its hosted authentication boundary. Those checks remain part of the regular browser suite. See [testing notes](testing.md).

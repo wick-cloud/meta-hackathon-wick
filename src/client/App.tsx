@@ -37,6 +37,7 @@ import { Brand } from './brand';
 import { FormPanel } from './form-layout';
 import { HomePage } from './homepage';
 import { DemoLanding } from './demos';
+import { LocalDemoLanding } from './local-demo';
 import { DemoConsoleToolbar } from './demo-console';
 import { demoHref, demoLocation, demoSession, resetDemoStores } from './demo-store';
 import './auth.css';
@@ -258,6 +259,7 @@ export default function App() {
   const demo = demoLocation(location);
   const path = demo?.path ?? location.split('?')[0]!;
   const interactiveDemo = Boolean(demo);
+  const localDemo = import.meta.env.MODE === 'demo';
   const session = demo ? demoSession(demo.role) : liveSession;
   useEffect(() => {
     environmentRef.current?.removeAttribute('open');
@@ -336,24 +338,25 @@ export default function App() {
     }
   };
   useEffect(() => {
-    if (!interactiveDemo) void refreshSession();
+    if (!interactiveDemo && !localDemo) void refreshSession();
     const onPop = () => {
       setLocation(browserLocation());
       setMobileOpen(false);
     };
     window.addEventListener('popstate', onPop);
     window.addEventListener('hashchange', onPop);
-    const timer = interactiveDemo
-      ? undefined
-      : setInterval(() => {
-          void refreshSession();
-        }, 30000);
+    const timer =
+      interactiveDemo || localDemo
+        ? undefined
+        : setInterval(() => {
+            void refreshSession();
+          }, 30000);
     return () => {
       window.removeEventListener('popstate', onPop);
       window.removeEventListener('hashchange', onPop);
       clearInterval(timer);
     };
-  }, [interactiveDemo]);
+  }, [interactiveDemo, localDemo]);
   async function signOut() {
     if (demo) {
       navigate('/demos');
@@ -372,6 +375,12 @@ export default function App() {
       setSigningOut(false);
     }
   }
+  if (localDemo && !interactiveDemo)
+    return (
+      <NavigationContext.Provider value={navigate}>
+        <LocalDemoLanding />
+      </NavigationContext.Provider>
+    );
   if (!session)
     return (
       <div className="boot-screen">
@@ -524,7 +533,7 @@ export default function App() {
             aria-label="Workspace navigation"
           >
             <div className="sidebar-brand">
-              <Link href={navigation[0]!.path} aria-label="Wick Broker home">
+              <Link href={localDemo ? '/' : navigation[0]!.path} aria-label="Wick Broker home">
                 <Brand />
               </Link>
               <button
