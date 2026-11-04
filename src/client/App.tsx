@@ -37,6 +37,9 @@ import { Brand } from './brand';
 import { FormPanel } from './form-layout';
 import { HomePage } from './homepage';
 import { DemoLanding } from './demos';
+import { LocalDemoLanding } from './local-demo';
+import { DemoConsoleToolbar } from './demo-console';
+import { demoHref, demoLocation, demoSession, resetDemoStores } from './demo-store';
 import './auth.css';
 import { NewEnvironment, RequestReview, AuctionPage, VMDetail, Invoices } from './buyer';
 import { MyVMs } from './vm-inventory';
@@ -247,11 +250,17 @@ export default function App() {
   const sidebarRef = useRef<HTMLElement>(null);
   const navigationToggleRef = useRef<HTMLButtonElement>(null);
   const environmentRef = useRef<HTMLDetailsElement>(null);
-  const [session, setSession] = useState<Session | null>(null),
+  const [liveSession, setSession] = useState<Session | null>(null),
     [bootError, setBootError] = useState(''),
     [location, setLocation] = useState(browserLocation),
     [mobileOpen, setMobileOpen] = useState(false),
-    [signingOut, setSigningOut] = useState(false);
+    [signingOut, setSigningOut] = useState(false),
+    [demoRevision, setDemoRevision] = useState(0);
+  const demo = demoLocation(location);
+  const path = demo?.path ?? location.split('?')[0]!;
+  const interactiveDemo = Boolean(demo);
+  const localDemo = import.meta.env.MODE === 'demo';
+  const session = demo ? demoSession(demo.role) : liveSession;
   useEffect(() => {
     environmentRef.current?.removeAttribute('open');
   }, [location]);
@@ -295,6 +304,7 @@ export default function App() {
     };
   }, [mobileOpen]);
   const navigate = (next: string) => {
+    if (demo) next = demoHref(next, demo.role);
     if (next !== window.location.pathname + window.location.search)
       window.history.pushState({}, '', next);
     setLocation(browserLocation());
@@ -328,23 +338,30 @@ export default function App() {
     }
   };
   useEffect(() => {
-    void refreshSession();
+    if (!interactiveDemo && !localDemo) void refreshSession();
     const onPop = () => {
       setLocation(browserLocation());
       setMobileOpen(false);
     };
     window.addEventListener('popstate', onPop);
     window.addEventListener('hashchange', onPop);
-    const timer = setInterval(() => {
-      void refreshSession();
-    }, 30000);
+    const timer =
+      interactiveDemo || localDemo
+        ? undefined
+        : setInterval(() => {
+            void refreshSession();
+          }, 30000);
     return () => {
       window.removeEventListener('popstate', onPop);
       window.removeEventListener('hashchange', onPop);
       clearInterval(timer);
     };
-  }, []);
+  }, [interactiveDemo, localDemo]);
   async function signOut() {
+    if (demo) {
+      navigate('/demos');
+      return;
+    }
     setSigningOut(true);
     try {
       await post('/api/auth/sign-out');
@@ -358,6 +375,12 @@ export default function App() {
       setSigningOut(false);
     }
   }
+  if (localDemo && !interactiveDemo)
+    return (
+      <NavigationContext.Provider value={navigate}>
+        <LocalDemoLanding />
+      </NavigationContext.Provider>
+    );
   if (!session)
     return (
       <div className="boot-screen">
@@ -369,7 +392,6 @@ export default function App() {
         )}
       </div>
     );
-  const path = location.split('?')[0]!;
   const search = location.includes('?') ? location.slice(location.indexOf('?')) : '';
   const intent = new URLSearchParams(search).get('intent');
   if (path === '/demos' || path === '/demos/')
@@ -491,7 +513,7 @@ export default function App() {
   return (
     <NavigationContext.Provider value={navigate}>
       <SessionContext.Provider value={session}>
-        <div className="app-shell">
+        <div className={`app-shell ${demo ? 'demo-console' : ''}`}>
           <a className="skip-link" href="#workspace-content">
             Skip to content
           </a>
@@ -511,7 +533,7 @@ export default function App() {
             aria-label="Workspace navigation"
           >
             <div className="sidebar-brand">
-              <Link href={navigation[0]!.path} aria-label="Wick Broker home">
+              <Link href={localDemo ? '/' : navigation[0]!.path} aria-label="Wick Broker home">
                 <Brand />
               </Link>
               <button
@@ -684,15 +706,30 @@ export default function App() {
                   className="icon-button"
                   onClick={() => void signOut()}
                   disabled={signingOut}
-                  title="Sign out"
-                  aria-label="Sign out"
+                  title={demo ? 'Exit demo' : 'Sign out'}
+                  aria-label={demo ? 'Exit demo account' : 'Sign out'}
                 >
                   <LogOut size={17} />
                 </button>
               </div>
             </header>
-            <main className="main-content" id="workspace-content" tabIndex={-1}>
-              {bootError && <ErrorBox error={bootError} />}
+            {demo && (
+              <DemoConsoleToolbar
+                role={demo.role}
+                onReset={() => {
+                  resetDemoStores();
+                  setDemoRevision((value) => value + 1);
+                  navigate(`/demo/${demo.role}`);
+                }}
+              />
+            )}
+            <main
+              key={demo ? `${user.id}:${demoRevision}` : 'live'}
+              className="main-content"
+              id="workspace-content"
+              tabIndex={-1}
+            >
+              {!demo && bootError && <ErrorBox error={bootError} />}
               {content}
             </main>
             <footer className="app-footer">

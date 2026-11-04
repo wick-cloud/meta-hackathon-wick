@@ -1,3 +1,4 @@
+import { warmDemoDisks, claimDemoDisk, demoDiskDetached } from './disks.js';
 import { reconcileDemoStudio } from './studio.js';
 import { randomUUID } from 'node:crypto';
 import type { AppContext } from '../context.js';
@@ -10,7 +11,16 @@ import { createDisk, deleteDisk, diskDetail, observeVmDisk } from '../disks/serv
 import { createRequest, cancelRequest } from '../marketplace/auction.js';
 import { terminateVm } from '../marketplace/lifecycle.js';
 import { demoBootstrapCommand } from './script.js';
-import { DEMO_QUEUE, DEMO_CATALOG_ID, demoActor, demoEvent, demoModeAllowed } from './service.js';
+import { demoReceiptFacts } from './receipt.js';
+import { INFERENCE_PROVIDERS } from '../../shared/inference.js';
+import {
+  DEMO_QUEUE,
+  DEMO_CATALOG_ID,
+  DEMO_LIMITS,
+  demoActor,
+  demoEvent,
+  demoModeAllowed,
+} from './service.js';
 
 async function save(ctx: AppContext, run: Row, assignment: string, values: unknown[] = []) {
   return (
@@ -116,7 +126,9 @@ async function cleanup(ctx: AppContext, run: Row): Promise<void> {
       );
     } else if (request?.status === 'provisioning' || request?.status === 'ready') return;
   }
-  if (run.disk_id) {
+  if (run.disk_id && run.reusable_disk) {
+    if (!(await demoDiskDetached(ctx, run))) return;
+  } else if (run.disk_id) {
     const disk = await diskDetail(ctx, actor, run.disk_id);
     if (disk.disk.status !== 'deleted') {
       if (disk.disk.canDelete)
@@ -129,16 +141,23 @@ async function cleanup(ctx: AppContext, run: Row): Promise<void> {
   ).rows[0];
   if (grant?.status !== 'closed') return;
   await transaction(ctx.pool, async (db) => {
+    await db.query("SELECT pg_advisory_xact_lock(hashtext('demo-disk-pool'))");
     await db.query("SELECT pg_advisory_xact_lock(hashtext('homepage-demo-admission'))");
     const ended = await db.query(
       `UPDATE broker_demo_runs SET status=CASE WHEN failed THEN 'failed' ELSE 'ended' END,
-      message=CASE WHEN failed THEN 'The demo could not finish. Resources were cleaned up; try again after the cooldown.' ELSE 'Demo ended. Your VM, token access and private disk have been cleaned up.' END,
+      message=CASE WHEN failed THEN 'The demo could not finish. Resources were cleaned up; try again after the cooldown.' WHEN reusable_disk THEN 'Demo ended. Your VM and token access are closed; the demo disk is reserved for reuse.' ELSE 'Demo ended. Your VM, token access and private disk have been cleaned up.' END,
       ended_at=clock_timestamp(),vm_cleanup_at=COALESCE(vm_cleanup_at,clock_timestamp()),
       cooldown_until=COALESCE(cooldown_until,clock_timestamp()+interval '20 minutes'),updated_at=clock_timestamp()
       WHERE id=$1 AND lease_token=$2 AND ended_at IS NULL RETURNING id`,
       [run.id, run.lease_token],
     );
-    if (ended.rowCount) await demoEvent(db, run.id, 'cleanup_confirmed');
+    if (ended.rowCount) {
+      await db.query(
+        'UPDATE broker_demo_disk_pool SET run_id=NULL WHERE run_id=$1 AND disk_id=$2',
+        [run.id, run.disk_id],
+      );
+      await demoEvent(db, run.id, 'cleanup_confirmed');
+    }
   });
 }
 
@@ -158,7 +177,7 @@ async function advance(ctx: AppContext, run: Row) {
       ctx,
       run,
       'auction',
-      'Running the 30-second Baseten token auction. One eligible provider.',
+      'Running the 30-second Muse token auction. Every qualified seller is invited.',
     );
     return;
   }
@@ -172,13 +191,18 @@ async function advance(ctx: AppContext, run: Row) {
   if (
     !order ||
     order.status !== 'awarded' ||
-    order.provider !== 'baseten' ||
+    !(INFERENCE_PROVIDERS as readonly string[]).includes(order.provider) ||
     Number(order.price_cents) > 5
   ) {
-    await fail(ctx, run, 'No eligible Baseten token offer was awarded. Closing the demo.');
+    await fail(ctx, run, 'No eligible Muse token offer was awarded. Closing the demo.');
     return;
   }
   if (!run.pack_id) return; // Award checkpoint is discovered on the next tick.
+  if (!run.disk_id && ctx.config.liveDemoReuseDisks) {
+    await claimDemoDisk(ctx, run);
+    await phase(ctx, run, 'provisioning', 'Reserving a dedicated demo disk.');
+    return;
+  }
   if (!run.disk_id) {
     await save(ctx, run, 'native_attempted_at=COALESCE(native_attempted_at,clock_timestamp())');
     const disk = await createDisk(ctx, actor, {
@@ -292,7 +316,7 @@ async function advance(ctx: AppContext, run: Row) {
       'ready',
       run.kind === 'studio'
         ? 'Your guided Muse Studio workspace and terminal are ready.'
-        : 'Your Modal terminal and Baseten Muse tokens are ready.',
+        : 'Your Modal terminal and Muse tokens are ready.',
     );
     if (run.kind === 'studio') await reconcileDemoStudio(ctx, run.id, run.lease_token);
     return;
@@ -319,6 +343,24 @@ async function advance(ctx: AppContext, run: Row) {
     await fail(ctx, run, 'The private native disk mount could not be confirmed.');
     return;
   }
+  // Terminal runs give hello_muse.py the same public bid rows the homepage receipt shows.
+  const receipt =
+    run.kind === 'studio'
+      ? null
+      : demoReceiptFacts({
+          vm,
+          bids: (
+            await ctx.pool.query(
+              'SELECT total_price_cents,offering_snapshot,created_at FROM broker_bids WHERE request_id=$1 ORDER BY created_at,id LIMIT 8',
+              [run.request_id],
+            )
+          ).rows,
+          tokenPriceCents: order.price_cents,
+          tokenProvider: order.provider,
+          leaseMinutes: DEMO_LIMITS.durationMinutes,
+          inputTokens: DEMO_LIMITS.inputTokens,
+          outputTokens: DEMO_LIMITS.outputTokens,
+        });
   const authority = (
     await ctx.pool.query(
       `UPDATE broker_demo_runs SET bootstrap_started_at=clock_timestamp()
@@ -329,7 +371,7 @@ async function advance(ctx: AppContext, run: Row) {
   ).rowCount;
   if (!authority) return;
   const initialized = await ctx.wick.runCommand!(vm.environment_id, {
-    command: demoBootstrapCommand(ctx.config.appUrl, run.kind),
+    command: demoBootstrapCommand(ctx.config.appUrl, run.kind, run.reusable_disk, receipt),
     cwd: '/workspace',
   });
   if (
@@ -352,7 +394,7 @@ async function advance(ctx: AppContext, run: Row) {
     'ready',
     run.kind === 'studio'
       ? 'Your guided Muse Studio workspace and terminal are ready.'
-      : 'Your Modal terminal and Baseten Muse tokens are ready.',
+      : 'Your Modal terminal and Muse tokens are ready.',
   );
 }
 
@@ -401,6 +443,8 @@ export async function reconcileDemo(ctx: AppContext, id: string): Promise<void> 
 }
 
 export async function maintainDemo(ctx: AppContext): Promise<void> {
+  // A pool warming outage must not prevent cleanup of admitted runs.
+  await warmDemoDisks(ctx).catch(() => {});
   const runs = (
     await ctx.pool.query(`SELECT id FROM broker_demo_runs WHERE ended_at IS NULL
     AND (lease_until IS NULL OR lease_until<clock_timestamp()) ORDER BY updated_at,id LIMIT 20`)

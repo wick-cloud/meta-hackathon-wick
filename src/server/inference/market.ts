@@ -1,4 +1,5 @@
 import { moneyAmount } from './data.js';
+import { INFERENCE_CONCURRENCY } from './limits.js';
 import { studioGrantOpen, studioAuthority, type StudioSource } from '../coding/studio-budget.js';
 import { admitBuyingDecision } from './buying-guard.js';
 import { centsFromUnits, moneyUnits, MIN_ORDER_PRICE_CENTS } from '../../shared/money.js';
@@ -20,6 +21,7 @@ import type { Row } from '../marketplace/data.js';
 import { operationFingerprint, withOperation } from '../operations.js';
 import {
   minimumInputReservation,
+  minimumPackInputTokens,
   MIN_TASK_OUTPUT_RESERVATION,
   type RuntimeRoute,
 } from './runtime.js';
@@ -120,11 +122,11 @@ export async function initializeInference(ctx: AppContext) {
           [provider],
         );
       await db.query(
-        `INSERT INTO broker_inference_routes(provider,provider_id,source_mode,fingerprint,qualified,blocked_reason,input_bound,max_output_tokens,cost_input_rate,cost_output_rate)
-        VALUES($1,$2,$3,$4,$5,$6,$7,$8,1250000,4250000) ON CONFLICT(provider) DO UPDATE SET
+        `INSERT INTO broker_inference_routes(provider,provider_id,source_mode,fingerprint,qualified,blocked_reason,input_bound,max_output_tokens,cost_input_rate,cost_output_rate,max_concurrent)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,1250000,4250000,$9) ON CONFLICT(provider) DO UPDATE SET
         provider_id=EXCLUDED.provider_id,
         source_mode=EXCLUDED.source_mode,fingerprint=EXCLUDED.fingerprint,qualified=EXCLUDED.qualified,blocked_reason=EXCLUDED.blocked_reason,
-        input_bound=EXCLUDED.input_bound,max_output_tokens=EXCLUDED.max_output_tokens,
+        input_bound=EXCLUDED.input_bound,max_output_tokens=EXCLUDED.max_output_tokens,max_concurrent=EXCLUDED.max_concurrent,
         quarantined_at=CASE WHEN broker_inference_routes.fingerprint=EXCLUDED.fingerprint THEN broker_inference_routes.quarantined_at ELSE NULL END,updated_at=clock_timestamp()`,
         [
           provider,
@@ -135,6 +137,7 @@ export async function initializeInference(ctx: AppContext) {
           seller ? route.reason : 'A provider account must be mapped to this inference route.',
           route.inputBound,
           route.maximumOutputTokens,
+          INFERENCE_CONCURRENCY.perRoute,
         ],
       );
       await db.query(
@@ -194,6 +197,13 @@ function topupCompatible(
   requiredInput = minimumInputReservation(native),
   requiredOutput = native.minimumOutputTokens ?? 1,
 ) {
+  // A wallet key can spend only this purchase. Agent grants keep their existing
+  // compatible-pool top-up semantics, including historical framing-sized packs.
+  if (grant.funding_source === 'wallet')
+    return (
+      input >= Math.max(requiredInput, minimumPackInputTokens(native)) &&
+      output >= Math.max(requiredOutput, native.minimumOutputTokens ?? 1)
+    );
   const group = tokenAllowanceGroups(
     packs,
     [

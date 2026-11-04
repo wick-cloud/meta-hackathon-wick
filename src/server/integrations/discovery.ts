@@ -1,5 +1,18 @@
 import type { CreateEnvironmentInput, WickAdapter, WickEnvironment } from './types.js';
 
+/** Failure alone is not proof that provider resources were removed. */
+export function environmentCleanupConfirmed(environment: WickEnvironment): boolean {
+  const terminated = Date.parse(environment.terminatedAt ?? '');
+  return (
+    environment.status === 'terminated' ||
+    (environment.status === 'failed' &&
+      environment.launch?.state === 'failed' &&
+      environment.launch.cleanup === 'complete' &&
+      Number.isFinite(terminated) &&
+      terminated <= Date.now())
+  );
+}
+
 /** Read-only reconciliation. Absence is uncertainty, never proof that create was rejected. */
 export async function discoverEnvironment(
   adapter: WickAdapter,

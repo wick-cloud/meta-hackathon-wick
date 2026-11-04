@@ -26,7 +26,7 @@ Deploy with the migration-only pre-deploy command. On a fresh database, bootstra
 Use server-side `WICK_MODE=real` and the reviewed managed Wick credential/scope. Keep Muse fixtures for setup if live model decisions are not being tested. Review fresh eligible routes from the app container:
 
 ```sh
-npm run configure:real:production -- --list
+node dist/scripts/configure-real.js --list
 ```
 
 Supply private variables for **only the selected providers**:
@@ -44,7 +44,7 @@ New-account passwords must contain 12–128 characters. Existing accounts need n
 Stage the additions with their own credentials and selected catalogs:
 
 ```sh
-npm run configure:real:production -- --apply-providers --providers sail,tenki,freestyle,boat --stage
+node dist/scripts/configure-real.js --apply-providers --providers sail,tenki,freestyle,boat --stage
 ```
 
 `--providers` accepts native IDs or environment keys, case-insensitively. `REAL_PROVIDER_IDS` is an alternative comma-separated selection. A subset is required; omitting it does not reconfigure all eight accounts. `--stage` is the default. New catalog rows are unapproved, new offerings inactive, and new accounts' automatic bidding off. Ordinary retries preserve existing custom policy, capacity, renamed offerings, prices, approval state, credentials, sessions, reservations, and frozen history. Staging is not a command to pause an already active account.
@@ -52,7 +52,7 @@ npm run configure:real:production -- --apply-providers --providers sail,tenki,fr
 After qualification, activate only the reviewed provider/configuration subset:
 
 ```sh
-npm run configure:real:production -- --apply-providers --providers sail --activate
+node dist/scripts/configure-real.js --apply-providers --providers sail --activate
 ```
 
 Activation refreshes selected catalog/pricing evidence, approves those routes, activates the selected setup offering, and applies the selected automatic-bidding setting. It preserves custom capacity, base price, and offering price. If an existing offering is below the current cost floor, activation fails atomically. `--update-existing` is the separate explicit option for replacing selected accounts' default capacity/policy and selected offering prices; combine it with `--activate` only when those changes and activation are intended. Ambiguous multiple customized offerings require the provider console. A conflicting role/cloud binding fails without repurposing the account.

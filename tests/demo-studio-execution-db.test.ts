@@ -118,9 +118,14 @@ describe.skipIf(!databaseUrl)(
         )
       ).rows;
       expect(allocations).toHaveLength(1);
+      // Whichever qualified Muse seller won the token auction serves the owned pack.
+      const packProvider = (
+        await f.pool.query('SELECT provider FROM broker_token_packs WHERE id=$1', [run.pack_id])
+      ).rows[0].provider;
+      expect(['modal', 'baseten']).toContain(packProvider);
       expect(allocations[0]).toMatchObject({
         pack_id: run.pack_id,
-        provider: 'baseten',
+        provider: packProvider,
         status: 'settled',
         reserved_output: 1024,
       });
@@ -364,7 +369,8 @@ describe.skipIf(!databaseUrl)(
         (await f.pool.query('SELECT reserved_cents FROM broker_demo_days')).rows[0].reserved_cents,
       ).toBe(50);
       expect((await f.start(guest, 'terminal')).statusCode).toBe(429);
-      expect((await f.start(demoGuest(guest.ip), 'studio')).statusCode).toBe(429);
+      // The cooldown belongs to this browser; another browser on the network may start.
+      expect((await f.start(demoGuest(guest.ip), 'studio')).statusCode).toBe(200);
     });
 
     it('expires a completed Studio without extending either the VM or model allowance', async () => {

@@ -32,6 +32,7 @@ import {
 import {
   INFERENCE_MODEL_ID,
   WALLET_TOKEN_PACK_TTL_SECONDS,
+  utf8InputReservation,
   type InferenceCatalog,
   type InferenceGrant,
   type InferenceGrantDetail,
@@ -80,6 +81,11 @@ import {
 import { AgentBuying, BuyingReceipt } from './buying';
 import { ProviderSupply, SupplyWindow } from './supply';
 import type { AgentListItem } from '../shared/buying';
+import {
+  buildInferenceJavaScriptExample,
+  exampleOutputBudget,
+  OUTPUT_LIMIT_GUIDANCE,
+} from './inference-examples';
 
 const count = (n: number) => n.toLocaleString('en-US');
 const providerName = (provider: string) =>
@@ -710,7 +716,25 @@ export function AgentDetail({ id, search = '' }: { id: string; search?: string }
     grant = detail?.grant;
   const active = grant?.status === 'active' && Date.parse(grant.expiresAt) > Date.now();
   const baseURL = `${window.location.origin}/api/v1`;
-  const setup = `import OpenAI from 'openai';\n\nconst client = new OpenAI({\n  apiKey: process.env.BROKER_API_KEY,\n  baseURL: '${baseURL}',\n  maxRetries: 0,\n});\n\n// Keep this ID unchanged when recovering this request.\nconst requestId = crypto.randomUUID();\nconst response = await client.chat.completions.create({\n  model: '${INFERENCE_MODEL_ID}',\n  messages: [{ role: 'user', content: 'Hello!' }],\n  max_tokens: 256,\n  stream: false,\n}, { headers: { 'Idempotency-Key': requestId } });\nconsole.log(response.choices[0].message.content);`;
+  const exampleRoutes =
+    detail?.catalog.routes.filter(
+      (route) => route.qualified && grant?.allowedProviders.includes(route.provider),
+    ) ?? [];
+  const exampleMaxTokens = exampleRoutes.reduce<number | null>((best, route) => {
+    const limit = exampleOutputBudget({
+      minimumOutputTokens: route.minimumOutputTokens,
+      maximumOutputTokens: route.maximumOutputTokens,
+    });
+    return limit === null ? best : Math.max(best ?? 0, limit);
+  }, null);
+  const setup =
+    exampleMaxTokens === null
+      ? null
+      : buildInferenceJavaScriptExample({
+          baseURL,
+          model: INFERENCE_MODEL_ID,
+          maxOutputTokens: exampleMaxTokens,
+        });
   function open(next: 'fund' | 'close' | 'key') {
     setError('');
     setNotice('');
@@ -876,14 +900,29 @@ export function AgentDetail({ id, search = '' }: { id: string; search?: string }
                     <summary>JavaScript setup example</summary>
                     <p>
                       Install <code>openai</code> and supply <code>BROKER_API_KEY</code> through
-                      your secret manager. Purchase a pack first.
+                      your secret manager. Save the example as <code>example.mjs</code> and run{' '}
+                      <code>node example.mjs</code>. Purchase a pack first.
                     </p>
-                    <pre tabIndex={0}>{setup}</pre>
-                    <CopyButton text={setup} label="Copy example" />
+                    <p>{OUTPUT_LIMIT_GUIDANCE}</p>
+                    {setup ? (
+                      <>
+                        <p>
+                          Purchase compatible quota with at least {count(exampleMaxTokens!)} output
+                          tokens for this example.
+                        </p>
+                        <pre tabIndex={0}>{setup}</pre>
+                        <CopyButton text={setup} label="Copy example" />
+                      </>
+                    ) : (
+                      <p role="status">
+                        No qualified provider route supports this example. Check provider
+                        availability before calling.
+                      </p>
+                    )}
                   </details>
                   <p className="inference-muted">
-                    Text chat · buffered responses · explicit output limit. Keep request IDs stable
-                    across retries.{' '}
+                    Text chat · buffered responses · explicit output limit. Save the operation ID to
+                    investigate a timeout. Examples never retry automatically.{' '}
                     {detail.catalog.mode === 'fixture'
                       ? 'This agent returns fixture responses.'
                       : 'Calls require a qualified route and sufficient token quota.'}
@@ -1169,6 +1208,7 @@ export function TokenComposer({ search }: { search: string }) {
   const [grantId, setGrantId] = useState(initial),
     [inputTokens, setInputTokens] = useState(2000000),
     [outputTokens, setOutputTokens] = useState(100000),
+    [samplePrompt, setSamplePrompt] = useState(''),
     [mode, setMode] = useState<'auction' | 'instant'>('auction'),
     [maximum, setMaximum] = useState(DEFAULT_PRICE_CENTS),
     [quotes, setQuotes] = useState<TokenQuote[]>([]),
@@ -1213,9 +1253,61 @@ export function TokenComposer({ search }: { search: string }) {
     : Math.min(availableCents ?? 0, grant?.maxPurchaseCents ?? 0);
   const allowInstant = walletFunding || !!grant?.allowInstant;
   const eligible = !!catalog.data?.enabled && routes.length > 0 && fundingReady;
-  const minimumInputTokens = routes.length
-    ? Math.min(...routes.map((route) => route.minimumInputReservation))
+  const requirements = routes.map((route) => {
+    const available = !walletFunding
+      ? (selectedDetail.data?.packs ?? []).filter(
+          (pack) =>
+            pack.grantId === grantId &&
+            pack.provider === route.provider &&
+            pack.mode === route.mode &&
+            pack.modelId === route.modelId &&
+            pack.status === 'active' &&
+            Date.parse(pack.expiresAt) > now,
+        )
+      : [];
+    return {
+      input: walletFunding
+        ? (route.minimumPackInputTokens ?? route.minimumInputReservation)
+        : Math.max(
+            1,
+            route.minimumInputReservation -
+              available.reduce((sum, pack) => sum + pack.availableInputTokens, 0),
+          ),
+      output: Math.max(
+        1,
+        (route.minimumOutputTokens ?? 1) -
+          available.reduce((sum, pack) => sum + pack.availableOutputTokens, 0),
+      ),
+    };
+  });
+  const minimumInputTokens = requirements.length
+    ? Math.min(...requirements.map((requirement) => requirement.input))
     : 1;
+  const minimumOutputTokens = requirements.length
+    ? Math.min(...requirements.map((requirement) => requirement.output))
+    : 1;
+  const promptInputAllowance =
+    samplePrompt && routes.some((route) => route.inputAccounting)
+      ? Math.max(
+          ...routes.map((route) =>
+            route.inputAccounting
+              ? utf8InputReservation(
+                  [{ role: 'user', content: samplePrompt }],
+                  route.maximumInputReservation ?? route.minimumInputReservation,
+                )
+              : route.minimumInputReservation,
+          ),
+        )
+      : null;
+  const validQuantities =
+    Number.isSafeInteger(inputTokens) &&
+    Number.isSafeInteger(outputTokens) &&
+    inputTokens <= 10_000_000 &&
+    outputTokens <= 1_000_000 &&
+    (!walletFunding || promptInputAllowance === null || inputTokens >= promptInputAllowance) &&
+    requirements.some(
+      (requirement) => inputTokens >= requirement.input && outputTokens >= requirement.output,
+    );
   const selected = quotes.find((quote) => quote.quoteId === quoteId),
     quoteFresh = !!selected && Date.parse(selected.expiresAt) > now;
   function invalidate() {
@@ -1226,16 +1318,9 @@ export function TokenComposer({ search }: { search: string }) {
     setAccepted(false);
   }
   async function getQuotes() {
-    if (
-      !Number.isSafeInteger(inputTokens) ||
-      !Number.isSafeInteger(outputTokens) ||
-      inputTokens < minimumInputTokens ||
-      inputTokens > 10_000_000 ||
-      outputTokens < 1 ||
-      outputTokens > 1_000_000
-    ) {
+    if (!validQuantities) {
       setError(
-        `Enter ${count(minimumInputTokens)}–10,000,000 input tokens and 1–1,000,000 output tokens, in whole numbers.`,
+        `Enter ${count(minimumInputTokens)}–10,000,000 input tokens and ${count(minimumOutputTokens)}–1,000,000 output tokens, in whole numbers.`,
       );
       return;
     }
@@ -1269,12 +1354,7 @@ export function TokenComposer({ search }: { search: string }) {
     if (
       !eligible ||
       !accepted ||
-      !Number.isSafeInteger(inputTokens) ||
-      !Number.isSafeInteger(outputTokens) ||
-      inputTokens < minimumInputTokens ||
-      inputTokens > 10_000_000 ||
-      outputTokens < 1 ||
-      outputTokens > 1_000_000 ||
+      !validQuantities ||
       !price ||
       price < MIN_ORDER_PRICE_CENTS ||
       price > purchaseLimit ||
@@ -1422,12 +1502,7 @@ export function TokenComposer({ search }: { search: string }) {
                     (!uncertainOrder &&
                       (!eligible ||
                         !accepted ||
-                        !Number.isSafeInteger(inputTokens) ||
-                        !Number.isSafeInteger(outputTokens) ||
-                        inputTokens < minimumInputTokens ||
-                        inputTokens > 10_000_000 ||
-                        outputTokens < 1 ||
-                        outputTokens > 1_000_000 ||
+                        !validQuantities ||
                         (mode === 'instant'
                           ? !quoteFresh || !allowInstant || selected!.priceCents > purchaseLimit
                           : maximum < 0.01 || maximum > purchaseLimit)))
@@ -1525,7 +1600,7 @@ export function TokenComposer({ search }: { search: string }) {
                     <input
                       type="number"
                       required
-                      min={1}
+                      min={minimumOutputTokens}
                       max={1000000}
                       step={1}
                       value={outputTokens}
@@ -1537,11 +1612,70 @@ export function TokenComposer({ search }: { search: string }) {
                   </label>
                 </div>
                 {routes.length > 0 && (
-                  <p className="inference-muted">
-                    Routes reserve at least{' '}
-                    {count(Math.min(...routes.map((route) => route.minimumInputReservation)))} input
-                    tokens per request. Output tokens include all charged generation.
-                  </p>
+                  <>
+                    <p className="inference-muted">
+                      {walletFunding
+                        ? `Standalone packs need at least ${count(minimumInputTokens)} input and ${count(minimumOutputTokens)} output tokens for an available route.`
+                        : `This purchase needs at least ${count(minimumInputTokens)} input and ${count(minimumOutputTokens)} output tokens after available quota from the same provider. The server verifies quota compatibility before purchase.`}{' '}
+                      Output tokens include all charged generation.
+                    </p>
+                    {walletFunding && routes.some((route) => route.inputAccounting) && (
+                      <p className="inference-muted">
+                        The smallest input pack only covers one message with one byte of text.
+                        Larger prompts and additional messages need more input allowance for their
+                        text and request framing. Buy enough input for your full request; wallet
+                        packs cannot combine quota with other purchases.
+                      </p>
+                    )}
+                    {walletFunding && routes.some((route) => route.inputAccounting) && (
+                      <div>
+                        <label className="field">
+                          <span>Sample prompt · optional single user message</span>
+                          <textarea
+                            rows={3}
+                            maxLength={60000}
+                            value={samplePrompt}
+                            onChange={(event) => {
+                              setSamplePrompt(event.target.value);
+                              invalidate();
+                            }}
+                          />
+                        </label>
+                        <p className="inference-muted">
+                          This text stays in your browser. Size one user message including request
+                          framing; a conversation with more messages needs more allowance.
+                        </p>
+                        {promptInputAllowance !== null && (
+                          <>
+                            <p className="inference-muted" role="status">
+                              An input allowance of {count(promptInputAllowance)} tokens covers this
+                              single user message on the available routes. Actual usage is settled
+                              after generation.
+                            </p>
+                            <button
+                              type="button"
+                              className="button secondary small"
+                              onClick={() => {
+                                setInputTokens(promptInputAllowance);
+                                invalidate();
+                              }}
+                            >
+                              Use this input allowance
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    )}
+                    {!validQuantities && (
+                      <p className="inference-warning" role="status">
+                        {walletFunding &&
+                        promptInputAllowance !== null &&
+                        inputTokens < promptInputAllowance
+                          ? `Increase input allowance to ${count(promptInputAllowance)} tokens to cover your sample message.`
+                          : `Choose whole-number quantities of at least ${count(minimumInputTokens)} input and ${count(minimumOutputTokens)} output tokens that fit the same available provider route.`}
+                      </p>
+                    )}
+                  </>
                 )}
               </FormSection>
               <FormSection title="Purchase method">
@@ -1603,16 +1737,7 @@ export function TokenComposer({ search }: { search: string }) {
                     <button
                       type="button"
                       className="button secondary"
-                      disabled={
-                        quoting ||
-                        !eligible ||
-                        !Number.isSafeInteger(inputTokens) ||
-                        !Number.isSafeInteger(outputTokens) ||
-                        inputTokens < minimumInputTokens ||
-                        inputTokens > 10_000_000 ||
-                        outputTokens < 1 ||
-                        outputTokens > 1_000_000
-                      }
+                      disabled={quoting || !eligible || !validQuantities}
                       onClick={() => void getQuotes()}
                     >
                       {quoting ? <Spinner label="Getting prices" /> : 'Get instant prices'}

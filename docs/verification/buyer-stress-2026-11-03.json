@@ -1,0 +1,312 @@
+{
+  "testedAt": "2026-11-03T18:18:05.444Z",
+  "models": {
+    "model": "gpt-6.1-sol",
+    "reasoning": "medium",
+    "agents": 3
+  },
+  "applicationChanged": false,
+  "compute": {
+    "buyers": [
+      {
+        "buyer": 1,
+        "requestId": "b4783cef-f0c8-412f-babe-85fbd9058b91",
+        "vmId": "5dcf96f2-f34d-4ae5-8eaf-467db64ed22c",
+        "environmentId": "env_c110953c92634c65b6f1eae5e9565b71",
+        "catalog": "Micro · E2B",
+        "admittedAt": "2026-11-03T18:16:12.412Z",
+        "readyAt": "2026-11-03T18:16:20.581Z",
+        "cleanupConfirmedAt": "2026-11-03T18:16:29.051Z",
+        "finalStatus": "terminated",
+        "invoiceCount": 1,
+        "invoiceCents": 4.5,
+        "wallet": {
+          "balanceCents": 500,
+          "reservedCents": 0,
+          "availableCents": 500,
+          "currency": "USD",
+          "kind": "broker-pilot-credit",
+          "wickComputeCreditsSeparate": true
+        },
+        "duplicateCreateSafe": true,
+        "changedPayloadRejected": true,
+        "terminalCommandVerified": true,
+        "fileOutputCaptured": false
+      },
+      {
+        "buyer": 2,
+        "requestId": "ebd307f3-21f6-438b-854f-11f5ad383fe7",
+        "vmId": "40d86aa2-4ae1-47b9-96cf-aca1b33169f5",
+        "environmentId": "env_19b097a2d0c6477487058d1b17d8922a",
+        "catalog": "Micro · Daytona",
+        "admittedAt": "2026-11-03T18:16:14.014Z",
+        "readyAt": "2026-11-03T18:16:18.112Z",
+        "cleanupConfirmedAt": "2026-11-03T18:16:27.097Z",
+        "finalStatus": "terminated",
+        "invoiceCount": 1,
+        "invoiceCents": 4.5,
+        "wallet": {
+          "balanceCents": 500,
+          "reservedCents": 0,
+          "availableCents": 500,
+          "currency": "USD",
+          "kind": "broker-pilot-credit",
+          "wickComputeCreditsSeparate": true
+        },
+        "duplicateCreateSafe": true,
+        "changedPayloadRejected": true,
+        "terminalCommandVerified": true,
+        "fileOutputCaptured": true
+      },
+      {
+        "buyer": 3,
+        "requestId": "f48b12cd-9248-49c9-a779-10441a4a85bf",
+        "vmId": "561a6927-3937-41c0-b0d8-6c406570f049",
+        "environmentId": "env_28dc6db90ed543afa56ce20fbf5a23eb",
+        "catalog": "Micro · Modal",
+        "admittedAt": "2026-11-03T18:16:13.469Z",
+        "readyAt": "2026-11-03T18:17:20.632Z",
+        "cleanupConfirmedAt": "2026-11-03T18:17:59.197Z",
+        "finalStatus": "terminated",
+        "invoiceCount": 1,
+        "invoiceCents": 1,
+        "wallet": {
+          "balanceCents": 500,
+          "reservedCents": 0,
+          "availableCents": 500,
+          "currency": "USD",
+          "kind": "broker-pilot-credit",
+          "wickComputeCreditsSeparate": true
+        },
+        "duplicateCreateSafe": true,
+        "changedPayloadRejected": true,
+        "terminalCommandVerified": true,
+        "fileOutputCaptured": false
+      },
+      {
+        "buyer": 4,
+        "requestId": "a7b5488c-1ac3-4094-8549-e7ce2925e542",
+        "vmId": "36549001-6d6c-4dde-b5f4-d804974f0b8e",
+        "environmentId": "env_706406ed58904d8b8d15a0acda0357c9",
+        "catalog": "Micro · Sail",
+        "admittedAt": "2026-11-03T18:16:13.270Z",
+        "readyAt": "2026-11-03T18:16:26.527Z",
+        "cleanupConfirmedAt": "2026-11-03T18:16:35.080Z",
+        "finalStatus": "terminated",
+        "invoiceCount": 1,
+        "invoiceCents": 3.24,
+        "wallet": {
+          "balanceCents": 500,
+          "reservedCents": 0,
+          "availableCents": 500,
+          "currency": "USD",
+          "kind": "broker-pilot-credit",
+          "wickComputeCreditsSeparate": true
+        },
+        "duplicateCreateSafe": true,
+        "changedPayloadRejected": true,
+        "terminalCommandVerified": true,
+        "fileOutputCaptured": false
+      },
+      {
+        "buyer": 5,
+        "requestId": "ae6bc9d0-b583-4612-98b0-b937df13ac18",
+        "vmId": "32cf5f48-d269-4e44-af38-35f155481dd7",
+        "environmentId": "env_abb11240c304400a9be76a41d6f068c6",
+        "catalog": "Micro · Tenki",
+        "admittedAt": "2026-11-03T18:16:24.086Z",
+        "readyAt": "2026-11-03T18:16:27.566Z",
+        "cleanupConfirmedAt": "2026-11-03T18:16:36.688Z",
+        "finalStatus": "terminated",
+        "invoiceCount": 1,
+        "invoiceCents": 5.4,
+        "wallet": {
+          "balanceCents": 498,
+          "reservedCents": 0,
+          "availableCents": 498,
+          "currency": "USD",
+          "kind": "broker-pilot-credit",
+          "wickComputeCreditsSeparate": true
+        },
+        "duplicateCreateSafe": true,
+        "changedPayloadRejected": true,
+        "terminalCommandVerified": true,
+        "fileOutputCaptured": false
+      }
+    ],
+    "peakConfirmedReadyOverlap": 2,
+    "invoiceTotalCents": 18.64,
+    "fullTtlCatalogEstimateUsd": 0.1044,
+    "limitations": [
+      "Terminal harness returned after uname plus echoed file-write command; actual file cat output only captured for Daytona.",
+      "Peak native running not sampled directly; only broker readiness timestamps available.",
+      "Boat failed pre-ready with native cleanup complete while broker cleanup stuck; parent reconciled via existing domain helper, confirmed cleanup timestamp18:17:42.860Z, zero invoices."
+    ]
+  },
+  "nativeFinal": [
+    {
+      "id": "env_c110953c92634c65b6f1eae5e9565b71",
+      "status": "terminated",
+      "cleanup": "complete",
+      "terminatedAt": "2026-11-03T18:16:25.779Z",
+      "ready": false
+    },
+    {
+      "id": "env_19b097a2d0c6477487058d1b17d8922a",
+      "status": "terminated",
+      "cleanup": "complete",
+      "terminatedAt": "2026-11-03T18:16:23.775Z",
+      "ready": false
+    },
+    {
+      "id": "env_28dc6db90ed543afa56ce20fbf5a23eb",
+      "status": "terminated",
+      "cleanup": "complete",
+      "terminatedAt": "2026-11-03T18:17:55.153Z",
+      "ready": false
+    },
+    {
+      "id": "env_706406ed58904d8b8d15a0acda0357c9",
+      "status": "terminated",
+      "cleanup": "complete",
+      "terminatedAt": "2026-11-03T18:16:33.646Z",
+      "ready": false
+    },
+    {
+      "id": "env_abb11240c304400a9be76a41d6f068c6",
+      "status": "terminated",
+      "cleanup": "complete",
+      "terminatedAt": "2026-11-03T18:16:34.608Z",
+      "ready": false
+    }
+  ],
+  "boatNative": {
+    "observedAt": "2026-11-03T18:15:13.504Z",
+    "id": "env_46267607a3e6498a8ef7c2f20a9f973e",
+    "name": "wick-broker-c497559a",
+    "status": "failed",
+    "provider": "boat",
+    "profile": "small",
+    "createdAt": "2026-11-03T18:11:19.635Z",
+    "expiresAt": "2026-11-03T18:26:19.635Z",
+    "terminatedAt": "2026-11-03T18:12:31.600Z",
+    "launch": {
+      "provider": "Wick's Boat account",
+      "state": "failed",
+      "routesExhausted": false,
+      "nextAction": "retry",
+      "cleanup": "complete",
+      "reason": "internal",
+      "deadlineAt": "2026-11-03T18:14:19.635Z"
+    },
+    "billingMode": "wick_managed",
+    "fields": [
+      "id",
+      "organizationId",
+      "groupId",
+      "creatorId",
+      "name",
+      "status",
+      "createdAt",
+      "profile",
+      "provider",
+      "region",
+      "rateMicrosPerSecond",
+      "operationId",
+      "requiresReconciliation",
+      "planRuntimeDeadline",
+      "providerDisplayName",
+      "launchDeadlineAt",
+      "privateToCreator",
+      "previewEnabled",
+      "featureCapabilities",
+      "resources",
+      "billingMode",
+      "terminatedAt",
+      "failure",
+      "templateVersionId",
+      "expiresAt",
+      "templateManaged",
+      "allocationKnown",
+      "ttlSeconds",
+      "launch"
+    ]
+  },
+  "boatReconciliation": {
+    "event": "test_cleanup_reconciled",
+    "vmId": "c497559a-b2b3-44e8-bb51-e1304dcd192a",
+    "environmentId": "env_46267607a3e6498a8ef7c2f20a9f973e",
+    "upstreamStatus": "failed",
+    "upstreamCleanup": "complete",
+    "upstreamTerminatedAt": "2026-11-03T18:12:31.600Z",
+    "status": "failed",
+    "cleanup_confirmed_at": "2026-11-03T18:17:42.860Z",
+    "active_holds": 0,
+    "invoices": 0
+  },
+  "finalHealth": {
+    "ready": {
+      "status": "ready",
+      "queue": "running"
+    },
+    "providerHolds": [
+      {
+        "name": "Baseten",
+        "held": 0
+      },
+      {
+        "name": "Boat.dev",
+        "held": 0
+      },
+      {
+        "name": "Daytona",
+        "held": 0
+      },
+      {
+        "name": "Demo supplier 1 · Wick-backed",
+        "held": 0
+      },
+      {
+        "name": "Demo supplier 2 · Wick-backed",
+        "held": 0
+      },
+      {
+        "name": "E2B",
+        "held": 0
+      },
+      {
+        "name": "Freestyle",
+        "held": 0
+      },
+      {
+        "name": "Modal",
+        "held": 0
+      },
+      {
+        "name": "Sail",
+        "held": 0
+      },
+      {
+        "name": "Supplier C",
+        "held": 0
+      },
+      {
+        "name": "Tenki",
+        "held": 0
+      }
+    ],
+    "unresolved": []
+  },
+  "walletTest": {
+    "buyer": 5,
+    "purchases": 2,
+    "spentCents": 2,
+    "balanceCents": 498,
+    "reservedCents": 0,
+    "successfulCompletionId": "4a03ee42-c18b-4420-93b2-ee9504573357",
+    "inputTokens": 150,
+    "outputTokens": 58
+  },
+  "offlineTestsPassed": 112,
+  "browserPageVisits": 26
+}

@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   ArrowDown,
   ArrowRight,
@@ -13,8 +13,10 @@ import {
   ShieldCheck,
   Sparkles,
   Square,
+  SquareTerminal,
 } from 'lucide-react';
 import type { DemoState, DemoKeyResponse, DemoKind, DemoRun } from '../shared/demo';
+import { PROVIDER_REGISTRY } from '../shared/providers';
 import { api, money, post } from './api';
 import './homepage-demo.css';
 
@@ -25,8 +27,14 @@ type DemoKey = DemoKeyResponse;
 const ongoing = (status?: string) => !!status && !['ended', 'failed'].includes(status);
 const command = 'python3 /workspace/hello_muse.py';
 const count = (n: number) => n.toLocaleString('en-US');
-const providerName = (provider: string) =>
-  ({ modal: 'Modal', e2b: 'E2B', baseten: 'Baseten' })[provider] ?? provider;
+/** Compute sellers use the native registry; Muse token sellers are Baseten and Modal. */
+const PROVIDER_NAMES: Record<string, string> = {
+  ...Object.fromEntries(PROVIDER_REGISTRY.map((p) => [p.id, p.name])),
+  baseten: 'Baseten',
+  modal: 'Modal',
+};
+const providerName = (provider: string | null | undefined) =>
+  provider ? (PROVIDER_NAMES[provider] ?? provider) : 'Pending';
 function catalogLabel(catalogId?: string) {
   if (!catalogId) return null;
   const [, size, region] = catalogId.split(':');
@@ -60,6 +68,7 @@ export function useHomepageDemo() {
   const startOperation = useRef(crypto.randomUUID()),
     endOperation = useRef(crypto.randomUUID());
   const attemptedKind = useRef<DemoKind | null>(null);
+  const attemptedName = useRef('');
   const keyRun = useRef<string | null>(null);
   const wasCooling = useRef(false);
   const accept = useCallback((next: DemoState) => {
@@ -135,11 +144,12 @@ export function useHomepageDemo() {
     const timer = setInterval(() => setNow(Date.now() + offset.current), 1000);
     return () => clearInterval(timer);
   }, [active, cooldown]);
-  async function act(action: 'start' | 'end' | 'key', kind: DemoKind = 'terminal') {
+  async function act(action: 'start' | 'end' | 'key', kind: DemoKind = 'terminal', demoName = '') {
     if (actionLock.current) return;
     if (action === 'start') {
       // An uncertain start must retry the same kind with the same operation key.
       if (attemptedKind.current && attemptedKind.current !== kind) return;
+      if (!attemptedKind.current) attemptedName.current = demoName.trim();
       attemptedKind.current = kind;
       setStartKind(kind);
     }
@@ -160,10 +170,27 @@ export function useHomepageDemo() {
           setKeyUncertain(false);
         }
       } else {
-        const next = await post<DemoState>(`/api/demo/${action}`, {
-          operationKey: action === 'start' ? startOperation.current : endOperation.current,
-          ...(action === 'start' ? { kind: attemptedKind.current } : {}),
-        });
+        const submit = async () => {
+          // Save the guest cookie before allocating resources so a lost start response
+          // can still be recovered by this browser's next status read.
+          if (action === 'start') await post<null>('/api/demo/session');
+          return post<DemoState>(`/api/demo/${action}`, {
+            operationKey: action === 'start' ? startOperation.current : endOperation.current,
+            ...(action === 'start'
+              ? {
+                  kind: attemptedKind.current,
+                  ...(attemptedKind.current === 'studio' && attemptedName.current
+                    ? { demoName: attemptedName.current }
+                    : {}),
+                }
+              : {}),
+          });
+        };
+        // Serialize first starts across tabs so they register the same browser identity.
+        const next =
+          action === 'start' && navigator.locks?.request
+            ? await navigator.locks.request('wick-demo-start', submit)
+            : await submit();
         if (mounted.current) {
           accept(next);
           if (action === 'start') {
@@ -206,7 +233,30 @@ export function useHomepageDemo() {
 }
 export type HomepageDemo = ReturnType<typeof useHomepageDemo>;
 
-export function DemoAction({ demo, kind = 'terminal' }: { demo: HomepageDemo; kind?: DemoKind }) {
+export function StudioDemoTask({ name = '' }: { name?: string }) {
+  return (
+    <label className="demo-task-box">
+      <span>Your Muse task</span>
+      <textarea
+        aria-label="Your Muse task"
+        value={`Create hello_world.py that prints Hello, ${name.trim() || 'World'}! Run it and verify the output.`}
+        readOnly
+        rows={3}
+      />
+      <small>Fixed Hello World task for this hackathon demo · Up to 2 model calls</small>
+    </label>
+  );
+}
+
+export function DemoAction({
+  demo,
+  kind = 'terminal',
+  demoName = '',
+}: {
+  demo: HomepageDemo;
+  kind?: DemoKind;
+  demoName?: string;
+}) {
   const { data, loading, busy, active, cooldown } = demo;
   if (data?.run && (active || cooldown)) {
     if ((data.run.kind ?? 'terminal') !== kind)
@@ -229,13 +279,14 @@ export function DemoAction({ demo, kind = 'terminal' }: { demo: HomepageDemo; ki
   return (
     <button
       className="button primary"
-      onClick={() => void demo.act('start', kind)}
+      onClick={() => void demo.act('start', kind, demoName)}
       disabled={
         loading ||
         !!busy ||
         !data?.available ||
         !data?.enabled ||
-        (!!demo.startKind && demo.startKind !== kind)
+        (!!demo.startKind && demo.startKind !== kind) ||
+        (kind === 'studio' && !/^[\p{L}\p{N} .'-]{0,40}$/u.test(demoName.trim()))
       }
     >
       {busy === 'start' && demo.startKind === kind ? (
@@ -251,97 +302,122 @@ export function DemoAction({ demo, kind = 'terminal' }: { demo: HomepageDemo; ki
   );
 }
 
-export function DemoOverview({ demo }: { demo: HomepageDemo }) {
-  const { data, loading, active, cooldown, now } = demo;
+/** The terminal demo's choice card. The start action renders in its footer. */
+export function DemoOverview({ demo, children }: { demo: HomepageDemo; children?: ReactNode }) {
+  const { data } = demo;
+  const fixture = data?.mode === 'fixture';
   return (
-    <section id="demo-overview" className="demo-overview" aria-labelledby="demo-overview-title">
+    <section id="demo-overview" className="demos-card" aria-labelledby="demo-overview-title">
       <div className="demo-card-top">
         <span>
-          <i className="demo-live-dot" />{' '}
-          {data?.mode === 'fixture' ? 'FIXTURE DEMO PREVIEW' : 'HACKATHON LIVE DEMO'}
+          <i className="demo-live-dot" /> {fixture ? 'TERMINAL DEMO · FIXTURE' : 'TERMINAL DEMO'}
         </span>
         <span className="demo-sponsored">Sponsored</span>
       </div>
-      <div className="demo-overview-intro">
+      <div className="demos-card-body">
+        <span className="demos-card-icon" aria-hidden="true">
+          <SquareTerminal size={26} />
+        </span>
         <h2 id="demo-overview-title">
           From auction to <br />
           “Hello, Muse.”
         </h2>
         <p>
-          {data?.mode === 'fixture'
-            ? 'A simulated VM. Fixture model responses.'
-            : 'A real VM. Real Meta inference.'}
-          <br />
-          {data?.mode === 'fixture'
-            ? 'Explore the flow without live resources.'
-            : 'A small experiment, on us.'}
+          {fixture
+            ? 'A simulated VM. Fixture model responses. Explore the flow without live resources.'
+            : 'A real VM. Real Meta inference. Watch providers bid, then Muse explains what you bought and answers one question.'}
         </p>
+        <div className="demos-card-flow" aria-label="How the terminal demo works">
+          <span>Win two auctions</span>
+          <ArrowRight size={13} />
+          <span>Run hello_muse.py</span>
+          <ArrowRight size={13} />
+          <span>Ask Muse</span>
+        </div>
+        <div className="demo-included">
+          <div>
+            <span className="demo-resource-icon">
+              <Server size={20} />
+            </span>
+            <div>
+              <strong>Private Linux VM</strong>
+              <span>
+                Modal Micro · {data?.limits.durationMinutes ?? 15} minutes including setup
+              </span>
+              <span>1¢ after demo sponsorship · $0 to you</span>
+            </div>
+            <span className="demo-included-mark">01</span>
+          </div>
+          <div>
+            <span className="demo-resource-icon">
+              <Sparkles size={20} />
+            </span>
+            <div>
+              <strong>Meta Muse token pack</strong>
+              <span>Muse Spark Open · up to {data?.limits.maxRequests ?? 2} calls</span>
+            </div>
+            <span className="demo-included-mark">02</span>
+          </div>
+          <div>
+            <span className="demo-resource-icon">
+              <HardDrive size={20} />
+            </span>
+            <div>
+              <strong>Your own demo disk</strong>
+              <span>hello_muse.py and your auction receipt</span>
+            </div>
+            <span className="demo-included-mark">03</span>
+          </div>
+        </div>
       </div>
-      <div className="demo-included">
-        <div>
-          <span className="demo-resource-icon">
-            <Server size={20} />
-          </span>
-          <div>
-            <strong>Private Linux VM</strong>
-            <span>Modal Micro · {data?.limits.durationMinutes ?? 15} minutes including setup</span>
-            <span>1¢ after demo sponsorship · $0 to you</span>
-          </div>
-          <span className="demo-included-mark">01</span>
-        </div>
-        <div>
-          <span className="demo-resource-icon">
-            <Sparkles size={20} />
-          </span>
-          <div>
-            <strong>Meta Muse token pack</strong>
-            <span>Baseten · up to {data?.limits.maxRequests ?? 2} calls</span>
-          </div>
-          <span className="demo-included-mark">02</span>
-        </div>
-        <div>
-          <span className="demo-resource-icon">
-            <HardDrive size={20} />
-          </span>
-          <div>
-            <strong>Your own demo disk</strong>
-            <span>hello_muse.py, ready to run</span>
-          </div>
-          <span className="demo-included-mark">03</span>
-        </div>
-      </div>
-      <div className="demo-overview-footer">
-        <ShieldCheck size={15} />
+      <div className="demos-card-footer">
+        {children}
         <p>
-          No account or payment needed.
-          <br />
-          Try again 20 minutes after your VM ends.
+          <ShieldCheck size={14} /> No account or payment needed. Paste a demo key when the script
+          asks.
         </p>
-      </div>
-      <div className="demo-availability" role="status">
-        {loading ? (
-          <>
-            <LoaderCircle size={13} className="demo-spinner" /> Checking live availability…
-          </>
-        ) : active ? (
-          <>
-            <i className="demo-live-dot" /> Your demo is in progress below
-          </>
-        ) : cooldown ? (
-          <>
-            <Clock3 size={13} /> Next demo in {clock(data?.cooldownUntil, now)}
-          </>
-        ) : data?.available && data.enabled ? (
-          <>
-            <i className="demo-live-dot" /> Ready when you are
-          </>
-        ) : (
-          <>
-            <Clock3 size={13} /> {data?.reason || 'Live demo is currently unavailable.'}
-          </>
-        )}
       </div>
     </section>
+  );
+}
+
+/** Shared availability for both demos: they share one session, lease and cooldown. */
+export function DemoAvailability({ demo }: { demo: HomepageDemo }) {
+  const { data, loading, active, cooldown, now } = demo;
+  const reason =
+    !data?.run && data?.reason === 'A demo is already active for this browser or connection.'
+      ? 'A demo is active in another browser session on this network. Open the browser or profile where it was started to view it.'
+      : !data?.run && data?.reason?.startsWith('This network has used its demo allowance.')
+        ? `${data.reason} If you started a demo, open its original browser or profile to view it.`
+        : data?.reason || 'Live demo is currently unavailable.';
+  return (
+    <div className="demo-availability" role="status">
+      {loading ? (
+        <>
+          <LoaderCircle size={13} className="demo-spinner" /> Checking live availability…
+        </>
+      ) : active ? (
+        <>
+          <i className="demo-live-dot" /> Your demo is in progress below
+        </>
+      ) : cooldown ? (
+        <>
+          <Clock3 size={13} />
+          <span>
+            {!data?.run && 'Another browser session on this network used the demo allowance. '}
+            Next demo in {clock(data?.cooldownUntil, now)}
+          </span>
+        </>
+      ) : data?.available && data.enabled ? (
+        <>
+          <i className="demo-live-dot" /> Ready when you are
+        </>
+      ) : (
+        <>
+          <Clock3 size={13} /> {reason}
+        </>
+      )}
+    </div>
   );
 }
 
@@ -435,7 +511,7 @@ function AuctionCard({ type, demo }: { type: 'compute' | 'tokens'; demo: Homepag
                 ? 'Selected'
                 : won
                   ? 'Not selected'
-                  : compute && index === 0
+                  : index === 0 && (compute || bids.length > 1)
                     ? 'Lowest bid'
                     : 'Bid received'}
             </span>
@@ -456,8 +532,8 @@ function AuctionCard({ type, demo }: { type: 'compute' | 'tokens'; demo: Homepag
       )}
       <p className="demo-auction-note">
         {compute
-          ? 'Actual bids, ranked by demo price. Modal has sponsored priority on equal bids. '
-          : 'One eligible token provider in this demo. '}
+          ? 'Every qualified Micro seller is invited. Actual bids, ranked by demo price; Modal has sponsored priority on equal bids. '
+          : 'Every qualified Muse seller is invited; the lowest bid wins. '}
         {won
           ? 'The awarded price is covered for you.'
           : 'The winner is confirmed after the 30-second auction closes.'}
@@ -534,7 +610,7 @@ function GuidedStudio({
     status === 'passed' &&
     studio?.exitCode === 0 &&
     !!studio.verifiedAt &&
-    studio.stdout === 'Hello, World!\n';
+    studio.stdout === `Hello, ${run.demoName || 'World'}!\n`;
   const finished = verified || status === 'needs_attention';
   const label = verified
     ? mode === 'fixture'
@@ -566,8 +642,8 @@ function GuidedStudio({
         </span>
       </div>
       <p className="demo-studio-task">
-        The task: write <code>hello_world.py</code> to print <code>Hello, World!</code>, then run it
-        and check the result.
+        The task: write <code>hello_world.py</code> to print{' '}
+        <code>Hello, {run.demoName || 'World'}!</code>, then run it and check the result.
       </p>
       <p className="demo-studio-explanation">
         This guided demo generates one Python file. It uses the purchased Muse allowance
@@ -741,6 +817,7 @@ export function HomepageDemoSession({ demo }: { demo: HomepageDemo }) {
           Fixture environment · resources and inference are simulated.
         </p>
       )}
+      {isStudio && <StudioDemoTask name={run.demoName} />}
       <ol className="demo-progress" aria-label="Demo progress">
         {[
           'Live auctions',
@@ -931,7 +1008,7 @@ export function HomepageDemoSession({ demo }: { demo: HomepageDemo }) {
           <div className="demo-usage">
             <span>
               <Sparkles size={15} />
-              Meta Muse · Baseten
+              Meta Muse · {providerName(run.tokens?.provider)}
             </span>
             <span>
               {count(run.tokens?.availableInput ?? 0)} input {museCallsUsed ? 'unused' : 'left'}

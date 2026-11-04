@@ -10,7 +10,13 @@ import {
 } from './table';
 import { useRef, useState } from 'react';
 import { ArrowLeft, ArrowRight, Copy, KeyRound, RefreshCw, Sparkles, X } from 'lucide-react';
-import type { TokenPack } from '../shared/inference';
+import { utf8InputReservation, type InferenceCatalog, type TokenPack } from '../shared/inference';
+import {
+  buildInferenceJavaScriptExample,
+  exampleOutputBudget,
+  OUTPUT_LIMIT_GUIDANCE,
+  INFERENCE_STARTER_PROMPT,
+} from './inference-examples';
 import type { BrokerKeySummary } from '../shared/developer';
 import { ApiError, dateTime, money, post } from './api';
 import {
@@ -391,6 +397,7 @@ function CopyValue({ value, label }: { value: string; label: string }) {
 }
 function ConnectBatch({ id, onClose }: { id: string; onClose: () => void }) {
   const resource = useResource<TokenPack>(`/api/inference/packs/${encodeURIComponent(id)}`),
+    catalog = useResource<InferenceCatalog>('/api/inference/models'),
     now = useNow();
   const [access, setAccess] = useState<BatchAccess | null>(null),
     [busy, setBusy] = useState(false),
@@ -421,8 +428,32 @@ function ConnectBatch({ id, onClose }: { id: string; onClose: () => void }) {
   }
   const baseUrl = access?.connection.baseUrl ?? `${window.location.origin}/api/v1`,
     model = access?.connection.model ?? pack?.modelId ?? 'meta/muse-spark-open';
-  const maxTokens = Math.max(1, Math.min(512, pack?.availableOutputTokens ?? 512));
-  const setup = `export OPENAI_BASE_URL="${baseUrl}"\nexport OPENAI_MODEL="${model}"\nexport OPENAI_API_KEY="<your batch key>"\n# Use a unique ID per logical call; keep it unchanged when checking a timeout.\nexport BROKER_OPERATION_KEY="your-unique-task-call-id"\ncurl "$OPENAI_BASE_URL/chat/completions" \\\n  -H "Authorization: Bearer $OPENAI_API_KEY" \\\n  -H "Idempotency-Key: $BROKER_OPERATION_KEY" \\\n  -H "Content-Type: application/json" \\\n  -d '{"model":"${model}","messages":[{"role":"user","content":"Help me complete my task."}],"max_tokens":${maxTokens}}'`;
+  const route = catalog.data?.routes.find((route) => route.provider === pack?.provider);
+  const requiredInput =
+    route?.inputAccounting === 'utf8-bytes-v1'
+      ? utf8InputReservation(
+          [{ role: 'user', content: INFERENCE_STARTER_PROMPT }],
+          route.maximumInputReservation ?? route.minimumInputReservation,
+        )
+      : route?.minimumInputReservation;
+  const hasInputQuota =
+    pack && requiredInput !== undefined && pack.availableInputTokens >= requiredInput;
+  const maxTokens =
+    pack && route?.qualified && hasInputQuota
+      ? exampleOutputBudget({
+          availableOutputTokens: pack.availableOutputTokens,
+          minimumOutputTokens: route.minimumOutputTokens,
+          maximumOutputTokens: route.maximumOutputTokens,
+        })
+      : null;
+  const setup =
+    maxTokens === null
+      ? null
+      : buildInferenceJavaScriptExample({
+          baseURL: baseUrl,
+          model,
+          maxOutputTokens: maxTokens,
+        });
   return (
     <MarketDialog titleId="connect-batch-title" onClose={onClose} busy={busy}>
       <div className="token-connect-heading">
@@ -465,6 +496,17 @@ function ConnectBatch({ id, onClose }: { id: string; onClose: () => void }) {
             <span>Model</span>
             <input readOnly value={model} />
           </label>
+          <p>{OUTPUT_LIMIT_GUIDANCE}</p>
+          <ErrorBox error={catalog.error} retry={catalog.reload} />
+          {!catalog.loading && !setup && (
+            <p role="status">
+              {route?.qualified
+                ? hasInputQuota
+                  ? 'Insufficient output allowance for a valid call. Buy another batch or use an agent key with compatible quota.'
+                  : 'Insufficient input allowance for the example prompt. Buy another batch or use an agent key with compatible quota.'
+                : 'Provider limits are unavailable or this route is not qualified. Refresh provider availability before calling.'}
+            </p>
+          )}
           <ErrorBox error={error} />
           {access ? (
             <>
@@ -494,11 +536,22 @@ function ConnectBatch({ id, onClose }: { id: string; onClose: () => void }) {
                 {dateTime(access.connection.expiresAt)} and retains this batch’s original token
                 allowance.
               </p>
-              <details className="token-connect-code" open>
-                <summary>Use in your app or terminal</summary>
-                <pre tabIndex={0}>{setup}</pre>
-                <CopyValue value={setup} label="Copy setup example" />
-              </details>
+              {setup && (
+                <details className="token-connect-code" open>
+                  <summary>JavaScript setup example</summary>
+                  <p>
+                    Install <code>openai</code>, save this example as <code>example.mjs</code>, set{' '}
+                    <code>BROKER_API_KEY</code> to your batch key, and run{' '}
+                    <code>node example.mjs</code>.
+                  </p>
+                  <p>
+                    This example allows up to {count(maxTokens!)} output tokens from this batch.
+                    Refresh its remaining quota before another call.
+                  </p>
+                  <pre tabIndex={0}>{setup}</pre>
+                  <CopyValue value={setup} label="Copy setup example" />
+                </details>
+              )}
             </>
           ) : (
             <>

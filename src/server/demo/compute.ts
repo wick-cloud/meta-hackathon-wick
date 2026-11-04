@@ -1,5 +1,6 @@
 import type { Pool, PoolClient } from 'pg';
 import type { Actor, CatalogItem } from '../../shared/types.js';
+import { isCloudProvider } from '../../shared/providers.js';
 import { isMoneyCents, subtractCents } from '../../shared/money.js';
 import { commissionPricing, fixedQuote, requireCurrentRate } from '../../shared/pricing.js';
 import { HttpError, type AppContext } from '../context.js';
@@ -8,7 +9,10 @@ import type { Row } from '../marketplace/data.js';
 import { availableForBids } from '../marketplace/policy.js';
 import { modalComputePromotionQuote } from '../marketplace/compute-promotion.js';
 
-export const DEMO_COMPUTE_CATALOG_IDS = ['modal:micro:auto', 'e2b:micro:us'] as const;
+/** Modal Micro is the sponsored anchor; every other qualified Micro route may also compete. */
+export const DEMO_MODAL_CATALOG_ID = 'modal:micro:auto';
+/** Matches the auction's automatic-bid fan-out bound. */
+export const DEMO_MAX_BIDDERS = 8;
 const VERSION = 'homepage-modal-credit-v1';
 /** Only a fenced demo worker may supply this argument; it is never read from HTTP input. */
 export interface DemoComputeSource {
@@ -32,28 +36,63 @@ export interface DemoComputePrice {
   effectivePriceCents: number;
 }
 
+/** A native Micro route; display names never select one. */
+function isDemoMicroRoute(item: Pick<CatalogItem, 'id' | 'provider' | 'profile' | 'region'>) {
+  return (
+    isCloudProvider(item.provider) &&
+    item.profile === 'micro' &&
+    item.id === `${item.provider}:${item.profile}:${item.region}`
+  );
+}
+
 export function demoComputeCatalogEligible(ctx: AppContext, item: CatalogItem): boolean {
   return Boolean(
-    DEMO_COMPUTE_CATALOG_IDS.includes(item.id as (typeof DEMO_COMPUTE_CATALOG_IDS)[number]) &&
-    item.id === `${item.provider}:${item.profile}:${item.region}` &&
-    item.profile === 'micro' &&
+    isDemoMicroRoute(item) &&
     !item.gpu &&
     item.durationMinutes.includes(15) &&
     diskCatalogEligible(ctx, item),
   );
 }
 
-/** Read-only supply discovery; submitBid still owns every binding policy/capacity check. */
+/** Approved, disk-capable Micro routes in the current mode, Modal first. */
+export async function demoComputeCatalogs(
+  ctx: AppContext,
+  db: Pool | PoolClient,
+): Promise<CatalogItem[]> {
+  const rows = (
+    await db.query(
+      `SELECT id,item FROM broker_catalog WHERE approved AND source_mode=$1
+        AND item->>'profile'='micro' ORDER BY id=$2 DESC,id LIMIT 32`,
+      [ctx.wick.mode, DEMO_MODAL_CATALOG_ID],
+    )
+  ).rows;
+  return rows
+    .map((row) => ({ ...row.item, id: row.id, approved: true }) as CatalogItem)
+    .filter((item) => demoComputeCatalogEligible(ctx, item));
+}
+
+/**
+ * Read-only supply discovery; submitBid still owns every binding policy/capacity check.
+ * Every seller with a qualified Micro offer inside the demo limit is invited, so the
+ * auction shows genuine competition. Modal is required (it receives the sponsorship)
+ * and so is at least one rival.
+ */
 export async function demoComputeProviders(
   ctx: AppContext,
   db: Pool | PoolClient,
   catalogs: CatalogItem[],
 ): Promise<string[]> {
+  const modal = catalogs.find((item) => item.id === DEMO_MODAL_CATALOG_ID);
+  if (!modal || !demoComputeCatalogEligible(ctx, modal))
+    throw new HttpError(409, 'The qualified Modal Micro disk route is required.');
+  const routes = [
+    modal,
+    ...catalogs.filter((item) => item.id !== modal.id && demoComputeCatalogEligible(ctx, item)),
+  ];
   const providerIds: string[] = [];
-  for (const id of DEMO_COMPUTE_CATALOG_IDS) {
-    const catalog = catalogs.find((item) => item.id === id);
-    if (!catalog || !demoComputeCatalogEligible(ctx, catalog))
-      throw new HttpError(409, 'The qualified Modal and E2B Micro disk routes are required.');
+  let rival = false;
+  for (const catalog of routes) {
+    const id = catalog.id;
     const candidates = (
       await db.query(
         `SELECT p.*,o.pricing,(SELECT count(*)::int FROM broker_holds h
@@ -68,7 +107,7 @@ export async function demoComputeProviders(
         [id, catalog.provider],
       )
     ).rows;
-    const provider = candidates.find((candidate) => {
+    const eligible = candidates.filter((candidate) => {
       try {
         let floor = 1;
         if (ctx.wick.mode === 'real') {
@@ -99,13 +138,21 @@ export async function demoComputeProviders(
         return false;
       }
     });
-    if (!provider)
-      throw new HttpError(
-        409,
-        'Modal and E2B need available Micro offers within the demo gross limit.',
-      );
-    providerIds.push(provider.id);
+    if (catalog === modal && !eligible.length)
+      throw new HttpError(409, 'Modal needs an available Micro offer within the demo gross limit.');
+    // Modal accounts never take the last slot, so a genuine rival can always be invited.
+    const limit = catalog === modal ? DEMO_MAX_BIDDERS - 1 : DEMO_MAX_BIDDERS;
+    for (const candidate of eligible)
+      if (providerIds.length < limit && !providerIds.includes(candidate.id)) {
+        providerIds.push(candidate.id);
+        if (catalog !== modal) rival = true;
+      }
   }
+  if (!rival)
+    throw new HttpError(
+      409,
+      'At least one competing Micro offer within the demo gross limit is required.',
+    );
   return providerIds;
 }
 
@@ -116,8 +163,9 @@ export function demoComputePolicy(request: Row): DemoComputePolicy | null {
     policy?.version !== VERSION ||
     typeof policy.runId !== 'string' ||
     !Array.isArray(policy.providerIds) ||
-    policy.providerIds.length !== 2 ||
-    new Set(policy.providerIds).size !== 2 ||
+    policy.providerIds.length < 2 ||
+    policy.providerIds.length > DEMO_MAX_BIDDERS ||
+    new Set(policy.providerIds).size !== policy.providerIds.length ||
     policy.providerIds.some((id: unknown) => typeof id !== 'string') ||
     policy.effectiveModalPriceCents !== 1 ||
     policy.maxGrossPriceCents !== 25 ||
@@ -176,7 +224,7 @@ export async function authorizeDemoComputeSource(
     run.lease_token !== source.leaseToken ||
     run.request_id ||
     input.diskId !== run.disk_id ||
-    input.catalogId !== DEMO_COMPUTE_CATALOG_IDS[0] ||
+    input.catalogId !== DEMO_MODAL_CATALOG_ID ||
     input.durationMinutes !== 15 ||
     input.maxPriceCents !== 25 ||
     input.region !== 'any' ||
@@ -227,13 +275,13 @@ export function demoComputePrice(
   if (
     !catalog ||
     !policy.providerIds.includes(providerId) ||
-    !DEMO_COMPUTE_CATALOG_IDS.includes(catalog.id as (typeof DEMO_COMPUTE_CATALOG_IDS)[number]) ||
+    !isDemoMicroRoute(catalog) ||
     !isMoneyCents(gross) ||
     gross < 1 ||
     gross > policy.maxGrossPriceCents
   )
     throw new HttpError(409, 'This offer is outside the fixed demo sponsorship.');
-  const effective = catalog.id === DEMO_COMPUTE_CATALOG_IDS[0] ? 1 : gross;
+  const effective = catalog.id === DEMO_MODAL_CATALOG_ID ? 1 : gross;
   return {
     version: VERSION,
     runId: policy.runId,
@@ -268,14 +316,14 @@ export function selectDemoBid(request: Row, bids: Row[]): Row {
       right = demoBidPrice(request, b);
     return (
       left.effectivePriceCents - right.effectivePriceCents ||
-      Number(b.offering_snapshot.catalog.id === DEMO_COMPUTE_CATALOG_IDS[0]) -
-        Number(a.offering_snapshot.catalog.id === DEMO_COMPUTE_CATALOG_IDS[0]) ||
+      Number(b.offering_snapshot.catalog.id === DEMO_MODAL_CATALOG_ID) -
+        Number(a.offering_snapshot.catalog.id === DEMO_MODAL_CATALOG_ID) ||
       new Date(a.created_at).getTime() - new Date(b.created_at).getTime() ||
       a.id.localeCompare(b.id)
     );
   });
   const winner = ranked[0];
-  if (!winner || winner.offering_snapshot.catalog.id !== DEMO_COMPUTE_CATALOG_IDS[0])
+  if (!winner || winner.offering_snapshot.catalog.id !== DEMO_MODAL_CATALOG_ID)
     throw new HttpError(
       409,
       'No eligible Modal Micro sponsorship offer arrived. No fallback VM was allocated.',

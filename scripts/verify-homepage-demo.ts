@@ -6,6 +6,8 @@ import WebSocket from 'ws';
 import { z } from 'zod';
 import type { DemoState } from '../src/shared/demo.js';
 import { isMoneyCents, moneyUnits } from '../src/shared/money.js';
+import { INFERENCE_PROVIDERS } from '../src/shared/inference.js';
+import { CLOUD_PROVIDERS } from '../src/shared/providers.js';
 
 /**
  * APP_URL=https://your-app.example npx tsx scripts/verify-homepage-demo.ts --live
@@ -91,6 +93,10 @@ function hiddenPromptReady(output: string): boolean {
   );
   return /(?:^|\n)Batch key: $/.test(plainTerminal(output));
 }
+/** The example's optional follow-up question; the verifier skips it to keep its own second call. */
+function questionPromptReady(output: string): boolean {
+  return /(?:^|\n)Ask Muse one question[^\n]*: $/.test(plainTerminal(output));
+}
 function scriptReceipt(output: string, marker: string): { usage: Usage; answerCharacters: number } {
   const text = plainTerminal(output);
   check(new RegExp(`(?:^|\\n)${marker}:0(?:\\n|$)`).test(text), 'python_script_exit');
@@ -116,7 +122,7 @@ function scriptReceipt(output: string, marker: string): { usage: Usage; answerCh
   };
 }
 
-function studioReceipt(value: unknown) {
+function studioReceipt(value: unknown, name = '') {
   const receipt = parse(
     z.object({
       kind: z.literal('studio'),
@@ -124,7 +130,7 @@ function studioReceipt(value: unknown) {
       canIssueKey: z.literal(false),
       keyIssued: z.literal(false),
       tokens: z.object({
-        provider: z.literal('baseten'),
+        provider: z.enum(INFERENCE_PROVIDERS),
         requestsUsed: z.number().int().min(1).max(2),
         availableInput: z.number().int().min(0).max(4999),
         availableOutput: z.number().int().min(0).max(2047),
@@ -136,7 +142,7 @@ function studioReceipt(value: unknown) {
           .string()
           .min(1)
           .refine((source) => Buffer.byteLength(source) <= 256),
-        stdout: z.literal('Hello, World!\n'),
+        stdout: z.literal(`Hello, ${name || 'World'}!\n`),
         exitCode: z.literal(0),
         requestsUsed: z.number().int().min(1).max(2),
         verifiedAt: z.string().datetime(),
@@ -157,11 +163,12 @@ function studioReceipt(value: unknown) {
   };
 }
 
-function studioFileReceipt(output: string, marker: string, expectedHash: string) {
+function studioFileReceipt(output: string, marker: string, expectedHash: string, name = '') {
   check(/^[a-f0-9]{64}$/.test(expectedHash), 'studio_expected_hash_invalid');
+  const greeting = `Hello, ${name || 'World'}!`.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const match = plainTerminal(output).match(
     new RegExp(
-      `(?:^|\\n)${marker}:BEGIN\\nHello, World!\\n${marker}:SHA256:([a-f0-9]{64})\\n\\n${marker}:EXIT:0:0(?:\\n|$)`,
+      `(?:^|\\n)${marker}:BEGIN\\n${greeting}\\n${marker}:SHA256:([a-f0-9]{64})\\n\\n${marker}:EXIT:0:0(?:\\n|$)`,
     ),
   );
   check(match, 'studio_terminal_file_execution_invalid');
@@ -184,8 +191,8 @@ function computeReceipt(value: unknown) {
       bids: z
         .array(
           z.object({
-            provider: z.enum(['modal', 'e2b']),
-            catalogId: z.enum(['modal:micro:auto', 'e2b:micro:us']),
+            provider: z.enum(CLOUD_PROVIDERS),
+            catalogId: z.string().regex(/^[a-z0-9-]+:micro:[a-z0-9-]+$/),
             priceCents: cents.min(1),
             grossPriceCents: cents.min(1),
             sponsorCreditCents: cents,
@@ -193,24 +200,30 @@ function computeReceipt(value: unknown) {
             acceptedAt: z.string().datetime(),
           }),
         )
-        .length(2),
+        .min(2)
+        .max(8),
     }),
     value,
     'compute_competition_receipt_invalid',
   );
+  // Every invited Micro seller may bid; Modal is the sponsored winner and needs a real rival.
   const modal = receipt.bids.find((bid) => bid.provider === 'modal');
-  const e2b = receipt.bids.find((bid) => bid.provider === 'e2b');
-  check(modal && e2b, 'compute_requires_two_actual_providers');
+  const rivals = receipt.bids.filter((bid) => bid.provider !== 'modal');
+  check(modal && rivals.length > 0, 'compute_requires_two_actual_providers');
   check(
-    modal.catalogId === 'modal:micro:auto' && e2b.catalogId === 'e2b:micro:us',
+    modal.catalogId === 'modal:micro:auto' &&
+      receipt.bids.every((bid) => bid.catalogId.startsWith(`${bid.provider}:micro:`)),
     'compute_bid_provider_catalog_mismatch',
   );
   check(
     modal.priceCents === 1 &&
-      modal.priceCents <= e2b.priceCents &&
-      e2b.sponsorCreditCents === 0 &&
-      e2b.operatorSponsored !== true &&
-      e2b.priceCents === e2b.grossPriceCents &&
+      rivals.every(
+        (rival) =>
+          modal.priceCents <= rival.priceCents &&
+          rival.sponsorCreditCents === 0 &&
+          rival.operatorSponsored !== true &&
+          rival.priceCents === rival.grossPriceCents,
+      ) &&
       receipt.grossPriceCents === modal.grossPriceCents &&
       receipt.sponsorCreditCents === modal.sponsorCreditCents &&
       Boolean(receipt.operatorSponsored) === Boolean(modal.operatorSponsored) &&
@@ -224,7 +237,7 @@ function computeReceipt(value: unknown) {
     receipt.bids.every((bid) => Date.parse(bid.acceptedAt) < Date.parse(receipt.auctionEndsAt)),
     'compute_bid_accepted_after_deadline',
   );
-  return { ...receipt, bids: [e2b, modal] };
+  return { ...receipt, bids: [...rivals, modal] };
 }
 
 class LiveTerminal {
@@ -311,14 +324,20 @@ class LiveTerminal {
     );
     await this.wait(() => hiddenPromptReady(this.output), 20000, 'python_hidden_prompt_timeout');
     this.socket.send(JSON.stringify({ type: 'input', data: `${key}\r` }));
+    const finished = () =>
+      new RegExp(`(?:^|\\n)${marker}:\\d+(?:\\n|$)`).test(plainTerminal(this.output));
     await this.wait(
-      () => new RegExp(`(?:^|\\n)${marker}:\\d+(?:\\n|$)`).test(plainTerminal(this.output)),
+      () => finished() || questionPromptReady(this.output),
       125000,
       'python_result_timeout_no_retry',
     );
+    if (!finished()) {
+      this.socket.send(JSON.stringify({ type: 'input', data: '\r' }));
+      await this.wait(finished, 20000, 'python_question_skip_timeout');
+    }
     return scriptReceipt(this.output, marker);
   }
-  async runStudioFile(expectedHash: string) {
+  async runStudioFile(expectedHash: string, name = '') {
     await this.wait(() => this.ready, 20000, 'terminal_ready_timeout');
     this.output = '';
     const marker = `WICK_STUDIO_FILE_${randomUUID().replaceAll('-', '')}`;
@@ -335,7 +354,7 @@ class LiveTerminal {
       20000,
       'studio_terminal_file_timeout',
     );
-    return studioFileReceipt(this.output, marker, expectedHash);
+    return studioFileReceipt(this.output, marker, expectedHash, name);
   }
   async assertInteractive() {
     await this.wait(() => this.ready, 20000, 'terminal_ready_timeout');
@@ -362,6 +381,8 @@ class LiveTerminal {
 }
 
 async function verify(origin: string, kind: 'terminal' | 'studio' = 'terminal') {
+  const name = kind === 'studio' ? (process.env.DEMO_NAME ?? '').trim() : '';
+  check(/^[\p{L}\p{N} .'-]{0,40}$/u.test(name), 'invalid_demo_name');
   const began = performance.now();
   const log = (event: string, data: Record<string, unknown> = {}) =>
     console.log(
@@ -415,7 +436,7 @@ async function verify(origin: string, kind: 'terminal' | 'studio' = 'terminal') 
     }
     let value: unknown;
     try {
-      value = await response.json();
+      value = response.status === 204 ? null : await response.json();
     } catch {
       throw new CheckFailure('http_json_invalid');
     }
@@ -464,6 +485,7 @@ async function verify(origin: string, kind: 'terminal' | 'studio' = 'terminal') 
             'terminated',
             'deleting',
             'deleted',
+            'retained',
             'waiting',
             'generating',
             'passed',
@@ -510,7 +532,7 @@ async function verify(origin: string, kind: 'terminal' | 'studio' = 'terminal') 
     );
     check(
       (!ended.run?.vm?.id || ended.run.vm.cleanupConfirmed) &&
-        (!ended.run?.disk || ended.run.disk.status === 'deleted') &&
+        (!ended.run?.disk || ['deleted', 'retained'].includes(ended.run.disk.status)) &&
         !ended.run?.canIssueKey &&
         !ended.run?.vm?.terminalPath,
       'cleanup_resources_not_confirmed',
@@ -529,11 +551,13 @@ async function verify(origin: string, kind: 'terminal' | 'studio' = 'terminal') 
     const before = await state();
     check(before.enabled && before.available && !before.run && !cookie, 'demo_not_available');
     active();
+    const registered = await request('/api/demo/session', {});
+    check(registered.status === 204 && cookie, 'demo_browser_registration_failed');
     startAttempted = true;
     const operationKey = randomUUID();
-    const startBody = { operationKey, ...(kind === 'studio' ? { kind } : {}) };
+    const startBody = { operationKey, ...(kind === 'studio' ? { kind, demoName: name } : {}) };
     const start = await request('/api/demo/start', startBody);
-    if (start.status >= 400 && start.status < 500 && !cookie) startAttempted = false;
+    if (start.status >= 400 && start.status < 500) startAttempted = false;
     check(start.status === 200 && cookie, `demo_start_http_${start.status}`);
     admitted = true;
     const admittedRun = parse(
@@ -561,8 +585,10 @@ async function verify(origin: string, kind: 'terminal' | 'studio' = 'terminal') 
     const run = ready.run!;
     check(run.id === admittedRun.run.id, 'demo_run_changed');
     check(
-      run.tokens?.provider === 'baseten' && run.tokens.status === 'awarded',
-      'baseten_not_awarded',
+      !!run.tokens?.provider &&
+        (INFERENCE_PROVIDERS as readonly string[]).includes(run.tokens.provider) &&
+        run.tokens.status === 'awarded',
+      'muse_tokens_not_awarded',
     );
     check(
       run.vm?.provider === 'modal' &&
@@ -629,13 +655,13 @@ async function verify(origin: string, kind: 'terminal' | 'studio' = 'terminal') 
           finished.run.expiresAt === run.expiresAt,
         'studio_resources_or_lease_changed',
       );
-      studioUsage = studioReceipt(finished.run);
+      studioUsage = studioReceipt(finished.run, name);
       expectedRequests = studioUsage.requestsUsed;
       const denied = await request('/api/demo/key', { operationKey: randomUUID() });
       check(denied.status === 403, 'studio_key_issuance_not_denied');
       check(key === '', 'studio_must_never_hold_api_key');
       terminal = new LiveTerminal(wsUrl, origin, cookie);
-      const file = await terminal.runStudioFile(studioUsage.sourceSha256);
+      const file = await terminal.runStudioFile(studioUsage.sourceSha256, name);
       log('studio_verified', {
         runId: ownedRunId,
         ...ownedIds,
@@ -679,14 +705,18 @@ async function verify(origin: string, kind: 'terminal' | 'studio' = 'terminal') 
           usage: usageSchema,
           broker: z.object({
             mode: z.literal('real'),
-            provider: z.literal('baseten'),
+            provider: z.enum(INFERENCE_PROVIDERS),
             packId: z.string(),
           }),
         }),
         response.value,
         'second_model_real_receipt_invalid',
       );
-      check(answer.broker.packId === run.tokens.packId, 'second_model_wrong_pack');
+      check(
+        answer.broker.packId === run.tokens.packId &&
+          answer.broker.provider === run.tokens.provider,
+        'second_model_wrong_pack',
+      );
       check(
         !answer.choices[0].message.content.includes('Fixture response:'),
         'fixture_answer_rejected',
@@ -847,11 +877,19 @@ function selfTest() {
     () => hiddenPromptReady('Warning: Password input may be echoed.\r\nBatch key: '),
     CheckFailure,
   );
+  const question = 'Ask Muse one question about this VM, the auctions or Wick (Enter to skip): ';
+  assert.equal(questionPromptReady(`Usage: {}\r\n\r\n2/2  Your turn\r\n${question}`), true);
+  assert.equal(questionPromptReady('Ask Muse one question about'), false);
   const marker = 'WICK_DEMO_DONE_test';
   const transcript = `python3 -u /workspace/hello_muse.py; printf '\\n${marker}:%s\\n' "$?"\r\nHello Muse\r\nBatch key: \r\nCalling Meta Muse. Request: ${randomUUID()}\r\nHello from Meta Muse.\r\nUsage: {"prompt_tokens":20,"completion_tokens":10,"total_tokens":30}\r\n${marker}:0\r\n$ `;
   assert.deepEqual(scriptReceipt(transcript, marker), {
     usage: { prompt_tokens: 20, completion_tokens: 10, total_tokens: 30 },
     answerCharacters: 21,
+  });
+  const explained = `Batch key: \r\n\r\n1/2  Muse explains what you just bought\r\nCalling Meta Muse. Request: ${randomUUID()}\r\nYou rented a Modal Micro VM.\r\n$ uname -a\r\nUsage: {"prompt_tokens":340,"completion_tokens":210,"total_tokens":550}\r\nMuse suggested a command. Nothing was run; type it yourself if you want to try it.\r\n\r\n2/2  Your turn\r\n${question}\r\nNo question sent. Run this script again to ask one before the lease ends.\r\n${marker}:0\r\n$ `;
+  assert.deepEqual(scriptReceipt(explained, marker), {
+    usage: { prompt_tokens: 340, completion_tokens: 210, total_tokens: 550 },
+    answerCharacters: 39,
   });
   assert.throws(
     () => scriptReceipt(transcript.replace(`${marker}:0`, `${marker}:1`), marker),
@@ -968,6 +1006,22 @@ function selfTest() {
     ],
   };
   assert.equal(computeReceipt(compute).bids[0].provider, 'e2b');
+  // Every invited Micro seller may bid, not only the first rival.
+  const crowded = {
+    ...compute,
+    bids: [
+      ...compute.bids,
+      {
+        provider: 'sail',
+        catalogId: 'sail:micro:auto',
+        priceCents: 4,
+        grossPriceCents: 4,
+        sponsorCreditCents: 0,
+        acceptedAt: '2026-11-03T06:00:04.000Z',
+      },
+    ],
+  };
+  assert.equal(computeReceipt(crowded).bids.length, 3);
   const promotion = {
     ...compute,
     grossPriceCents: 1,
@@ -982,6 +1036,12 @@ function selfTest() {
   assert.equal(computeReceipt(promotion).operatorSponsored, true);
   for (const invalid of [
     { ...compute, bids: compute.bids.slice(0, 1) },
+    {
+      ...crowded,
+      bids: crowded.bids.map((bid) =>
+        bid.provider === 'sail' ? { ...bid, catalogId: 'e2b:micro:us' } : bid,
+      ),
+    },
     { ...compute, grossPriceCents: 1 },
     { ...compute, sponsorCreditCents: 7 },
     { ...compute, operatorSponsored: true },

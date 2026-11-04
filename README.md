@@ -1,103 +1,72 @@
-# Wick Broker v1
+# Wick — the OpenRouter for sandboxes
 
-A single-process environment marketplace: describe an environment, review an immutable specification, run a 30-second provider auction, and open the winning VM's browser terminal. Customers can run their own commands or explicitly authorize a bounded public-repository coding job in Muse Studio.
+Wick gives developers and AI agents one platform to access and manage sandbox providers. **This repo is Wick Broker, the marketplace we built on top of Wick during the hackathon.**
 
-**Public hackathon demos:** the dedicated **[Live demos page](https://meta-hackathon-wick-production.up.railway.app/demos)** offers a no-signup **terminal demo** and **guided Muse Studio Hello World demo**. Both use a real **Baseten token auction**, a **Micro VM auction with Modal and E2B eligibility**, and a private demo disk. Modal's effective demo bid is **$0.01 after sponsorship**; receipts retain the accepted gross bid and any additional credit. Modal has priority on a one-cent tie, and a valid Modal bid is required. Each run includes one 15-minute VM lease and a token pack capped at $0.05 (5,000 input / 2,048 output tokens, at most two requests). The variants share a 20-minute cooldown; switching demos does not reset the limits. Completing the Studio task or using both Muse calls leaves the terminal available for the rest of the lease. See [demo setup, limits, and judge instructions](docs/homepage-demo.md).
+[Wick platform](https://wick-cloud.com) · [Live demos](https://meta-hackathon-wick-production.up.railway.app/demos) · [Mock buyer demo](https://meta-hackathon-wick-production.up.railway.app/demo/buyer) · [Mock seller demo](https://meta-hackathon-wick-production.up.railway.app/demo/seller)
 
-**Hosted app for judges:** open [Live demos](https://meta-hackathon-wick-production.up.railway.app/demos) and choose a demo. In the terminal demo, get the demo key and run `python3 /workspace/hello_muse.py`, pasting the key at its hidden prompt. In guided Muse Studio, watch Muse generate `hello_world.py` and the real VM verify its output, then use the terminal to rerun the file. No account, payment details, or provider credentials are needed. Select **End demo** when finished. The homepage focuses on the customer product and links to the demos and buyer beta.
+## Run locally
 
-**Muse Studio:** start a public-repository task with one [total budget](docs/studio-task-budgets.md). Studio purchases model allowance, asks Meta to select compute and completion checks, runs the VM auction, confirms guest execution, verifies the patch, and cleans up. No manual VM/grant selection or token-limit control is required. The existing [coding worker](docs/public-repo-coding.md), wallet, marketplaces, history and recovery remain in this one app/database. Local Linux execution is verified with fixture model decisions; automatic-task native provider and live-model qualification remain separate checks. Missing guest isolation fails closed.
-
-The permanent **Orders** hub retains VM auctions and AI token purchases, including completed and archived orders. The hackathon product uses instant VM rentals; scheduled and bulk VM agreements have been retired. Existing billing records and previously accepted commitments retain their legacy accounting and cleanup support. See [Orders and legacy records](docs/orders-and-agreements.md).
-
-**Persistent disks:** buyer-owned shared Wick drives retain agent workspaces across VM and task lifetimes. Disk management, VM selection, Studio continuation and developer access are available behind `DISKS_ENABLED`; real provider routes require independent shared-mount qualification. See [persistent disks](docs/persistent-disks.md).
-
-**Developer access:** buyers and providers can create separate Broker API keys in **API keys**, then use the [TypeScript SDK, CLI and local MCP server](docs/developer-access.md). The same account, orders, funding and capacity rules apply. Broker keys are independent of Wick service credentials.
-
-**Improve my sales:** sellers can ask Meta Muse to review recent demand and their selling history, compare bounded policy recommendations, and explicitly apply one after reviewing its exact changes. Recommendations preserve price floors and spare slots; comparisons show base-price matches, not predicted wins or revenue. See [seller sales recommendations](docs/improve-my-sales.md).
-
-**Agent purchasing:** the [buying workspace](docs/agent-buying.md) adds owner-reviewed Muse recommendations, optional automatic refills, purchase comparison receipts, and provider selling windows. It uses the existing app, database, wallet and worker. New agent grants default to two hours; buying never extends their deadline.
-
-**Agent tokens:** the [prepaid inference marketplace](docs/inference-marketplace.md) adds owner-funded agent budgets, grant-bound API keys, 30-second token auctions, instant quotes and a buffered Meta Muse gateway in this same app/database. Modal and Baseten inference are separate from VM providers. It defaults off; unqualified real routes cannot sell token packs. SDK/CLI/MCP `0.4.0` includes the inference interfaces and [four-decimal USD prices](docs/money.md), with the retired scheduled VM commands removed from current CLI/MCP discovery. Earlier client downloads remain immutable.
-
-Node 24 · TypeScript · Fastify · React/Vite · PostgreSQL · Better Auth · pg-boss · xterm.js.
-
-## Local start
-
-Use Node 24 and PostgreSQL 16 or newer. The included Compose file runs PostgreSQL locally:
+With **Node 24**, run from the repo folder:
 
 ```sh
 npm ci
-docker compose up -d postgres
-cp .env.example .env
+npm run demo
 ```
 
-Edit `.env`: set a random `BETTER_AUTH_SECRET` of at least 32 characters and all five `SEED_*_PASSWORD` values (12 to 128 characters each). Select `WICK_MODE=fixture` and `MUSE_MODE=fixture` explicitly for local testing. These modes run no paid APIs and allocate no real VMs. Fixtures never replace a failed real API call.
+Open [localhost:5173](http://localhost:5173) and choose **Buyer** or **Seller**. No database, Docker, `.env`, or API keys needed.
 
-```sh
-npm run db:migrate
-npm run db:seed
-npm run build
-npm start
-```
+The local demo uses sample data and simulated actions. Try an auction, terminal, or Muse Studio task as a buyer; manage capacity and bids as a seller. Reset or reload to start fresh.
 
-Open http://localhost:3000. The app binds `0.0.0.0:3000` by default. `npm run dev` runs the same Fastify process with Vite middleware when there is no built frontend. Delete `dist/client` to use that development middleware after a production build.
+## What we built during the hackathon
 
-Seeded identities are `buyer@demo.wick.local`, `supplier-a@demo.wick.local`, `supplier-b@demo.wick.local`, `supplier-c@demo.wick.local`, and `admin@demo.wick.local`; passwords come only from the environment. Public signup is disabled. The explicit seed command updates those invited credentials and revokes their existing sessions when rerun; it does not run automatically at startup. Suppliers begin with simulated capacities **3, 2, 0**. No passwords are committed.
+- **Already existed:** Wick's hosted sandbox platform and provider integrations.
+- **Built during the hackathon, in this repo:** Broker's buyer/seller marketplace, compute and token auctions, Muse workflows, and demos.
+- **Also built during the hackathon, in the main platform:** shared-file support, allowing a buyer's sandboxes across supported providers to access the same workspace files.
 
-## Product behavior
+**The main Wick platform repository is private and cannot be shared with this submission.** This repo includes Broker's integration with it; the shared-file infrastructure lives in that private platform.
 
-- Buyers review catalog, region, minimum resources, exact 15/30/60-minute duration, and maximum total USD price before starting an auction. Default duration is 30 minutes. An explicitly reviewed cross-provider request can compare compatible offerings; exact-route requests retain their selected configuration.
-- Providers manage configured capacity, private pricing policy, manual/automatic bidding, approved-configuration offerings, and activity in the same application. Real operator-managed provider accounts are bound to their own upstream cloud; changing a pricing policy cannot widen that identity.
-- Automatic bids use the saved base or the current cost floor, whichever is higher. With surplus capacity, Muse may select a server-priced discount of up to 10%; declining the discount keeps the eligible base. The last available slot stays at base.
-- Manual and auto bids share a locked capacity reservation path. The lowest total price wins; equal prices use accepted timestamp, then ID. Losing holds release at close. The winner's hold remains until confirmed cleanup.
-- The request specification, awarded offering revision, quote, and create idempotency key are frozen. Retries cannot silently start another auction or extend the rental clock.
-- For instant rentals, exactly one fixed-price demo invoice is issued after Wick confirms both running state and terminal capability. Failed, cancelled, or expired-before-ready instant environments incur no charge. Early termination after readiness retains the fixed price. There is no external payment collection or payout.
-- The returned Wick admission expiry is authoritative and includes setup time. Reconnecting attaches to the same environment. Disconnecting leaves the rental running; process survival is not guaranteed.
-- Muse Spark Open on Baseten provides bounded, reviewed proposals for requirements, supplier policy, bids, alternatives, offerings. Manual controls remain available after a visible model failure. Proposals take no action until reviewed.
-- Admins approve existing catalog configurations, adjust the default 20-VM admission limit, and retry unresolved cleanup reconciliation. No generated setup code or preparation jobs exist.
+We kept Broker standalone for the hackathon. Conversations with people in the industry helped us see a practical use case, and we plan to integrate Broker into the main Wick platform.
 
-Configured provider allocations and customer demo quotes are distinct from Wick's actual operational costs. A configured slot is an operator allocation, not a measurement or guarantee of upstream free capacity.
+## Why Wick
 
-## Real integrations
+AI agents need an isolated place to run code, install dependencies, and work with files away from your laptop. That's what sandboxes provide.
 
-Configure real modes and server-only credentials in `.env` or Railway variables. Real Wick uses the exact published `@wick-cloud/sdk@0.1.0-rc.0`, with an API base, organization ID, group ID, and service credential. The official SDK manages scoped terminal authentication and renewal. No upstream credential or scoped token reaches the browser. Terminal output goes only to the authenticated owning browser and is not logged or sent to Muse. The existing four-provider scale baseline used Muse fixture mode. Real Muse inference is a separate integration and does not change that historical evidence.
+We started by [building our own sandbox provider](https://medium.com/@harsha0116/we-gave-every-workload-its-own-kernel-e890bb5a9d03). Repeatedly handling different providers' APIs, credentials, and VM lifecycles led us to build one platform that brings them together.
 
-Real Muse uses **Muse Spark Open · Baseten**, with the exact hackathon model **`meta-models/muse-spark-open-1026`**. Set server-only `MUSE_MODE=real` and `BASETEN_API_KEY`; `META_API_BASE` defaults to `https://inference.baseten.co/v1`. `META_API_KEY` remains a legacy alias, and a non-empty `BASETEN_API_KEY` takes precedence. The backend sends Chat Completions JSON-schema requests, includes the schema in the prompt and locally validates final `message.content` and never exposes model reasoning or credentials to the browser. Baseten accepts but does not enforce `json_schema` for Muse; local validation remains authoritative. Failed real calls remain visible and do not fall back to fixtures. Model proposals never reserve credit or start VMs by themselves. See [Muse configuration, flows and evidence](docs/MUSE.md).
+The hosted platform is Wick's core value: unified provider access and infrastructure management. The local demo shows the experience of using that service.
 
-The historical Baseten smoke passed seven adapter flows, including two schedule drafts that have since been removed. The current optional `npx tsx scripts/verify-baseten-muse.ts --live` diagnostic covers the five remaining proposal flows using a synthetic catalog and no PostgreSQL writes or Wick/VM allocations. It requires a privately configured server key; ordinary CI stays fixture-only.
+## Why we chose this for the hackathon
 
-Broker earns a fixed **15% commission from the provider's gross rental price**. The buyer pays the accepted fixed total, with no added Broker fee. Providers retain 85% before their own compute costs. For a $10.00 rental, Broker's share is $1.50 and the provider's share is $8.50. Prices, provider policy limits and budgets are gross rental totals. There are no subscriptions, listing charges, payments or payouts in this demo.
+Sandbox infrastructure is drawing serious attention, from [Vercel's sandbox launch](https://vercel.com/blog/vercel-sandbox-is-now-generally-available) to [E2B's discussion of infrastructure built around agents](https://e2b.dev/resources/sandboxes-are-dead). We see a crowded, expanding provider landscape and expect many more entrants. That made this hackathon the right moment to explore the next opportunity: how all that supply reaches the agents that need it.
 
-Managed real offerings freeze the published micro-USD/second rate and retrieval time. New suggested quotes use `max(1, ceil(rate × durationSeconds / 8500))` USD cents so the provider's 85% share covers the estimated compute cost. Manual and Muse bids may differ within provider policy and buyer budget, but must meet that same cost floor. New provider-account setup seeds a selling base and offering price 20% above the 30-minute cost-covered quote, rounded upward to $0.0001; existing custom policies are preserved. This provider margin does not change the fixed commission or managed rate. Each binding bid freezes the exact gross, 15% Broker share and 85% provider share in integer micro-USD; readiness copies the snapshot into exactly one demo invoice. This preserves the exact split even for sub-cent fees. Historical accepted quotes and invoices remain unchanged; absent historical commission records are explicitly labeled legacy rather than retroactively charged.
+**Our bet: agents will increasingly become the buyers of compute and model tokens.** A person sets the goal, budget, and permissions; the agent finds resources, purchases them, and gets to work. We want Wick to become the marketplace those agents turn to.
 
-New approvals, offerings, requests and bids still require a rate retrieved within 15 minutes, with at most 60 seconds of future clock skew. Historical quotes remain readable. The upstream full-term estimate is separate from the customer's fixed quote and provider share; none is settled Wick usage. Managed rates already include Wick's price. BYOK is unsupported. E2B, Daytona, Baseten (Blaxel), Modal, Sail, Tenki, Freestyle and Boat.dev workspaces represent operator-managed Wick allocations, not accounts operated by those companies. The requested **Baseten** display name routes through **Blaxel**, whose actual Wick provider identifier is `provider-blaxel`; it does not assert that Baseten and Blaxel are the same service. The actual Baseten inference API used by Muse is a separate integration from this compute-account display label. Providers can review gross, Broker commission and their net share on the paginated Earnings screen; totals cover the displayed commission records only.
+**Agentic work can be asynchronous.** A background coding task, evaluation, or batch analysis can often wait through a **30-second auction window** if competing bids produce substantially cheaper compute or tokens. That wait happens before provisioning; it is a deliberate trade between time and cost. Work with a flexible deadline gives providers room to compete and agents room to optimize their spending.
 
-The eight-provider registry is implemented; new-route activation and live terminal qualification remain separate. Use `scripts/configure-real.ts --list` to review managed routes, then `--apply-providers --providers sail,tenki,freestyle,boat --stage` to create only the selected accounts with private credentials and native catalog IDs. Staging defaults to one slot, inactive offerings and automatic bids off. Ordinary retries preserve custom policies, capacity, approvals, passwords, sessions and frozen history. `--activate` enables qualified selections; `--update-existing` explicitly replaces selected defaults. Historical Boat approvals are quarantined by migration 032. Do not rerun account seeding to change pricing. See [provider marketplace setup and coverage](docs/provider-marketplace.md) and [real Wick operation](docs/REAL_WICK.md).
+**The moat we aim to build is the market itself:** broad provider supply, recurring agent demand, useful price discovery, and shared workspaces that let work continue across supported providers. Broker is our first experiment in that future—bringing resource purchasing into the agent's workflow and making providers compete for the work.
 
-Read [Wick contract evidence](docs/WICK_CONTRACT.md) and [Muse contract evidence](docs/MUSE.md) before enabling real modes. Public documentation and offline contract tests do not verify live allocations or live terminal behavior. Real catalog entries require administrator approval. Missing required rate or compute fields fails closed; optional upstream catalog version, currency, money unit, revision, and mode are not invented or required.
+## How we used Meta Muse
 
-## Deploy shape
+Meta Muse Spark Open helps buyers describe what they need, sellers decide how to offer capacity, and coding agents work inside sandboxes. Our proposal integration uses Muse through Baseten.
 
-Deploy **`main`** as **one always-on Railway app and PostgreSQL**. The Dockerfile builds Node 24 without runtime credentials and includes production migration/seed/setup commands. [Railway configuration](.railway/railway.ts) declares the branch, database reference, migration hook, readiness check and one replica. Follow the [Railway deployment guide](docs/RAILWAY.md) for service variables, first-time accounts and real Wick setup. Existing account capacities are preserved; new staged accounts default to one configured slot. All accounts share the unchanged 20-VM admission limit.
+- **Provider rules and bidding:** we created and manage seller accounts for each integrated provider in the hosted demo. Muse helped turn goals such as “fill idle machines, keep two slots spare, and never quote below $0.05 per rental” into editable policies. We reviewed the price limits, spare capacity, allowed configurations, and automatic-bidding settings before applying them. Bids then follow those saved rules. In the regular marketplace, Muse can also choose a server-calculated discount when capacity permits; the public live demos use saved base prices and sponsorship without a model call for every bid.
+- **Buyer setup and purchasing:** Muse translates a workload description into a proposed configuration from the approved catalog, which the buyer reviews before starting an auction. For funded agents, it can recommend a token purchase or waiting, based on available offers, remaining budget, and expiry. Automatic purchases require an owner-enabled buying policy.
+- **Seller recommendations:** the **Improve my sales** flow uses recent demand and the seller's own activity to compare policy alternatives. Muse explains which changes could help match more requests, such as enabling automatic bids or adjusting a base price within existing limits. The seller reviews and applies each change.
+- **Muse Studio:** given a public repository, task, and budget, Muse selects an eligible compute configuration and proposes a verification command. Broker purchases the resources; Muse then proposes file reads, edits, and test actions that Studio executes inside the sandbox. Studio requires passing checks after the final edit and exposes the patch, test output, and purchase receipts for review.
 
-Migrations run under an advisory lock before deployment. Production startup validates migration digests and queue schema compatibility; it does not apply schema upgrades. Active VM leases survive brief process overlap during redeploys; SIGTERM drains jobs. Account seeding and provider setup are explicit operator actions and never run on a normal deployment. Keep the permanent pre-deploy command migration-only. See [production operation and recovery](docs/production-operations.md).
+**What judges can try live:** the terminal demo asks Muse to explain the actual VM and auction receipt, then answer a question. The guided Studio demo has Muse generate a small Hello World program that the VM executes and verifies. This is a bounded introduction to the broader repository workflow.
 
-## Verification
+Broker validates model output and enforces price limits, capacity, and budgets. Local demo responses are explicitly simulated. See the [Muse integration](docs/MUSE.md) and [Studio workflow](docs/studio-task-budgets.md) for implementation details.
 
-```sh
-npm run typecheck
-npm test
-npm run build
-npm run test:browser
-```
+**During development,** we also used Meta models extensively for coding assistance while building Broker. **For the demo video,** Meta Code helped prepare the script and articulate the most important features so the walkthrough was clearer for judges.
 
-Set `TEST_DATABASE_URL` to a dedicated test database for PostgreSQL concurrency/auth tests; these use disposable schemas. Browser tests require the seeded fixture application at `E2E_BASE_URL` (default `http://localhost:3000`) and seed credentials. Install Chromium once using `npx playwright install --with-deps chromium`.
+## Mock vs. live
 
-For an additional local process-restart check, stop the preview and run `npm run test:recovery`. It requires a built, seeded fixture app and loopback database, manages one app process at a time, and stops it when finished. Restart the preview with `npm start` afterward.
+- **Mock:** simulated data, terminal output, and model responses. Runs locally or through the mock links above, with no real resource allocation.
+- **Live:** real auctions, a sponsored Modal VM, terminal access, and Muse calls. No signup or payment details required.
 
-CI explicitly selects fixture adapters and never allocates real compute or uses paid APIs. See [testing notes](docs/testing.md) and [HANDOFF.md](HANDOFF.md) for checks actually run and remaining limits.
+Hackathon rules don't allow us to share platform credentials, so we built two hosted live demos: **a terminal demo** and **a guided Muse Studio Hello World demo**. Judges can try real infrastructure without signing in or receiving platform credentials.
 
-Run `npm run security:secrets` after building to scan Git history, current source, release archives, and built assets. Read the [security policy](SECURITY.md), [scanner coverage](docs/security-scanning.md), and [contribution guide](CONTRIBUTING.md) before publishing changes. Current source and newly built packages use [MIT](LICENSE); historical client archives retain their original metadata.
+Live demos allow a **15-minute lease including setup**, **two model calls**, and a **20-minute cooldown after confirmed cleanup**. Shared capacity limits also apply. [Live demo instructions](docs/homepage-demo.md).
 
-Deferred: SSH, file browser, public port previews, snapshots, pause/resume, unbounded runtime extensions, longer standalone instant rentals, supplier setup code, and external payments.
+[Developer setup](docs/local-development.md) · [Architecture and operations](docs/broker-reference.md) · [Shared files](docs/persistent-disks.md) · [MIT license](LICENSE)

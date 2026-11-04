@@ -62,6 +62,7 @@ import {
 } from '../src/server/inference/gateway.js';
 import { registerInference, maintainInference } from '../src/server/inference/index.js';
 import { transaction } from '../src/server/marketplace/db.js';
+import { operationFingerprint } from '../src/server/operations.js';
 import { applyCreditEntry, creditWalletView } from '../src/server/agreements/credits.js';
 import { taskUsage } from '../src/server/coding/usage-data.js';
 import { listOrders, ORDERS_QUERY, registerOrders } from '../src/server/orders.js';
@@ -2291,6 +2292,222 @@ describe.skipIf(!url)(
         ctx.config = oldConfig;
       }
     });
+    it('rejects framing-only wallet packs before reserving money, admits useful messages and preserves pooled agent top-ups', async () => {
+      const oldConfig = ctx.config;
+      try {
+        ctx.config = { ...oldConfig, inferenceBasetenProviderEmail: providers[0].email };
+        ctx.inference = await createInferenceRuntime(
+          loadConfig({
+            DATABASE_URL: url!,
+            WICK_MODE: 'fixture',
+            MUSE_MODE: 'fixture',
+            INFERENCE_MARKET_MODE: 'real',
+            BASETEN_API_KEY: 'offline-test-key',
+            BETTER_AUTH_SECRET: oldConfig.authSecret,
+            INFERENCE_QUALIFICATION_JSON: JSON.stringify([
+              {
+                provider: 'baseten',
+                contract: 'muse-spark-open-text-v1',
+                nativeModel: 'meta-models/muse-spark-open-1026',
+                revision: 'offline-utf8-contract',
+                evidence: 'Offline contract fixture only; no native qualification or live request.',
+                validUntil: new Date(Date.now() + 86400000).toISOString(),
+                fixedInputUpperBound: 1048576,
+                inputAccounting: 'utf8-bytes-v1',
+                minimumOutputTokens: 256,
+                maximumOutputTokens: 2048,
+                authoritativeUsage: true,
+                outputIncludesReasoning: true,
+                allAcceptedTextCovered: true,
+                rejectionHasNoUsage: true,
+              },
+            ]),
+          }),
+        );
+        ctx.inference.dispatch = vi.fn(async () => ({
+          id: 'offline-native-receipt',
+          content: 'OK',
+          finishReason: 'stop',
+          inputTokens: 1,
+          outputTokens: 1,
+        }));
+        await initializeInference(ctx);
+        await pool.query('UPDATE broker_token_offerings SET active=true,auto_bid=true');
+        const walletBefore = await creditWalletView(pool, owner.id);
+        for (const quantities of [
+          { inputTokens: 4128, outputTokens: 256 },
+          { inputTokens: 4147, outputTokens: 255 },
+        ]) {
+          expect((await quotes(ctx, owner, quantities)).items).toEqual([]);
+          await expect(
+            createTokenOrder(ctx, owner, {
+              ...quantities,
+              operationKey: randomUUID(),
+              mode: 'auction',
+              maxTotalCents: 1,
+            }),
+          ).rejects.toMatchObject({ code: 'route_unavailable' });
+        }
+        expect(await creditWalletView(pool, owner.id)).toEqual(walletBefore);
+        expect(await walletScopeCount()).toBe(0);
+        expect(
+          (await pool.query('SELECT count(*)::int n FROM broker_token_orders')).rows[0].n,
+        ).toBe(0);
+
+        for (const [inputTokens, content] of [
+          [4129, 'a'],
+          [4147, 'Reply with only OK.'],
+        ] as const) {
+          const quantities = { inputTokens, outputTokens: 256 };
+          const quote = (await quotes(ctx, owner, quantities)).items[0]!;
+          expect(quote).toBeDefined();
+          const purchase = {
+            ...quantities,
+            operationKey: randomUUID(),
+            mode: 'instant',
+            quoteId: quote.quoteId,
+            maxTotalCents: quote.priceCents,
+          };
+          const order = await createTokenOrder(ctx, owner, purchase);
+          const pack = (await tokenOrderDetail(ctx, owner, order.id)).pack!;
+          const issued = await issuePackKey(ctx, owner, pack.id, { operationKey: randomUUID() });
+          const keyActor: Actor = {
+            ...owner,
+            apiKey: {
+              id: issued.key.id,
+              grantId: pack.grantId,
+              packId: pack.id,
+              scopes: issued.key.scopes,
+              limits: {},
+            },
+          };
+          // The minimum is an honest one-byte envelope, not a promise to fit
+          // arbitrary text. The larger saved prompt still needs its full bound.
+          if (inputTokens === 4129)
+            await expect(
+              complete(ctx, keyActor, {
+                ...call,
+                messages: [{ role: 'user', content: 'Reply with only OK.' }],
+                max_tokens: 256,
+                operationKey: randomUUID(),
+              }),
+            ).rejects.toMatchObject({ code: 'token_allowance_exceeded' });
+          await complete(ctx, keyActor, {
+            ...call,
+            messages: [{ role: 'user', content }],
+            max_tokens: 256,
+            operationKey: randomUUID(),
+          });
+          const reserved = (
+            await pool.query(
+              'SELECT reserved_input,reserved_output FROM broker_inference_requests WHERE grant_id=$1',
+              [pack.grantId],
+            )
+          ).rows;
+          expect(reserved).toEqual([{ reserved_input: inputTokens, reserved_output: 256 }]);
+          const walletAfter = await creditWalletView(pool, owner.id);
+          expect(await createTokenOrder(ctx, owner, purchase)).toMatchObject({ id: order.id });
+          expect(await creditWalletView(pool, owner.id)).toEqual(walletAfter);
+        }
+        expect(ctx.inference.dispatch).toHaveBeenCalledTimes(2);
+
+        // Materialize a pre-fix awarded wallet auction. Its money and quota are
+        // historical facts; the new purchase floor must not rewrite or reject
+        // replay of that purchase, or change admission for its existing key.
+        const historicalQuote = (await quotes(ctx, owner, { inputTokens: 4129, outputTokens: 256 }))
+          .items[0]!;
+        const historical = {
+          operationKey: randomUUID(),
+          mode: 'auction',
+          inputTokens: 4128,
+          outputTokens: 256,
+          maxTotalCents: historicalQuote.priceCents,
+        };
+        const historicalOrder = await createTokenOrder(ctx, owner, {
+          ...historical,
+          mode: 'instant',
+          inputTokens: 4129,
+          quoteId: historicalQuote.quoteId,
+        });
+        const historicalPack = (await tokenOrderDetail(ctx, owner, historicalOrder.id)).pack!;
+        await transaction(pool, async (db) => {
+          await db.query(
+            "UPDATE broker_token_orders SET mode='auction',input_tokens=4128,input_fingerprint=$2 WHERE id=$1",
+            [historicalOrder.id, operationFingerprint(historical)],
+          );
+          await db.query(
+            'UPDATE broker_token_packs SET input_tokens=4128,available_input=4128 WHERE id=$1',
+            [historicalPack.id],
+          );
+          await db.query(
+            "UPDATE broker_inference_routes SET outstanding_input=outstanding_input-1 WHERE provider='baseten'",
+          );
+        });
+        const historicalWallet = await creditWalletView(pool, owner.id);
+        const historicalLedger = (
+          await pool.query('SELECT count(*)::int n FROM broker_credit_ledger')
+        ).rows[0].n;
+        expect(await createTokenOrder(ctx, owner, historical)).toMatchObject({
+          id: historicalOrder.id,
+          inputTokens: 4128,
+          status: 'awarded',
+        });
+        expect(await creditWalletView(pool, owner.id)).toEqual(historicalWallet);
+        expect(
+          (await pool.query('SELECT count(*)::int n FROM broker_credit_ledger')).rows[0].n,
+        ).toBe(historicalLedger);
+        const historicalKey = await issuePackKey(ctx, owner, historicalPack.id, {
+          operationKey: randomUUID(),
+        });
+        await complete(
+          ctx,
+          {
+            ...owner,
+            apiKey: {
+              id: historicalKey.key.id,
+              grantId: historicalPack.grantId,
+              packId: historicalPack.id,
+              scopes: historicalKey.key.scopes,
+              limits: {},
+            },
+          },
+          {
+            ...call,
+            messages: [{ role: 'user', content: '' }],
+            max_tokens: 256,
+            operationKey: randomUUID(),
+          },
+        );
+        expect(
+          (
+            await pool.query(
+              'SELECT reserved_input FROM broker_inference_requests WHERE grant_id=$1',
+              [historicalPack.grantId],
+            )
+          ).rows,
+        ).toEqual([{ reserved_input: 4128 }]);
+
+        // These are valid historical agent quantities. Only the added byte is
+        // purchased; imposing standalone floors on the top-up would break it.
+        const g = await grant(100, { allowedProviders: ['baseten'] });
+        await buy(g.id, { inputTokens: 4128, outputTokens: 256 });
+        expect(await buy(g.id, { inputTokens: 1, outputTokens: 1 })).toMatchObject({
+          inputTokens: 1,
+          outputTokens: 1,
+        });
+        expect((await quotes(ctx, owner, { inputTokens: 1, outputTokens: 1 })).items).toEqual([]);
+        const key = await agent(g.id);
+        await complete(ctx, key.actor, {
+          ...call,
+          messages: [{ role: 'user', content: 'a' }],
+          max_tokens: 256,
+          operationKey: randomUUID(),
+        });
+        expect(ctx.inference.dispatch).toHaveBeenCalledTimes(4);
+      } finally {
+        ctx.config = oldConfig;
+      }
+    });
     it('defaults new grants to two hours and keeps buying policies owner-only', async () => {
       const g = await grant();
       expect(Date.parse(g.expiresAt) - Date.parse(g.createdAt)).toBeGreaterThan(7199000);
@@ -3288,6 +3505,217 @@ describe.skipIf(!url)(
         spentCents: 0,
         heldCents: 0,
       });
+    });
+    async function concurrencyBuyers(providers: ('baseten' | 'modal')[]) {
+      const buyers = [];
+      for (const provider of providers) {
+        const buyer: Actor = {
+          id: randomUUID(),
+          role: 'buyer',
+          name: 'Concurrent buyer',
+          email: `${randomUUID()}@concurrency.invalid`,
+        };
+        await pool.query(
+          'INSERT INTO "user"(id,email,name,role,"emailVerified") VALUES($1,$2,$3,$4,true)',
+          [buyer.id, buyer.email, buyer.name, buyer.role],
+        );
+        await transaction(pool, (db) =>
+          applyCreditEntry(db, buyer.id, {
+            operationKey: randomUUID(),
+            kind: 'grant',
+            balanceDeltaCents: 1000,
+            reservedDeltaCents: 0,
+            description: 'Disposable concurrency test credit',
+          }),
+        );
+        const g = await createGrant(ctx, buyer, {
+          operationKey: randomUUID(),
+          name: 'Concurrent grant',
+          budgetCents: 100,
+          allowedProviders: [provider],
+        });
+        const issued = await issueGrantKey(ctx, buyer, g.id, {});
+        const quantities = { inputTokens: 1000, outputTokens: 1000 };
+        const quote = (await quotes(ctx, buyer, { grantId: g.id, ...quantities })).items.find(
+          (q) => q.provider === provider,
+        )!;
+        await createTokenOrder(ctx, buyer, {
+          ...quantities,
+          grantId: g.id,
+          mode: 'instant',
+          quoteId: quote.quoteId,
+          maxTotalCents: quote.priceCents,
+          operationKey: randomUUID(),
+        });
+        buyers.push({
+          ...buyer,
+          apiKey: { id: issued.key.id, grantId: g.id, scopes: issued.key.scopes, limits: {} },
+        } as Actor);
+      }
+      return buyers;
+    }
+    async function admissionSnapshot() {
+      const tables = [
+        'broker_inference_requests',
+        'broker_inference_allocations',
+        'broker_token_packs',
+        'broker_inference_routes',
+        'broker_inference_grants',
+        'broker_credit_wallets',
+        'broker_credit_ledger',
+      ];
+      return Promise.all(
+        tables.map(
+          async (table) =>
+            (
+              await pool.query(
+                `SELECT row_to_json(t) row FROM ${table} t ORDER BY row_to_json(t)::text`,
+              )
+            ).rows,
+        ),
+      );
+    }
+    function blockDispatch() {
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const dispatch = vi.fn(async () => {
+        await gate;
+        return smallUsage();
+      });
+      ctx.inference!.dispatch = dispatch;
+      return { dispatch, release };
+    }
+    it('upgrades existing route capacity without changing quarantine, identity or held commitments', async () => {
+      await pool.query(`UPDATE broker_inference_routes SET max_concurrent=2,held_calls=1,
+        outstanding_input=100,outstanding_output=64,quarantined_at=clock_timestamp()
+        WHERE provider='baseten'`);
+      const snapshot = async () =>
+        (
+          await pool.query(`SELECT to_jsonb(r)-'updated_at'-'max_concurrent' state
+        FROM broker_inference_routes r ORDER BY provider`)
+        ).rows;
+      const before = await snapshot();
+      await initializeInference(ctx);
+      expect(await snapshot()).toEqual(before);
+      expect((await pool.query('SELECT max_concurrent FROM broker_inference_routes')).rows).toEqual(
+        [{ max_concurrent: 5 }, { max_concurrent: 5 }],
+      );
+    });
+    it('admits five distinct buyers simultaneously on one route and rejects a sixth without any hold or debit', async () => {
+      const buyers = await concurrencyBuyers(Array(6).fill('baseten'));
+      const barrier = blockDispatch();
+      const pending = Promise.all(
+        buyers
+          .slice(0, 5)
+          .map((buyer) => complete(ctx, buyer, { ...call, operationKey: randomUUID() })),
+      );
+      try {
+        await vi.waitFor(() => expect(barrier.dispatch).toHaveBeenCalledTimes(5));
+        expect(
+          (
+            await pool.query(
+              `SELECT held_calls FROM broker_inference_routes WHERE provider='baseten'`,
+            )
+          ).rows[0].held_calls,
+        ).toBe(5);
+        expect(
+          (
+            await pool.query(`SELECT count(DISTINCT buyer_id)::int buyers,count(DISTINCT grant_id)::int grants
+          FROM broker_inference_requests WHERE status='dispatching'`)
+          ).rows[0],
+        ).toEqual({ buyers: 5, grants: 5 });
+        const before = await admissionSnapshot();
+        await expect(
+          complete(ctx, buyers[5], { ...call, operationKey: randomUUID() }),
+        ).rejects.toMatchObject({ statusCode: 429, code: 'inference_busy' });
+        expect(await admissionSnapshot()).toEqual(before);
+        expect(barrier.dispatch).toHaveBeenCalledTimes(5);
+      } finally {
+        barrier.release();
+        await pending;
+      }
+      expect(
+        (await pool.query('SELECT sum(held_calls)::int held FROM broker_inference_routes')).rows[0]
+          .held,
+      ).toBe(0);
+    });
+    it('retains the two-call per-grant limit while other global slots are available', async () => {
+      const [buyer] = await concurrencyBuyers(['baseten']);
+      const barrier = blockDispatch();
+      const pending = Promise.all(
+        Array.from({ length: 2 }, () =>
+          complete(ctx, buyer, { ...call, operationKey: randomUUID() }),
+        ),
+      );
+      try {
+        await vi.waitFor(() => expect(barrier.dispatch).toHaveBeenCalledTimes(2));
+        const before = await admissionSnapshot();
+        await expect(
+          complete(ctx, buyer, { ...call, operationKey: randomUUID() }),
+        ).rejects.toMatchObject({ statusCode: 429, code: 'grant_busy' });
+        expect(await admissionSnapshot()).toEqual(before);
+        expect(barrier.dispatch).toHaveBeenCalledTimes(2);
+      } finally {
+        barrier.release();
+        await pending;
+      }
+    });
+    it('counts unknown outcomes against global capacity until verified resolution releases the slot', async () => {
+      const buyers = await concurrencyBuyers([
+        'baseten',
+        'modal',
+        'modal',
+        'modal',
+        'modal',
+        'baseten',
+      ]);
+      ctx.inference!.dispatch = vi.fn(async () => {
+        throw new InferenceUpstreamError('transport_outcome_unknown', false);
+      });
+      await expect(
+        complete(ctx, buyers[0], { ...call, operationKey: randomUUID() }),
+      ).rejects.toMatchObject({ code: 'inference_outcome_unknown' });
+      const unknown = (await pool.query('SELECT * FROM broker_inference_requests')).rows[0];
+      const barrier = blockDispatch();
+      const pending = Promise.all(
+        buyers
+          .slice(1, 5)
+          .map((buyer) => complete(ctx, buyer, { ...call, operationKey: randomUUID() })),
+      );
+      let replacement: ReturnType<typeof complete> | undefined;
+      try {
+        await vi.waitFor(() => expect(barrier.dispatch).toHaveBeenCalledTimes(4));
+        const before = await admissionSnapshot();
+        // Baseten has only one occupied slot; the global bound must reject this request.
+        await expect(
+          complete(ctx, buyers[5], { ...call, operationKey: randomUUID() }),
+        ).rejects.toMatchObject({ statusCode: 429, code: 'inference_busy' });
+        expect(await admissionSnapshot()).toEqual(before);
+        expect(await receipt(ctx, buyers[0], unknown.id)).toMatchObject({
+          status: 'outcome_unknown',
+          heldInputTokens: inputBound,
+          heldOutputTokens: 64,
+        });
+        await resolveRequest(ctx, operator, unknown.id, {
+          operationKey: randomUUID(),
+          providerRequestId: 'verified-concurrency-receipt',
+          evidence: 'Verified fixture provider usage before releasing the global slot.',
+          inputTokens: 10,
+          outputTokens: 12,
+          rejected: false,
+        });
+        replacement = complete(ctx, buyers[5], { ...call, operationKey: randomUUID() });
+        await vi.waitFor(() => expect(barrier.dispatch).toHaveBeenCalledTimes(5));
+        expect(
+          (await pool.query('SELECT sum(held_calls)::int held FROM broker_inference_routes'))
+            .rows[0].held,
+        ).toBe(5);
+      } finally {
+        barrier.release();
+        await Promise.all([pending, replacement]);
+      }
     });
     it('reserves both token dimensions, bounds concurrency, and charges money only for the pack', async () => {
       const g = await grant(),

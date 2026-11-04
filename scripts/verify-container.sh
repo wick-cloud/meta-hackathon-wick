@@ -22,8 +22,19 @@ docker build --tag "$fixture_image" .
 node scripts/scan-image-secrets.mjs "$fixture_image"
 # Scan the exact runtime image that the smoke test starts. No unfixed-vulnerability
 # exclusions or implicit .trivyignore suppressions: triage failures before release.
-trivy image --scanners vuln --severity HIGH,CRITICAL --exit-code 1 \
+trivy image --scanners vuln --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL --exit-code 1 \
   --no-progress --timeout 10m --ignorefile /dev/null "$fixture_image"
+# Production commands must work without package managers or their bundled dependencies.
+docker run --rm "$fixture_image" sh -ec '
+  for tool in npm npx yarn yarnpkg; do
+    if command -v "$tool" >/dev/null 2>&1; then
+      echo "Unexpected package manager in production: $tool" >&2
+      exit 1
+    fi
+  done
+  test ! -d /usr/local/lib/node_modules
+  test -s /usr/local/LICENSE
+'
 docker network create "$fixture_network" >/dev/null
 docker run -d --name "$fixture_db" --network "$fixture_network" \
   -e POSTGRES_DB=broker_smoke -e POSTGRES_USER=broker_smoke \
@@ -51,9 +62,9 @@ fixture_env=(
   -e SEED_ADMIN_PASSWORD=container-fixture-admin-password
 )
 docker run --rm --network "$fixture_network" "${fixture_env[@]}" \
-  "$fixture_image" npm run db:migrate:production
+  "$fixture_image" node dist/scripts/migrate.js
 docker run --rm --network "$fixture_network" "${fixture_env[@]}" \
-  "$fixture_image" npm run seed:production
+  "$fixture_image" node dist/scripts/seed.js
 docker run -d --name "$fixture_app" --network "$fixture_network" \
   -p 127.0.0.1::3000 "${fixture_env[@]}" "$fixture_image" >/dev/null
 fixture_port=$(docker port "$fixture_app" 3000/tcp | sed -n 's/^127\.0\.0\.1://p')
