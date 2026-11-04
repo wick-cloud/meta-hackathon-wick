@@ -195,7 +195,7 @@ async function advance(ctx: AppContext, runId: string, leaseToken: string) {
     Math.min(new Date(run.expires_at).getTime(), new Date(run.vm_expires_at).getTime()),
   ).toISOString();
   const native = await ctx.wick.runCommand!(run.environment_id, {
-    command: demoStudioCommand(runId, studio.attempt, source, deadline),
+    command: demoStudioCommand(runId, studio.attempt, source, deadline, run.demo_name),
     cwd: '/workspace',
   });
   if (native.exitCode !== 0 || (ctx.wick.mode === 'real' && native.simulated))
@@ -222,7 +222,7 @@ async function advance(ctx: AppContext, runId: string, leaseToken: string) {
     receipt.data.valid &&
     receipt.data.errorCode === null &&
     receipt.data.exitCode === 0 &&
-    receipt.data.stdout === 'Hello, World!\n';
+    receipt.data.stdout === `Hello, ${run.demo_name || 'World'}!\n`;
   await state(ctx, runId, leaseToken, async (db, _run, latest) => {
     if (latest.attempt !== studio.attempt || latest.status !== 'running') return;
     await db.query(

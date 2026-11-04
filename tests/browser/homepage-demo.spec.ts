@@ -150,6 +150,7 @@ async function fixture(page: Page, initial = state()) {
         json: { user: null, modes: { wick: 'fixture', muse: 'fixture' }, catalog: [] },
       });
     if (request.method() !== 'GET') writes.push({ path, body: request.postDataJSON() });
+    if (path === '/api/demo/session') return route.fulfill({ status: 204 });
     if (path === '/api/demo') {
       reads++;
       return readFailure
@@ -161,6 +162,7 @@ async function fixture(page: Page, initial = state()) {
         return route.fulfill({ status: 503, json: { error: 'Start could not be confirmed.' } });
       current = state(receipt('auction'));
       current.run!.kind = request.postDataJSON().kind ?? 'terminal';
+      current.run!.demoName = request.postDataJSON().demoName ?? '';
       if (current.run!.kind === 'studio') current.run!.studio = studioReceipt('waiting').studio;
       if (startHold) {
         const started = current;
@@ -168,7 +170,7 @@ async function fixture(page: Page, initial = state()) {
           ...current,
           available: false,
           run: null,
-          reason: 'A demo is already active for this browser or connection.',
+          reason: 'A demo is already active for this browser.',
         };
         await startHold;
         current = started;
@@ -243,20 +245,21 @@ test('demo page starts only on explicit action and supports legacy single-provid
     page.getByRole('article', { name: 'Token auction' }).getByText('Baseten', { exact: true }),
   ).toBeVisible();
   await expect(
-    page.getByText('One eligible token provider in this demo.', { exact: false }),
+    page.getByText('Every qualified Muse seller is invited; the lowest bid wins.', {
+      exact: false,
+    }),
   ).toHaveCount(1);
   await expect(
     page.getByRole('heading', {
       name: 'Meet the market. Then put it to work.',
     }),
   ).toBeVisible();
-  expect(f.writes).toHaveLength(1);
-  expect(f.writes[0]!.path).toBe('/api/demo/start');
-  expect(f.writes[0]!.body.operationKey).toEqual(expect.any(String));
-  expect(f.writes[0]!.body.kind).toBe('terminal');
+  expect(f.writes.map((write) => write.path)).toEqual(['/api/demo/session', '/api/demo/start']);
+  expect(f.writes[1]!.body.operationKey).toEqual(expect.any(String));
+  expect(f.writes[1]!.body.kind).toBe('terminal');
   await page.reload();
   await expect(page.getByRole('heading', { name: 'Your resources, going once…' })).toBeVisible();
-  expect(f.writes).toHaveLength(1);
+  expect(f.writes).toHaveLength(2);
   await expect(page).toHaveURL(/\/demos$/);
 });
 
@@ -315,7 +318,7 @@ test('a late start resumes after home navigation by polling the blocked no-run s
     expect(f.reads()).toBe(homeReads);
     await page.getByRole('link', { name: 'Explore live demos', exact: true }).click();
     await expect(
-      page.getByText('A demo is already active for this browser or connection.', { exact: true }),
+      page.getByText('A demo is already active for this browser.', { exact: true }),
     ).toBeVisible();
     await expect(
       page.getByRole('button', { name: 'Check demo status', exact: true }),
@@ -326,9 +329,8 @@ test('a late start resumes after home navigation by polling the blocked no-run s
     ).toBeDisabled();
     f.releaseStart();
     await expect(page.getByRole('link', { name: 'Return to Muse Studio demo' })).toBeVisible();
-    expect(f.writes).toHaveLength(1);
-    expect(f.writes[0]!.path).toBe('/api/demo/start');
-    expect(f.writes[0]!.body.kind).toBe('studio');
+    expect(f.writes.map((write) => write.path)).toEqual(['/api/demo/session', '/api/demo/start']);
+    expect(f.writes[1]!.body.kind).toBe('studio');
   } finally {
     f.releaseStart();
   }
@@ -384,12 +386,17 @@ test('Studio starts explicitly with its mode and an uncertain retry keeps the sa
   await expect(page.getByRole('heading', { name: 'Your resources, going once…' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Another demo is active' })).toBeDisabled();
   await expect(page.getByRole('link', { name: 'Return to Muse Studio demo' })).toBeVisible();
-  expect(f.writes).toHaveLength(2);
-  expect(f.writes[0]!.body).toEqual(f.writes[1]!.body);
-  expect(f.writes[0]!.body.kind).toBe('studio');
+  expect(f.writes.map((write) => write.path)).toEqual([
+    '/api/demo/session',
+    '/api/demo/start',
+    '/api/demo/session',
+    '/api/demo/start',
+  ]);
+  expect(f.writes[1]!.body).toEqual(f.writes[3]!.body);
+  expect(f.writes[1]!.body.kind).toBe('studio');
   await page.reload();
   await expect(page.getByRole('link', { name: 'Return to Muse Studio demo' })).toBeVisible();
-  expect(f.writes).toHaveLength(2);
+  expect(f.writes).toHaveLength(4);
 });
 
 test('guided Studio displays saved generation and execution receipts as text without model key controls', async ({
@@ -856,6 +863,30 @@ for (const width of [1440, 390, 320]) {
     await page
       .locator('#live-demo')
       .screenshot({ path: info.outputPath(`demo-terminal-panel-${width}.png`) });
-    expect(f.writes.map((w) => w.path)).toEqual(['/api/demo/start']);
+    expect(f.writes.map((w) => w.path)).toEqual(['/api/demo/session', '/api/demo/start']);
   });
 }
+
+test('Studio offers Hello World and an optional name while the task stays read-only', async ({
+  page,
+}) => {
+  const f = await fixture(page);
+  await page.goto('/demos');
+  await expect(page.getByLabel('Choose a task')).toHaveValue('hello-world');
+  await page.getByLabel('Your name (optional)').fill('Alex');
+  await expect(page.getByRole('textbox', { name: 'Your Muse task', exact: true })).toHaveValue(
+    'Create hello_world.py that prints Hello, Alex! Run it and verify the output.',
+  );
+  await expect(page.getByRole('textbox', { name: 'Your Muse task', exact: true })).toHaveAttribute(
+    'readonly',
+    '',
+  );
+  await page.screenshot({ path: 'verification-results/demo-pool/name-task.png', fullPage: true });
+  await page.getByRole('button', { name: 'Start Muse Studio demo', exact: true }).click();
+  await expect(
+    page.locator('#live-demo').getByRole('textbox', { name: 'Your Muse task', exact: true }),
+  ).toHaveValue('Create hello_world.py that prints Hello, Alex! Run it and verify the output.');
+  expect(f.writes.map((write) => write.path)).toEqual(['/api/demo/session', '/api/demo/start']);
+  expect(f.writes[1]!.body.demoName).toBe('Alex');
+  await expect(page.getByLabel('Your name (optional)')).toBeDisabled();
+});

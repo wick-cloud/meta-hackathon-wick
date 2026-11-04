@@ -1,7 +1,7 @@
 # Contributing
 
 Use Node 24 and a disposable local PostgreSQL database. Follow the
-[local setup](README.md#local-start) and [testing guide](docs/testing.md).
+[local setup](docs/local-development.md) and [testing guide](docs/testing.md).
 Choose `WICK_MODE=fixture` and `MUSE_MODE=fixture` for ordinary development.
 Real-provider scripts can spend money and create infrastructure; run them only
 with explicit operator authorization and their documented cleanup safeguards.

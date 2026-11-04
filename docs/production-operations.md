@@ -9,7 +9,7 @@ private, or TCP ingress. Arbitrary `X-Forwarded-For` chains are never trusted.
 
 ## Deployment and schema integrity
 
-Run `npm run db:migrate:production` as the pre-deploy command. It applies application
+Run `node dist/scripts/migrate.js` as the pre-deploy command. It applies application
 migrations under an advisory lock and installs/upgrades the pg-boss schema. Production
 startup validates application migration names and SHA-256 digests and starts pg-boss
 without schema migrations. Missing, modified, or removed migrations fail startup.
@@ -84,18 +84,25 @@ are covered by a regression test. Remove the override when the upstream dependen
 supports the patched chain directly, after rerunning the production image smoke test.
 An empty package audit is useful evidence, not proof that every code path is safe.
 
-The runtime uses a pinned official Node 24 Alpine image. npm is retained for the
-existing hosting migration command, pinned to 12.2.1 with its bundled undici replaced
-by the compatible 6.29.1 security patch. Unused Yarn tooling is removed. The image
-gate scans the actual runtime for high/critical vulnerabilities and secrets, then
-exercises migrations, seeding, readiness, static assets and graceful shutdown.
-Revisit the bundled dependency patch when npm publishes a version containing it.
+The runtime uses a pinned Alpine base matched to the pinned official Node 24 image.
+Only the Node binary, its license, required system libraries, production application
+dependencies, and application artifacts enter the final stage. npm and Yarn remain
+in discarded build stages; their bundled glob, minimatch, ip-address, and undici
+are absent from the production image. Do not copy package-manager trees back into it.
 
-npm's bundled glob/minimatch still have moderate advisory findings in the installed
-package-manager tooling. These are outside the application's dependency audit, which
-currently reports zero findings. The image gate blocks every high/critical finding
-without broad exclusions; moderate operator-tool exposure remains a tracked upgrade
-item, so a passing image gate does not mean the image has zero vulnerabilities.
+Run compiled operator commands directly with Node. Existing Railway services must
+use `node dist/scripts/migrate.js` as the pre-deploy command before deploying this
+image. The same direct command also works with the preceding npm-containing image,
+so this setting remains compatible with a rollback. Use the commands documented in
+[Railway operations](RAILWAY.md) for one-time seeding and provider configuration.
+
+`npm run audit` covers the application/workspace dependency lockfile at every
+severity. The production image gate scans all OS and application packages at every
+severity, including unknown, without unfixed-vulnerability or ignore-file exclusions.
+It also rejects secret findings and exercises migrations, seeding, readiness,
+static assets, non-root execution, package-manager absence, and graceful shutdown.
+A passing audit records the advisories known to the scanners at that time; update
+base images and dependencies as new advisories become available.
 
 ## Release evidence
 

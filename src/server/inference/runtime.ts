@@ -7,6 +7,7 @@ import {
   INFERENCE_MODEL_ID,
   INFERENCE_MODEL_NAME,
   INFERENCE_PROVIDERS,
+  utf8InputReservation,
   type InferenceCompletionInput,
   type InferenceProvider,
   type InferenceRoute,
@@ -112,6 +113,11 @@ export function routeView(route: RuntimeRoute, quarantined = false): InferenceRo
         ? 'Accounting qualification has expired.'
         : route.reason,
     minimumInputReservation: minimumInputReservation(route),
+    minimumPackInputTokens: minimumPackInputTokens(route),
+    minimumOutputTokens: route.minimumOutputTokens ?? 1,
+    ...(route.inputAccounting
+      ? { inputAccounting: route.inputAccounting, maximumInputReservation: route.inputBound }
+      : {}),
     maximumOutputTokens: route.maximumOutputTokens,
   };
 }
@@ -121,38 +127,18 @@ export function routeView(route: RuntimeRoute, quarantined = false): InferenceRo
 export function minimumInputReservation(route: RuntimeRoute): number {
   return route.mode === 'fixture' ? 20 : route.inputAccounting ? 4128 : route.inputBound;
 }
+/** Standalone wallet packs cannot pool another purchase's quota. Use an actual
+ * nonempty message, rather than the framing-only accounting floor. */
+export function minimumPackInputTokens(route: RuntimeRoute): number {
+  return inputReservation(route, { messages: [{ role: 'user', content: 'a' }] });
+}
 export function inputReservation(
   route: RuntimeRoute,
   input: Pick<InferenceCompletionInput, 'messages'>,
 ): number {
   if (route.mode === 'fixture') return fixtureInputTokens(input);
   if (!route.inputAccounting) return route.inputBound;
-  return Math.min(
-    route.inputBound,
-    4096 +
-      input.messages.reduce((n, m) => {
-        // Muse's published system template expands these directive spellings.
-        // Bound the rendered form as well as Unicode normalization, not just
-        // the client bytes. The replacement changes only the byte envelope;
-        // dispatch still sends the original message unchanged.
-        const rendered =
-          m.role === 'system'
-            ? m.content.replace(
-                /Reasoning effort|Reasoning Effort|reasoning effort|REASONING EFFORT/g,
-                (directive) => `${directive.slice(0, -6)}strength`,
-              )
-            : m.content;
-        // Compatibility decomposition can expand a Unicode scalar substantially.
-        // Cover raw text and every standard normalization form before byte BPE.
-        const bytes = Math.max(
-          Buffer.byteLength(rendered, 'utf8'),
-          ...(['NFC', 'NFD', 'NFKC', 'NFKD'] as const).map((form) =>
-            Buffer.byteLength(rendered.normalize(form), 'utf8'),
-          ),
-        );
-        return n + 32 + bytes;
-      }, 0),
-  );
+  return utf8InputReservation(input.messages, route.inputBound);
 }
 /** Fixture tokens are fictional UTF-8 bytes plus framing; never used for a real route. */
 export function fixtureInputTokens(input: Pick<InferenceCompletionInput, 'messages'>): number {

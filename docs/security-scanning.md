@@ -56,6 +56,13 @@ none was a confirmed live credential. This describes that review, not future
 commits. Run the gate again against the exact release commit after concurrent
 work is merged and inspect the final package/container contents.
 
+The container gate also scans OS and application vulnerabilities at every severity
+(`UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL`) with no unfixed or ignore-file exemptions.
+Production has no npm/Yarn bundle: build stages install dependencies, and a fresh
+runtime stage receives only Node and the application's production dependencies.
+The root `npm run audit` separately rejects every advisory in the application and
+workspace lockfile, including development dependencies.
+
 ## Coverage limits
 
 The container release gate separately runs `scripts/scan-image-secrets.mjs` with

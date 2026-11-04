@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState, type MouseEvent } from 'react';
 import {
   ArrowDown,
   ArrowRight,
@@ -10,12 +11,22 @@ import {
   ShieldCheck,
   Sparkles,
   TerminalSquare,
+  X,
 } from 'lucide-react';
 import { Brand } from './brand';
-import { Link } from './components';
+import { Link, MarketDialog } from './components';
 import './homepage.css';
 
 export function HomePage() {
+  const [demoChooserOpen, setDemoChooserOpen] = useState(false);
+  const demoTrigger = useRef<HTMLButtonElement>(null);
+  function openDemoChooser(event: MouseEvent<HTMLButtonElement>) {
+    demoTrigger.current = event.currentTarget;
+    setDemoChooserOpen(true);
+  }
+  useEffect(() => {
+    if (!demoChooserOpen) demoTrigger.current?.focus();
+  }, [demoChooserOpen]);
   return (
     <div className="broker-home">
       <a className="skip-link" href="#marketplace-home">
@@ -26,11 +37,19 @@ export function HomePage() {
           <Brand />
         </Link>
         <nav aria-label="Marketplace navigation">
+          <button
+            type="button"
+            className="button primary"
+            aria-haspopup="dialog"
+            onClick={openDemoChooser}
+          >
+            Try demo
+          </button>
           <Link href="/demos">Live demos</Link>
           <a href="#marketplace">Marketplace</a>
           <a href="#how-it-works">How it works</a>
           <Link href="/login" className="button secondary">
-            Sign in <ArrowRight size={14} />
+            Sign in
           </Link>
         </nav>
       </header>
@@ -49,21 +68,28 @@ export function HomePage() {
               private workspace, or bring your next task to Muse Studio.
             </p>
             <div className="home-hero-actions">
-              <Link href="/demos" className="button primary">
+              <button
+                type="button"
+                className="button primary"
+                aria-haspopup="dialog"
+                onClick={openDemoChooser}
+              >
+                Try demo <ArrowRight size={16} />
+              </button>
+              <Link href="/demos" className="button secondary">
                 Explore live demos <ArrowRight size={16} />
               </Link>
+            </div>
+            <p className="home-access-note">
+              Buyer or seller. No signup required.{' '}
               <a
                 href="https://app.wick-cloud.com/waitlist"
-                className="button secondary"
                 target="_blank"
                 rel="noopener noreferrer"
                 aria-label="Join buyer beta (opens in a new tab)"
               >
-                Join buyer beta <ArrowUpRight size={16} />
+                Join buyer beta ↗
               </a>
-            </div>
-            <p className="home-access-note">
-              Try the platform without an account. Build with us in the buyer beta.
             </p>
             <div className="home-hero-facts">
               <span>
@@ -253,8 +279,8 @@ export function HomePage() {
                   </div>
                 </li>
               </ol>
-              <Link href="/login?intent=buy">
-                Enter buyer workspace <ArrowRight size={15} />
+              <Link href="/demo/buyer">
+                Try the buyer demo <ArrowRight size={15} />
               </Link>
             </article>
             <article>
@@ -294,8 +320,8 @@ export function HomePage() {
                   </div>
                 </li>
               </ol>
-              <Link href="/login?intent=sell">
-                Enter seller workspace <ArrowRight size={15} />
+              <Link href="/demo/seller">
+                Try the seller demo <ArrowRight size={15} />
               </Link>
             </article>
           </div>
@@ -359,6 +385,40 @@ export function HomePage() {
         </p>
         <a href="#marketplace-home">Back to top ↑</a>
       </footer>
+      {demoChooserOpen && (
+        <MarketDialog titleId="home-demo-title" onClose={() => setDemoChooserOpen(false)}>
+          <div className="home-demo-heading">
+            <h2 id="home-demo-title">Choose your demo</h2>
+            <button
+              type="button"
+              className="icon-button"
+              aria-label="Close demo chooser"
+              onClick={() => setDemoChooserOpen(false)}
+            >
+              <X size={18} aria-hidden="true" />
+            </button>
+          </div>
+          <p>No signup required. Explore the full console with sample data.</p>
+          <div className="home-demo-options">
+            <Link href="/demo/buyer" className="home-demo-option" aria-label="Try buyer demo">
+              <TerminalSquare size={24} aria-hidden="true" />
+              <span>
+                <strong>Try buyer demo</strong>
+                <span>Browse resources, compare bids, and manage your workspace.</span>
+              </span>
+              <ArrowRight size={18} aria-hidden="true" />
+            </Link>
+            <Link href="/demo/seller" className="home-demo-option" aria-label="Try seller demo">
+              <Cpu size={24} aria-hidden="true" />
+              <span>
+                <strong>Try seller demo</strong>
+                <span>Manage capacity, set bidding rules, and review earnings.</span>
+              </span>
+              <ArrowRight size={18} aria-hidden="true" />
+            </Link>
+          </div>
+        </MarketDialog>
+      )}
     </div>
   );
 }

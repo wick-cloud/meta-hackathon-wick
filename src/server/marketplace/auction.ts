@@ -2,8 +2,9 @@ import { diskCatalogEligible, requireDisk, reserveVmDisk } from '../disks/servic
 import {
   authorizeDemoComputeSource,
   authorizeDemoComputeRequest,
-  DEMO_COMPUTE_CATALOG_IDS,
+  DEMO_MODAL_CATALOG_ID,
   demoComputeCatalogEligible,
+  demoComputeCatalogs,
   demoComputeProviders,
   demoComputePolicy,
   demoComputePrice,
@@ -218,6 +219,10 @@ export async function createRequest(
         };
         let eligibleCatalogs: Row[] | undefined;
         if (matchAcrossProviders) {
+          // Demo requests match every qualified Micro route, so all eligible sellers can bid.
+          const demoCatalogIds = demo
+            ? (await demoComputeCatalogs(ctx, db)).map((item) => item.id)
+            : null;
           const rows = (
             await db.query(
               `SELECT id,item FROM broker_catalog WHERE approved AND source_mode=$1
@@ -235,7 +240,7 @@ export async function createRequest(
                 region,
                 JSON.stringify([durationMinutes]),
                 MAX_MATCH_CATALOGS + 1,
-                demo ? [...DEMO_COMPUTE_CATALOG_IDS] : null,
+                demoCatalogIds,
               ],
             )
           ).rows;
@@ -799,7 +804,7 @@ export async function awardHeldBid(ctx: AppContext, db: PoolClient, request: Row
     await db.query("SELECT pg_advisory_xact_lock(hashtext('broker-global-vm-admission'))");
   const sponsorshipPolicy = await authorizeDemoComputeRequest(ctx, db, request);
   const sponsorship = sponsorshipPolicy ? demoBidPrice(request, winner) : null;
-  if (sponsorship && winner.offering_snapshot?.catalog?.id !== DEMO_COMPUTE_CATALOG_IDS[0])
+  if (sponsorship && winner.offering_snapshot?.catalog?.id !== DEMO_MODAL_CATALOG_ID)
     throw new HttpError(409, 'Only the sponsored Modal Micro offer can be awarded for this demo.');
   const winnerCatalog = winner.offering_snapshot?.catalog as CatalogItem | undefined;
   if (compatibleRequest(request) && !winnerCatalog)

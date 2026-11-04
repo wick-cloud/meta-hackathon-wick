@@ -19,6 +19,7 @@ import {
 import {
   INFERENCE_CONTRACT,
   INFERENCE_MODEL_ID,
+  utf8InputReservation,
   type InferenceCompletionInput,
   type InferenceProvider,
 } from '../src/shared/inference.js';
@@ -135,8 +136,24 @@ describe('inference runtime enablement and qualification', () => {
       next = dynamic.routes.get('baseten')!;
     expect(routeView(old).minimumInputReservation).toBe(32768);
     expect(routeView(next).minimumInputReservation).toBe(4128);
+    expect(routeView(next)).toMatchObject({
+      minimumPackInputTokens: 4129,
+      minimumOutputTokens: 1,
+      inputAccounting: 'utf8-bytes-v1',
+      maximumInputReservation: 1048576,
+    });
+    expect(routeView(old).minimumPackInputTokens).toBe(32768);
     expect(next.fingerprint).not.toBe(old.fingerprint);
     const { inputReservation } = await import('../src/server/inference/runtime.js');
+    for (const content of ['a', 'Reply with only OK.', '修复 🧪 e\u0301', '\uFDFA']) {
+      const messages = [{ role: 'user' as const, content }];
+      expect(utf8InputReservation(messages, next.inputBound)).toBe(
+        inputReservation(next, { messages }),
+      );
+    }
+    expect(
+      inputReservation(next, { messages: [{ role: 'user', content: 'Reply with only OK.' }] }),
+    ).toBe(4147);
     expect(inputReservation(old, input)).toBe(32768);
     const unicode = { messages: [{ role: 'user' as const, content: '修复 🧪 e\u0301' }] };
     expect(inputReservation(next, unicode)).toBe(
@@ -354,6 +371,7 @@ describe('single-attempt provider requests and authoritative usage', () => {
       await certifiedRuntime([certificate('modal', { minimumOutputTokens: 256 })])
     ).routes.get('modal')!;
     expect(routeView(native).reason).toContain('256');
+    expect(routeView(native).minimumOutputTokens).toBe(256);
     await expect(
       dispatchReal(native, { ...input, max_tokens: 8 }, 'below-minimum', fetcher),
     ).rejects.toMatchObject({ code: 'unqualified_output_limit', definite: true });
@@ -525,22 +543,20 @@ describe('single-attempt provider requests and authoritative usage', () => {
   it.each(['modal', 'baseten'] as const)(
     'accepts null token-ID extensions on legacy %s',
     async (provider) => {
-      const fetcher = vi
-        .fn<typeof fetch>()
-        .mockResolvedValue(
-          response(
-            completion({
-              choices: [
-                {
-                  message: { content: 'OK' },
-                  finish_reason: 'stop',
-                  prompt_token_ids: null,
-                  response_token_ids: null,
-                },
-              ],
-            }),
-          ),
-        );
+      const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+        response(
+          completion({
+            choices: [
+              {
+                message: { content: 'OK' },
+                finish_reason: 'stop',
+                prompt_token_ids: null,
+                response_token_ids: null,
+              },
+            ],
+          }),
+        ),
+      );
       expect(
         await dispatchReal(route(provider), input, 'legacy-null-extensions', fetcher),
       ).toMatchObject({ inputTokens: 20, outputTokens: 12 });

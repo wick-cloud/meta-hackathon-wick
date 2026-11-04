@@ -4,6 +4,7 @@ import { defineConfig, devices } from '@playwright/test';
 /** Tests intentionally use a running application with real auth and PostgreSQL. */
 export default defineConfig({
   testDir: './tests/browser',
+  testIgnore: 'local-demo.spec.ts',
   fullyParallel: false,
   workers: 1,
   timeout: 90_000,

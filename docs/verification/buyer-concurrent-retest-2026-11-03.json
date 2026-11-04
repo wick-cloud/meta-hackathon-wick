@@ -1,0 +1,627 @@
+{
+  "model": "gpt-6.1-sol",
+  "reasoning": "medium",
+  "agents": 3,
+  "productionCommit": "377adc4999b4e9caa71aea1896599c0af1bbb404",
+  "newConfirmedBugs": [],
+  "compute": {
+    "success": true,
+    "barrierStart": "2026-11-03T18:34:58.714Z",
+    "barrierEnd": "2026-11-03T18:35:29.136Z",
+    "barrierElapsedMs": 30422,
+    "fullTtlNativeEstimateUsd": 0.0999,
+    "buyers": [
+      {
+        "buyer": 1,
+        "requestId": "bf39dd4c-83df-40b8-b350-1bf3c222ad7c",
+        "vmId": "a38049da-4299-49ca-9aa5-b33203175af4",
+        "environmentId": "env_2db699589a8f4f17af579f80a3d3b3e9",
+        "catalogId": "e2b:micro:us",
+        "readyAt": "2026-11-03T18:34:16.522Z",
+        "cleanupConfirmedAt": "2026-11-03T18:35:36.354Z",
+        "finalStatus": "terminated",
+        "failureReason": null,
+        "sameKeyCreateReusedId": true,
+        "mismatchStatus": 409,
+        "invoiceCount": 1,
+        "invoiceCents": 4.5,
+        "proofs": [
+          {
+            "round": 0,
+            "at": "2026-11-03T18:34:57.840Z",
+            "freshPong": true,
+            "exactOutputVerified": true
+          },
+          {
+            "round": 1,
+            "at": "2026-11-03T18:35:03.921Z",
+            "freshPong": true,
+            "exactOutputVerified": true
+          },
+          {
+            "round": 2,
+            "at": "2026-11-03T18:35:08.869Z",
+            "freshPong": true,
+            "exactOutputVerified": true
+          },
+          {
+            "round": 3,
+            "at": "2026-11-03T18:35:13.870Z",
+            "freshPong": true,
+            "exactOutputVerified": true
+          },
+          {
+            "round": 4,
+            "at": "2026-11-03T18:35:18.869Z",
+            "freshPong": true,
+            "exactOutputVerified": true
+          },
+          {
+            "round": 5,
+            "at": "2026-11-03T18:35:23.923Z",
+            "freshPong": true,
+            "exactOutputVerified": true
+          },
+          {
+            "round": 6,
+            "at": "2026-11-03T18:35:28.869Z",
+            "freshPong": true,
+            "exactOutputVerified": true
+          }
+        ]
+      },
+      {
+        "buyer": 2,
+        "requestId": "9e7850ed-d3fe-4143-9a1f-d63ba646117e",
+        "vmId": "2de877c1-5d11-4acd-96c3-57af53128cbd",
+        "environmentId": "env_643bdec46bc94fabaa125341618bf2ae",
+        "catalogId": "daytona:micro:us",
+        "readyAt": "2026-11-03T18:34:16.889Z",
+        "cleanupConfirmedAt": "2026-11-03T18:35:36.301Z",
+        "finalStatus": "terminated",
+        "failureReason": null,
+        "sameKeyCreateReusedId": true,
+        "mismatchStatus": 409,
+        "invoiceCount": 1,
+        "invoiceCents": 4.5,
+        "proofs": [
+          {
+            "round": 0,
+            "at": "2026-11-03T18:34:57.687Z",
+            "freshPong": true,
+            "exactOutputVerified": true
+          },
+          {
+            "round": 1,
+            "at": "2026-11-03T18:35:03.924Z",
+            "freshPong": true,
+            "exactOutputVerified": true
+          },
+          {
+            "round": 2,
+            "at": "2026-11-03T18:35:08.818Z",
+            "freshPong": true,
+            "exactOutputVerified": true
+          },
+          {
+            "round": 3,
+            "at": "2026-11-03T18:35:13.874Z",
+            "freshPong": true,
+            "exactOutputVerified": true
+          },
+          {
+            "round": 4,
+            "at": "2026-11-03T18:35:18.872Z",
+            "freshPong": true,
+            "exactOutputVerified": true
+          },
+          {
+            "round": 5,
+            "at": "2026-11-03T18:35:23.872Z",
+            "freshPong": true,
+            "exactOutputVerified": true
+          },
+          {
+            "round": 6,
+            "at": "2026-11-03T18:35:28.818Z",
+            "freshPong": true,
+            "exactOutputVerified": true
+          }
+        ]
+      },
+      {
+        "buyer": 3,
+        "requestId": "6a9b5bcd-e8a4-43db-b621-5d32983e0b7d",
+        "vmId": "d1f38ad3-c22b-4d64-aab5-0a1f4c1bbc56",
+        "environmentId": "env_3cc868f7c58240beb6f397e1202d075c",
+        "catalogId": "modal:micro:auto",
+        "readyAt": "2026-11-03T18:34:54.896Z",
+        "cleanupConfirmedAt": "2026-11-03T18:36:12.450Z",
+        "finalStatus": "terminated",
+        "failureReason": null,
+        "sameKeyCreateReusedId": true,
+        "mismatchStatus": 409,
+        "invoiceCount": 1,
+        "invoiceCents": 1,
+        "proofs": [
+          {
+            "round": 0,
+            "at": "2026-11-03T18:34:57.638Z",
+            "freshPong": true,
+            "exactOutputVerified": true
+          },
+          {
+            "round": 1,
+            "at": "2026-11-03T18:35:03.819Z",
+            "freshPong": true,
+            "exactOutputVerified": true
+          },
+          {
+            "round": 2,
+            "at": "2026-11-03T18:35:08.820Z",
+            "freshPong": true,
+            "exactOutputVerified": true
+          },
+          {
+            "round": 3,
+            "at": "2026-11-03T18:35:13.875Z",
+            "freshPong": true,
+            "exactOutputVerified": true
+          },
+          {
+            "round": 4,
+            "at": "2026-11-03T18:35:18.818Z",
+            "freshPong": true,
+            "exactOutputVerified": true
+          },
+          {
+            "round": 5,
+            "at": "2026-11-03T18:35:23.876Z",
+            "freshPong": true,
+            "exactOutputVerified": true
+          },
+          {
+            "round": 6,
+            "at": "2026-11-03T18:35:28.820Z",
+            "freshPong": true,
+            "exactOutputVerified": true
+          }
+        ]
+      },
+      {
+        "buyer": 4,
+        "requestId": "2b84ec1d-9db6-474c-a7f6-74a5f844a1aa",
+        "vmId": "7f072bab-76d5-4dbf-a446-ddb3deac0531",
+        "environmentId": "env_c5e8c6135628428d9247d6985f688bbd",
+        "catalogId": "sail:micro:auto",
+        "readyAt": "2026-11-03T18:34:17.906Z",
+        "cleanupConfirmedAt": "2026-11-03T18:35:37.343Z",
+        "finalStatus": "terminated",
+        "failureReason": null,
+        "sameKeyCreateReusedId": true,
+        "mismatchStatus": 409,
+        "invoiceCount": 1,
+        "invoiceCents": 3.24,
+        "proofs": [
+          {
+            "round": 0,
+            "at": "2026-11-03T18:34:57.689Z",
+            "freshPong": true,
+            "exactOutputVerified": true
+          },
+          {
+            "round": 1,
+            "at": "2026-11-03T18:35:03.926Z",
+            "freshPong": true,
+            "exactOutputVerified": true
+          },
+          {
+            "round": 2,
+            "at": "2026-11-03T18:35:08.974Z",
+            "freshPong": true,
+            "exactOutputVerified": true
+          },
+          {
+            "round": 3,
+            "at": "2026-11-03T18:35:14.031Z",
+            "freshPong": true,
+            "exactOutputVerified": true
+          },
+          {
+            "round": 4,
+            "at": "2026-11-03T18:35:19.130Z",
+            "freshPong": true,
+            "exactOutputVerified": true
+          },
+          {
+            "round": 5,
+            "at": "2026-11-03T18:35:24.131Z",
+            "freshPong": true,
+            "exactOutputVerified": true
+          },
+          {
+            "round": 6,
+            "at": "2026-11-03T18:35:29.076Z",
+            "freshPong": true,
+            "exactOutputVerified": true
+          }
+        ]
+      },
+      {
+        "buyer": 5,
+        "requestId": "d6cc4727-9132-4f7e-9ecd-c4dd3a588c72",
+        "vmId": "e03c7351-b0b9-4236-9273-b01e503a2274",
+        "environmentId": "env_6340fe5371714acb87e4c51c74363248",
+        "catalogId": "provider-tenki:micro:auto",
+        "readyAt": "2026-11-03T18:34:18.366Z",
+        "cleanupConfirmedAt": "2026-11-03T18:35:38.308Z",
+        "finalStatus": "terminated",
+        "failureReason": null,
+        "sameKeyCreateReusedId": true,
+        "mismatchStatus": 409,
+        "invoiceCount": 1,
+        "invoiceCents": 5.4,
+        "proofs": [
+          {
+            "round": 0,
+            "at": "2026-11-03T18:34:58.711Z",
+            "freshPong": true,
+            "exactOutputVerified": true
+          },
+          {
+            "round": 1,
+            "at": "2026-11-03T18:35:03.927Z",
+            "freshPong": true,
+            "exactOutputVerified": true
+          },
+          {
+            "round": 2,
+            "at": "2026-11-03T18:35:08.924Z",
+            "freshPong": true,
+            "exactOutputVerified": true
+          },
+          {
+            "round": 3,
+            "at": "2026-11-03T18:35:13.876Z",
+            "freshPong": true,
+            "exactOutputVerified": true
+          },
+          {
+            "round": 4,
+            "at": "2026-11-03T18:35:18.875Z",
+            "freshPong": true,
+            "exactOutputVerified": true
+          },
+          {
+            "round": 5,
+            "at": "2026-11-03T18:35:23.927Z",
+            "freshPong": true,
+            "exactOutputVerified": true
+          },
+          {
+            "round": 6,
+            "at": "2026-11-03T18:35:28.871Z",
+            "freshPong": true,
+            "exactOutputVerified": true
+          }
+        ]
+      }
+    ]
+  },
+  "native": {
+    "running": [
+      {
+        "id": "env_2db699589a8f4f17af579f80a3d3b3e9",
+        "status": "running",
+        "ready": true,
+        "observedAt": "2026-11-03T18:35:25.579Z",
+        "cleanup": "not_requested"
+      },
+      {
+        "id": "env_643bdec46bc94fabaa125341618bf2ae",
+        "status": "running",
+        "ready": true,
+        "observedAt": "2026-11-03T18:35:25.600Z",
+        "cleanup": "not_requested"
+      },
+      {
+        "id": "env_3cc868f7c58240beb6f397e1202d075c",
+        "status": "running",
+        "ready": true,
+        "observedAt": "2026-11-03T18:35:25.577Z",
+        "cleanup": "not_requested"
+      },
+      {
+        "id": "env_c5e8c6135628428d9247d6985f688bbd",
+        "status": "running",
+        "ready": true,
+        "observedAt": "2026-11-03T18:35:25.575Z",
+        "cleanup": "not_requested"
+      },
+      {
+        "id": "env_6340fe5371714acb87e4c51c74363248",
+        "status": "running",
+        "ready": true,
+        "observedAt": "2026-11-03T18:35:25.576Z",
+        "cleanup": "not_requested"
+      }
+    ],
+    "cleanup": [
+      {
+        "id": "env_2db699589a8f4f17af579f80a3d3b3e9",
+        "status": "terminated",
+        "ready": false,
+        "observedAt": "2026-11-03T18:37:15.058Z",
+        "cleanup": "complete",
+        "terminatedAt": "2026-11-03T18:35:35.588Z"
+      },
+      {
+        "id": "env_643bdec46bc94fabaa125341618bf2ae",
+        "status": "terminated",
+        "ready": false,
+        "observedAt": "2026-11-03T18:37:15.083Z",
+        "cleanup": "complete",
+        "terminatedAt": "2026-11-03T18:35:35.262Z"
+      },
+      {
+        "id": "env_3cc868f7c58240beb6f397e1202d075c",
+        "status": "terminated",
+        "ready": false,
+        "observedAt": "2026-11-03T18:37:15.076Z",
+        "cleanup": "complete",
+        "terminatedAt": "2026-11-03T18:36:07.389Z"
+      },
+      {
+        "id": "env_c5e8c6135628428d9247d6985f688bbd",
+        "status": "terminated",
+        "ready": false,
+        "observedAt": "2026-11-03T18:37:15.047Z",
+        "cleanup": "complete",
+        "terminatedAt": "2026-11-03T18:35:36.934Z"
+      },
+      {
+        "id": "env_6340fe5371714acb87e4c51c74363248",
+        "status": "terminated",
+        "ready": false,
+        "observedAt": "2026-11-03T18:37:15.071Z",
+        "cleanup": "complete",
+        "terminatedAt": "2026-11-03T18:35:36.439Z"
+      }
+    ]
+  },
+  "tokens": {
+    "purchaseBarrierAt": "2026-11-03T18:34:43.167Z",
+    "completionBarrierAt": "2026-11-03T18:34:43.498Z",
+    "totalWalletDebitCents": 5,
+    "buyers": [
+      {
+        "buyer": 1,
+        "completion": {
+          "status": 200,
+          "id": "5380c2aa-a321-482b-bc11-ccb2c370870b",
+          "usage": {
+            "prompt_tokens": 150,
+            "completion_tokens": 256,
+            "total_tokens": 406
+          },
+          "startedAt": "2026-11-03T18:34:43.500Z",
+          "endedAt": "2026-11-03T18:34:45.074Z",
+          "retryAfter": null
+        },
+        "revokeKeyStatus": 200,
+        "after": {
+          "balanceCents": 499,
+          "reservedCents": 0,
+          "availableCents": 499,
+          "currency": "USD",
+          "kind": "broker-pilot-credit",
+          "wickComputeCreditsSeparate": true
+        },
+        "crossBuyerReadStatus": 404
+      },
+      {
+        "buyer": 2,
+        "completion": {
+          "status": 200,
+          "id": "1332ddd8-9b7d-4b77-a41a-dd6746fa27c9",
+          "usage": {
+            "prompt_tokens": 149,
+            "completion_tokens": 179,
+            "total_tokens": 328
+          },
+          "startedAt": "2026-11-03T18:34:43.500Z",
+          "endedAt": "2026-11-03T18:34:44.577Z",
+          "retryAfter": null
+        },
+        "revokeKeyStatus": 200,
+        "after": {
+          "balanceCents": 499,
+          "reservedCents": 0,
+          "availableCents": 499,
+          "currency": "USD",
+          "kind": "broker-pilot-credit",
+          "wickComputeCreditsSeparate": true
+        },
+        "crossBuyerReadStatus": 404
+      },
+      {
+        "buyer": 3,
+        "completion": {
+          "status": 429,
+          "code": "inference_busy",
+          "error": "Inference capacity is currently occupied, including unresolved requests.",
+          "requestId": "req-i3",
+          "startedAt": "2026-11-03T18:34:43.501Z",
+          "endedAt": "2026-11-03T18:34:43.579Z",
+          "retryAfter": null
+        },
+        "revokeKeyStatus": 200,
+        "after": {
+          "balanceCents": 499,
+          "reservedCents": 0,
+          "availableCents": 499,
+          "currency": "USD",
+          "kind": "broker-pilot-credit",
+          "wickComputeCreditsSeparate": true
+        },
+        "crossBuyerReadStatus": 404,
+        "expectedPredispatchCapacityRejection": true
+      },
+      {
+        "buyer": 4,
+        "completion": {
+          "status": 200,
+          "id": "e0599766-e336-474f-a128-33d95bd224a2",
+          "usage": {
+            "prompt_tokens": 149,
+            "completion_tokens": 252,
+            "total_tokens": 401
+          },
+          "startedAt": "2026-11-03T18:34:43.501Z",
+          "endedAt": "2026-11-03T18:34:44.567Z",
+          "retryAfter": null
+        },
+        "revokeKeyStatus": 200,
+        "after": {
+          "balanceCents": 499,
+          "reservedCents": 0,
+          "availableCents": 499,
+          "currency": "USD",
+          "kind": "broker-pilot-credit",
+          "wickComputeCreditsSeparate": true
+        },
+        "crossBuyerReadStatus": 404
+      },
+      {
+        "buyer": 5,
+        "completion": {
+          "status": 200,
+          "id": "f067447c-5b9f-43ac-9021-8379328b3f1a",
+          "usage": {
+            "prompt_tokens": 150,
+            "completion_tokens": 34,
+            "total_tokens": 184
+          },
+          "startedAt": "2026-11-03T18:34:43.502Z",
+          "endedAt": "2026-11-03T18:34:44.310Z",
+          "retryAfter": null
+        },
+        "revokeKeyStatus": 200,
+        "after": {
+          "balanceCents": 497,
+          "reservedCents": 0,
+          "availableCents": 497,
+          "currency": "USD",
+          "kind": "broker-pilot-credit",
+          "wickComputeCreditsSeparate": true
+        },
+        "crossBuyerReadStatus": 404
+      }
+    ]
+  },
+  "browser": {
+    "browserContexts": 5,
+    "extraLogins": 0,
+    "screenshots": 49,
+    "viewportWidths": [390, 1440],
+    "allRunningInventoryPolls": 13,
+    "firstAllRunningPoll": "2026-11-03T18:34:57.498Z",
+    "lastAllRunningPoll": "2026-11-03T18:35:28.160Z",
+    "consoleAndPageErrors": [],
+    "pageOverflow": [],
+    "foreignRequestReads": 20,
+    "foreignRequestStatuses": [404],
+    "sampleUi": [
+      {
+        "buyer": 5,
+        "belowSampleDisabled": true,
+        "appliedInput": "4251",
+        "coveredDisabled": false
+      },
+      {
+        "buyer": 1,
+        "belowSampleDisabled": true,
+        "appliedInput": "4251",
+        "coveredDisabled": false
+      },
+      {
+        "buyer": 3,
+        "belowSampleDisabled": true,
+        "appliedInput": "4251",
+        "coveredDisabled": false
+      },
+      {
+        "buyer": 4,
+        "belowSampleDisabled": true,
+        "appliedInput": "4251",
+        "coveredDisabled": false
+      },
+      {
+        "buyer": 2,
+        "belowSampleDisabled": true,
+        "appliedInput": "4251",
+        "coveredDisabled": false
+      }
+    ],
+    "limitations": [
+      "Read-only browser scope; no new VM/order/grant/credit/token/inference/provider writes.",
+      "VM detail pages avoided because TerminalPanel auto-connects and terminal owner held native connections.",
+      "All buyers have no existing agents, so agent top-up UI boundaries unavailable without creating grants.",
+      "Barrier observer intentionally stopped after sufficient live window and saved polls; shutdown produces expected target closed process error."
+    ]
+  },
+  "sessionCleanup": {
+    "at": "2026-11-03T18:37:14.833Z",
+    "rows": [
+      {
+        "buyer": 1,
+        "signOutStatus": 200,
+        "subsequentUser": null
+      },
+      {
+        "buyer": 2,
+        "signOutStatus": 200,
+        "subsequentUser": null
+      },
+      {
+        "buyer": 3,
+        "signOutStatus": 200,
+        "subsequentUser": null
+      },
+      {
+        "buyer": 4,
+        "signOutStatus": 200,
+        "subsequentUser": null
+      },
+      {
+        "buyer": 5,
+        "signOutStatus": 200,
+        "subsequentUser": null
+      }
+    ]
+  },
+  "finalHealth": {
+    "observedAt": "2026-11-03T18:37:35.219Z",
+    "ready": {
+      "status": "ready",
+      "queue": "running"
+    },
+    "heldSlots": 0,
+    "unresolved": 0
+  },
+  "postRunHttpHealth": {
+    "observedAt": "2026-11-03T18:35:58.876Z",
+    "results": [
+      {
+        "path": "/ready",
+        "status": 200,
+        "latencyMs": 89
+      },
+      {
+        "path": "/demos",
+        "status": 200,
+        "latencyMs": 53
+      }
+    ]
+  }
+}

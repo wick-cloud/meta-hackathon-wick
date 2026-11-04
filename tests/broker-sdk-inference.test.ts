@@ -295,5 +295,29 @@ describe('Broker prepaid inference clients', () => {
         description: 'Prepaid input/output token pack',
       }),
     ).toBe(true);
+    const validateRoute = ajv.compile(BROKER_API_SCHEMAS.InferenceRoute);
+    const legacyRoute = {
+      provider: 'baseten',
+      mode: 'real',
+      modelId: INFERENCE_MODEL_ID,
+      modelName: 'Meta Muse Spark Open',
+      qualified: true,
+      reason: 'Qualified text route',
+      minimumInputReservation: 4128,
+      maximumOutputTokens: 2048,
+    };
+    expect(validateRoute(legacyRoute)).toBe(true);
+    const sizedRoute = {
+      ...legacyRoute,
+      minimumPackInputTokens: 4129,
+      minimumOutputTokens: 256,
+      inputAccounting: 'utf8-bytes-v1',
+      maximumInputReservation: 1000000,
+    };
+    expect(validateRoute(sizedRoute)).toBe(true);
+    expect(validateRoute({ ...sizedRoute, minimumOutputTokens: 0 })).toBe(false);
+    expect(validateRoute({ ...sizedRoute, inputAccounting: 'unverified-token-estimate' })).toBe(
+      false,
+    );
   });
 });

@@ -8,21 +8,20 @@ import { transaction, enqueue } from '../marketplace/db.js';
 import { iso, type Row } from '../marketplace/data.js';
 import { clientOperationKey } from '../operations.js';
 import { diskCatalogEligible, diskOptions } from '../disks/service.js';
-import {
-  requireFreshManagedRate,
-  fixedQuote,
-  managedPricing,
-  isSponsoredComputeQuote,
-} from '../../shared/pricing.js';
+import { requireFreshManagedRate, fixedQuote, managedPricing } from '../../shared/pricing.js';
 import { applyCreditEntry } from '../agreements/credits.js';
 import { createGrantInTransaction } from '../inference/grants.js';
 import { OFFER_SELECT, offeringOpen, packPrice } from '../inference/market.js';
 import { issuePackKey } from '../inference/pack-access.js';
 import type { DemoIdentity } from './access.js';
-import { DEMO_COMPUTE_CATALOG_IDS, demoComputeProviders } from './compute.js';
+import { demoComputeCatalogs, demoComputeProviders } from './compute.js';
+import { demoBidView, demoVmPrice } from './receipt.js';
+import { INFERENCE_PROVIDERS, type InferenceProvider } from '../../shared/inference.js';
 
 export const DEMO_QUEUE = 'broker-homepage-demo';
 export const DEMO_CATALOG_ID = 'modal:micro:auto';
+/** Admitted runs retain a global slot until resource cleanup is confirmed. */
+export const DEMO_MAX_ACTIVE_RUNS = 5;
 export const DEMO_LIMITS = {
   durationMinutes: 15,
   cooldownMinutes: 20,
@@ -31,10 +30,30 @@ export const DEMO_LIMITS = {
   inputTokens: 5000,
   outputTokens: 2048,
 } as const;
+/** Runs one network connection may have active or cooling down at once. */
+export const DEMO_NETWORK_RUNS = 3;
 export const DEMO_RESERVATION_CENTS = 50;
 export const DEMO_DAILY_CENTS = 500;
 export const DEMO_TOKEN_CENTS = 5;
 export const DEMO_VM_CENTS = 25;
+/**
+ * Muse token sellers whose qualified routes can serve this demo's small pack: the 1,024
+ * output cap, the session window and (live) request-sized input accounting. Every one
+ * of them is invited to the token auction; the lowest qualified bid wins.
+ */
+export function demoTokenProviders(ctx: AppContext): InferenceProvider[] {
+  const until = Date.now() + 18 * 60_000;
+  return INFERENCE_PROVIDERS.filter((provider) => {
+    const route = ctx.inference?.routes.get(provider);
+    return Boolean(
+      route?.qualified &&
+      route.validUntil >= until &&
+      route.maximumOutputTokens >= DEMO_LIMITS.maxOutputTokens &&
+      (route.minimumOutputTokens ?? 1) <= DEMO_LIMITS.maxOutputTokens &&
+      (ctx.wick.mode !== 'real' || route.inputAccounting === 'utf8-bytes-v1'),
+    );
+  });
+}
 export function demoActor(row: Row): Actor {
   return { id: row.buyer_id, email: '', name: 'Demo visitor', role: 'buyer' };
 }
@@ -63,13 +82,7 @@ export async function demoPrerequisites(
     return { reason: 'The live demo requires real qualified compute and inference.' };
   if (!ctx.wick.runCommand || !ctx.wick.drives || !ctx.config.disksEnabled)
     return { reason: 'The demo terminal and private disk are not ready.' };
-  const rows = (
-    await ctx.pool.query(
-      'SELECT item,approved FROM broker_catalog WHERE id=ANY($1::text[]) AND source_mode=$2',
-      [[...DEMO_COMPUTE_CATALOG_IDS], ctx.wick.mode],
-    )
-  ).rows;
-  const catalogs = rows.map((row) => ({ ...row.item, approved: row.approved }) as CatalogItem);
+  const catalogs = await demoComputeCatalogs(ctx, ctx.pool);
   const catalog = catalogs.find((item) => item.id === DEMO_CATALOG_ID);
   if (
     !catalog ||
@@ -99,31 +112,33 @@ export async function demoPrerequisites(
       catalogs.filter((item) => item.cpu >= catalog.cpu && item.memoryGb >= catalog.memoryGb),
     );
   } catch {
-    return { reason: 'Qualified Modal and E2B Micro offers are required within the demo limit.' };
+    return {
+      reason: 'Modal and at least one rival Micro offer are required within the demo limit.',
+    };
   }
-  const route = ctx.inference?.routes.get('baseten');
-  const until = Date.now() + 18 * 60_000;
+  const sellers = ctx.inference?.enabled ? demoTokenProviders(ctx) : [];
+  if (!sellers.length) return { reason: 'Muse token qualification is unavailable.' };
+  const offers = (
+    await ctx.pool.query(`${OFFER_SELECT} WHERE r.provider=ANY($1::text[])`, [sellers])
+  ).rows;
+  const now = new Date();
   if (
-    !ctx.inference?.enabled ||
-    !route?.qualified ||
-    route.validUntil < until ||
-    route.maximumOutputTokens < 1024 ||
-    (route.minimumOutputTokens ?? 1) > 1024 ||
-    (ctx.wick.mode === 'real' && route.inputAccounting !== 'utf8-bytes-v1')
+    !offers.some(
+      (offer) =>
+        offer.qualified &&
+        !offer.quarantined_at &&
+        offer.fingerprint === ctx.inference!.routes.get(offer.provider)?.fingerprint &&
+        offer.auto_bid &&
+        offeringOpen(offer, now) &&
+        Number(offer.outstanding_input) + DEMO_LIMITS.inputTokens <=
+          Number(offer.max_outstanding_input) &&
+        Number(offer.outstanding_output) + DEMO_LIMITS.outputTokens <=
+          Number(offer.max_outstanding_output) &&
+        packPrice(offer, DEMO_LIMITS.inputTokens, DEMO_LIMITS.outputTokens).priceCents <=
+          DEMO_TOKEN_CENTS,
+    )
   )
-    return { reason: 'Baseten Muse token qualification is unavailable.' };
-  const offer = (await ctx.pool.query(`${OFFER_SELECT} WHERE r.provider='baseten'`)).rows[0];
-  if (
-    !offer?.qualified ||
-    offer.quarantined_at ||
-    offer.fingerprint !== route.fingerprint ||
-    !offer.auto_bid ||
-    !offeringOpen(offer, new Date()) ||
-    Number(offer.outstanding_input) + 5000 > Number(offer.max_outstanding_input) ||
-    Number(offer.outstanding_output) + 2048 > Number(offer.max_outstanding_output) ||
-    packPrice(offer, 5000, 2048).priceCents > DEMO_TOKEN_CENTS
-  )
-    return { reason: 'Baseten has no qualified token offer within the demo limit.' };
+    return { reason: 'No Muse token seller has a qualified offer within the demo limit.' };
   return { reason: null, catalog };
 }
 
@@ -149,25 +164,87 @@ async function gate(
     await db.query(
       `SELECT
       (SELECT count(*)::int FROM broker_demo_runs WHERE ended_at IS NULL) active,
-      EXISTS(SELECT 1 FROM broker_demo_runs d LEFT JOIN broker_demo_visitors v ON v.id=d.visitor_id
-        WHERE (v.secret_digest=$1 OR d.ip_digest=$2) AND d.ended_at IS NULL) own_active,
-      (SELECT max(d.cooldown_until) FROM broker_demo_runs d LEFT JOIN broker_demo_visitors v ON v.id=d.visitor_id
-        WHERE v.secret_digest=$1 OR d.ip_digest=$2) cooldown_until,
+      EXISTS(SELECT 1 FROM broker_demo_runs d JOIN broker_demo_visitors v ON v.id=d.visitor_id
+        WHERE v.secret_digest=$1 AND d.ended_at IS NULL) own_active,
+      (SELECT max(d.cooldown_until) FROM broker_demo_runs d JOIN broker_demo_visitors v ON v.id=d.visitor_id
+        WHERE v.secret_digest=$1) own_cooldown_until,
+      (SELECT count(*)::int FROM broker_demo_runs
+        WHERE ip_digest=$2 AND (ended_at IS NULL OR cooldown_until>clock_timestamp())) network_runs,
+      (SELECT count(*)::int FROM broker_demo_runs WHERE ip_digest=$2 AND ended_at IS NULL) network_active,
+      (SELECT min(cooldown_until) FROM broker_demo_runs
+        WHERE ip_digest=$2 AND ended_at IS NOT NULL AND cooldown_until>clock_timestamp()) network_free_at,
       (SELECT reserved_cents FROM broker_demo_days WHERE day=(clock_timestamp() AT TIME ZONE 'America/New_York')::date) reserved_cents,
       clock_timestamp() at`,
       [identity?.visitorDigest ?? null, identity?.ipDigest ?? ipDigest ?? null],
     )
   ).rows[0];
+  // A browser gets one run, then its own cooldown. A shared network (one venue Wi-Fi)
+  // gets DEMO_NETWORK_RUNS runs that are active or cooling down, so clearing cookies
+  // still cannot reset a network's allowance.
+  const ownCooldown = state.own_cooldown_until && state.own_cooldown_until > state.at;
+  const networkFull = state.network_runs >= DEMO_NETWORK_RUNS;
+  const cooldown_until = ownCooldown
+    ? state.own_cooldown_until
+    : networkFull && state.network_active < DEMO_NETWORK_RUNS
+      ? state.network_free_at
+      : null;
   const reason = state.own_active
-    ? 'A demo is already active for this browser or connection.'
-    : state.cooldown_until && state.cooldown_until > state.at
+    ? 'A demo is already active for this browser.'
+    : ownCooldown
       ? 'Your next demo is available after the cooldown.'
-      : state.active >= 2
-        ? 'Both demo slots are in use. Please try again after a demo ends.'
-        : Number(state.reserved_cents ?? 0) + DEMO_RESERVATION_CENTS > DEMO_DAILY_CENTS
-          ? 'Today’s demo budget is reserved. Please return after midnight Eastern time.'
-          : null;
-  return { ...state, reason };
+      : networkFull
+        ? 'This network has used its demo allowance. Please try again after a demo ends or cools down.'
+        : state.active >= DEMO_MAX_ACTIVE_RUNS
+          ? `All ${DEMO_MAX_ACTIVE_RUNS} demo slots are in use. Please try again after a demo ends.`
+          : Number(state.reserved_cents ?? 0) + DEMO_RESERVATION_CENTS > DEMO_DAILY_CENTS
+            ? 'Today’s demo budget is reserved. Please return after midnight Eastern time.'
+            : null;
+  return { ...state, cooldown_until, reason };
+}
+
+/** Called in a transaction; the lock also protects any following admission. */
+async function resumeDemoStart(
+  db: PoolClient,
+  identity: DemoIdentity,
+  operationKey: string,
+  kind: 'terminal' | 'studio',
+  demoName: string,
+): Promise<Row | undefined> {
+  await db.query("SELECT pg_advisory_xact_lock(hashtext('homepage-demo-admission'))");
+  const prior = (
+    await db.query(
+      `SELECT d.*,d.kind AS requested_kind,d.demo_name AS requested_name
+      FROM broker_demo_runs d JOIN broker_demo_visitors v ON v.id=d.visitor_id
+      WHERE v.secret_digest=$1 AND d.operation_key=$2
+      UNION ALL
+      SELECT d.*,r.requested_kind,r.requested_name
+      FROM broker_demo_start_replays r JOIN broker_demo_visitors v ON v.id=r.visitor_id
+      JOIN broker_demo_runs d ON d.id=r.run_id AND d.visitor_id=r.visitor_id
+      WHERE v.secret_digest=$1 AND r.operation_key=$2 LIMIT 1`,
+      [identity.visitorDigest, operationKey],
+    )
+  ).rows[0];
+  if (prior) {
+    if (prior.requested_kind !== kind || prior.requested_name !== demoName)
+      throw new HttpError(409, 'This operation key belongs to a different demo kind.');
+    return prior;
+  }
+  const active = (
+    await db.query(
+      `SELECT d.* FROM broker_demo_runs d JOIN broker_demo_visitors v ON v.id=d.visitor_id
+      WHERE v.secret_digest=$1 AND d.ended_at IS NULL`,
+      [identity.visitorDigest],
+    )
+  ).rows[0];
+  if (!active) return undefined;
+  // Remember the requested inputs as well as the actual resumed run: it may have
+  // another fixed kind/name, and a delayed retry must never admit a new run.
+  await db.query(
+    `INSERT INTO broker_demo_start_replays(visitor_id,operation_key,requested_kind,requested_name,run_id)
+    VALUES($1,$2,$3,$4,$5)`,
+    [active.visitor_id, operationKey, kind, demoName, active.id],
+  );
+  return active;
 }
 
 export async function startDemo(
@@ -175,38 +252,32 @@ export async function startDemo(
   identity: DemoIdentity,
   operationKey: string,
   kind: 'terminal' | 'studio' = 'terminal',
+  demoName = '',
 ): Promise<Row> {
+  demoName = demoName.trim();
+  if (
+    demoName.length > 40 ||
+    !/^[\p{L}\p{N} .'-]*$/u.test(demoName) ||
+    (kind !== 'studio' && demoName)
+  )
+    throw new HttpError(
+      400,
+      'Enter a name of up to 40 letters, numbers, spaces, periods, apostrophes or hyphens.',
+    );
   clientOperationKey(operationKey, true);
   if (!demoModeAllowed(ctx)) throw new HttpError(409, 'The live demo is unavailable.');
-  // An accepted retry is read-only even if a provider subsequently becomes unavailable.
-  const prior = (
-    await ctx.pool.query(
-      `SELECT d.* FROM broker_demo_runs d JOIN broker_demo_visitors v ON v.id=d.visitor_id
-    WHERE v.secret_digest=$1 AND d.operation_key=$2`,
-      [identity.visitorDigest, operationKey],
-    )
-  ).rows[0];
-  if (prior) {
-    if (prior.kind !== kind)
-      throw new HttpError(409, 'This operation key belongs to a different demo kind.');
-    return prior;
-  }
+  // Recover accepted starts before checking purchase prerequisites. Persist fresh
+  // keys used to resume a run under the same lock as admission and cleanup.
+  const resumed = await transaction(ctx.pool, (db) =>
+    resumeDemoStart(db, identity, operationKey, kind, demoName),
+  );
+  if (resumed) return resumed;
   const prerequisites = await demoPrerequisites(ctx);
   if (prerequisites.reason) throw new HttpError(409, prerequisites.reason);
   return transaction(ctx.pool, async (db) => {
-    await db.query("SELECT pg_advisory_xact_lock(hashtext('homepage-demo-admission'))");
-    const existing = (
-      await db.query(
-        `SELECT d.* FROM broker_demo_runs d JOIN broker_demo_visitors v ON v.id=d.visitor_id
-      WHERE v.secret_digest=$1 AND d.operation_key=$2`,
-        [identity.visitorDigest, operationKey],
-      )
-    ).rows[0];
-    if (existing) {
-      if (existing.kind !== kind)
-        throw new HttpError(409, 'This operation key belongs to a different demo kind.');
-      return existing;
-    }
+    // A competing start may have admitted this browser while prerequisites ran.
+    const resumed = await resumeDemoStart(db, identity, operationKey, kind, demoName);
+    if (resumed) return resumed;
     const eligibility = await gate(db, identity);
     if (eligibility.reason)
       throw Object.assign(new HttpError(429, eligibility.reason), { retryAfter: 60 });
@@ -250,14 +321,14 @@ export async function startDemo(
       name: 'Homepage demo',
       budgetCents: 5,
       maxPurchaseCents: 5,
-      allowedProviders: ['baseten'],
+      allowedProviders: demoTokenProviders(ctx),
       allowInstant: false,
       expiresAt: expiresAt.toISOString(),
     });
     const run = (
       await db.query(
-        `INSERT INTO broker_demo_runs(id,visitor_id,buyer_id,ip_digest,operation_key,source_mode,budget_day,grant_id,expires_at,kind)
-      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+        `INSERT INTO broker_demo_runs(id,visitor_id,buyer_id,ip_digest,operation_key,source_mode,budget_day,grant_id,expires_at,kind,demo_name)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
         [
           id,
           visitor.id,
@@ -269,6 +340,7 @@ export async function startDemo(
           grant.id,
           expiresAt,
           kind,
+          demoName,
         ],
       )
     ).rows[0];
@@ -476,6 +548,7 @@ export async function demoState(
     run = {
       id: row.id,
       kind: row.kind,
+      demoName: row.demo_name,
       studio: studio
         ? {
             status: studio.status,
@@ -499,40 +572,9 @@ export async function demoState(
             provider: 'modal',
             catalogId: DEMO_CATALOG_ID,
             terminalPath: live ? `/api/vms/${vm.id}/terminal` : null,
-            priceCents:
-              vm?.quote_snapshot?.demoSponsorship?.effectivePriceCents ??
-              vm?.quote_snapshot?.totalPriceCents ??
-              null,
-            ...(isSponsoredComputeQuote(vm?.quote_snapshot?.pricing)
-              ? { operatorSponsored: true }
-              : {}),
-            ...(vm?.quote_snapshot?.demoSponsorship
-              ? {
-                  grossPriceCents: Number(vm.quote_snapshot.totalPriceCents),
-                  sponsorCreditCents: vm.quote_snapshot.demoSponsorship.sponsorCreditCents,
-                }
-              : {}),
+            ...demoVmPrice(vm),
             auctionEndsAt: iso(request.closes_at),
-            bids: vmBids.rows.map((b) => ({
-              provider:
-                b.offering_snapshot?.catalog?.provider ??
-                b.offering_snapshot?.cloudProvider ??
-                'modal',
-              priceCents:
-                b.offering_snapshot?.demoSponsorship?.effectivePriceCents ??
-                Number(b.total_price_cents),
-              ...(isSponsoredComputeQuote(b.offering_snapshot?.pricing)
-                ? { operatorSponsored: true }
-                : {}),
-              ...(b.offering_snapshot?.demoSponsorship
-                ? {
-                    grossPriceCents: Number(b.total_price_cents),
-                    sponsorCreditCents: b.offering_snapshot.demoSponsorship.sponsorCreditCents,
-                    catalogId: b.offering_snapshot.catalog.id,
-                  }
-                : {}),
-              acceptedAt: iso(b.created_at)!,
-            })),
+            bids: vmBids.rows.map(demoBidView),
             cleanupConfirmed: Boolean(vm?.cleanup_confirmed_at),
           }
         : null,
@@ -540,7 +582,7 @@ export async function demoState(
         ? {
             orderId: order.id,
             status: order.status,
-            provider: 'baseten',
+            provider: order.provider,
             packId: pack?.id ?? null,
             inputTokens: 5000,
             outputTokens: 2048,
@@ -556,7 +598,10 @@ export async function demoState(
             })),
           }
         : null,
-      disk: disks.rows[0] ?? null,
+      disk:
+        row.reusable_disk && row.ended_at
+          ? { id: row.disk_id, name: 'Dedicated demo disk', status: 'retained' }
+          : (disks.rows[0] ?? null),
       canIssueKey: Boolean(
         row.kind !== 'studio' &&
         live &&

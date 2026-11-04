@@ -1,3 +1,4 @@
+import type { InferenceProvider } from './inference.js';
 /** Public, guest-scoped demo receipts. Never contains upstream identifiers or secrets. */
 export type DemoKind = 'terminal' | 'studio';
 export interface DemoBid {
@@ -14,6 +15,7 @@ export interface DemoRun {
   id: string;
   /** Older saved receipts without a kind are terminal demos. */
   kind?: DemoKind;
+  demoName?: string;
   status: 'starting' | 'auction' | 'provisioning' | 'ready' | 'ending' | 'ended' | 'failed';
   message: string;
   createdAt: string;
@@ -36,7 +38,8 @@ export interface DemoRun {
   tokens: {
     orderId: string;
     status: string;
-    provider: 'baseten';
+    /** The awarded Muse token seller, once the auction closes. */
+    provider: InferenceProvider | null;
     packId: string | null;
     inputTokens: number;
     outputTokens: number;

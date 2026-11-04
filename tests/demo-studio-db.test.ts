@@ -17,6 +17,26 @@ describe.skipIf(!databaseUrl)(
       await f?.close();
     });
 
+    it('accepts a bounded optional name and freezes it with the admitted task', async () => {
+      const guest = demoGuest(),
+        key = randomUUID();
+      const result = await f.start(guest, 'studio', key, { demoName: '  Alex  ' });
+      expect(result.statusCode, result.body).toBe(200);
+      expect(result.json().run.demoName).toBe('Alex');
+      expect((await f.start(guest, 'studio', key, { demoName: 'Alex' })).statusCode).toBe(200);
+      expect((await f.start(guest, 'studio', key, { demoName: 'Other' })).statusCode).toBe(409);
+      await expect(
+        f.pool.query("UPDATE broker_demo_runs SET demo_name='Other' WHERE id=$1", [
+          result.json().run.id,
+        ]),
+      ).rejects.toThrow();
+      for (const name of ['x'.repeat(41), 'Alex\nimport os', '<script>', '\"; exec(1)']) {
+        expect(
+          (await f.start(demoGuest(), 'studio', randomUUID(), { demoName: name })).statusCode,
+        ).toBe(400);
+      }
+    });
+
     it('preserves terminal as the default and freezes the chosen kind across retries and SQL writes', async () => {
       const guest = demoGuest(),
         operationKey = randomUUID();
@@ -40,28 +60,39 @@ describe.skipIf(!databaseUrl)(
       expect(f.commands).not.toHaveBeenCalled();
     });
 
-    it('shares concurrent browser and IP admission across both demos, including a new cookie', async () => {
+    it("shares one browser's admission across both demos, while a new cookie is another browser", async () => {
       const guest = demoGuest();
       const attempts = await Promise.all([f.start(guest, 'terminal'), f.start(guest, 'studio')]);
-      expect(attempts.map((r) => r.statusCode).sort()).toEqual([200, 429]);
-      expect((await f.start(demoGuest(guest.ip), 'studio')).statusCode).toBe(429);
+      expect(attempts.map((r) => r.statusCode)).toEqual([200, 200]);
+      expect(attempts[0]!.json().run.id).toBe(attempts[1]!.json().run.id);
+      expect(attempts[0]!.json().run.kind).toBe(attempts[1]!.json().run.kind);
+      // A new cookie on the same network is another browser and may start its own demo.
+      expect((await f.start(demoGuest(guest.ip), 'studio')).statusCode).toBe(200);
       const run = attempts.find((r) => r.statusCode === 200)!.json().run;
       expect(['terminal', 'studio']).toContain(run.kind);
       expect((await f.pool.query('SELECT count(*)::int n FROM broker_demo_runs')).rows[0].n).toBe(
-        1,
+        2,
       );
       expect(
         (await f.pool.query('SELECT reserved_cents FROM broker_demo_days')).rows[0].reserved_cents,
-      ).toBe(50);
+      ).toBe(100);
     });
 
-    it('uses one global two-slot cap and one daily budget for terminal and Studio', async () => {
-      expect((await f.start(demoGuest(), 'terminal')).statusCode).toBe(200);
-      expect((await f.start(demoGuest(), 'studio')).statusCode).toBe(200);
-      expect((await f.start(demoGuest(), 'studio')).statusCode).toBe(429);
+    it('uses one global five-slot cap and one daily budget for terminal and Studio', async () => {
+      for (const kind of ['terminal', 'studio', 'terminal', 'studio', 'studio']) {
+        const response = await f.start(demoGuest(), kind);
+        expect(response.statusCode, response.body).toBe(200);
+      }
+      for (const kind of ['terminal', 'studio']) {
+        const response = await f.start(demoGuest(), kind);
+        expect(response.statusCode).toBe(429);
+        expect(response.json().error).toBe(
+          'All 5 demo slots are in use. Please try again after a demo ends.',
+        );
+      }
       expect(
         (await f.pool.query('SELECT reserved_cents FROM broker_demo_days')).rows[0].reserved_cents,
-      ).toBe(100);
+      ).toBe(250);
       // Test the daily boundary independently of the concurrent-run boundary.
       await f.reset();
       await f.pool.query(

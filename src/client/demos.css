@@ -34,110 +34,248 @@
 .demos-intro-meta svg {
   color: var(--accent);
 }
-.demos-options {
+.demos-interactive {
+  margin-bottom: 42px;
+  padding: 28px;
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  background: radial-gradient(ellipse at 100% 0%, #ff7a1a10, transparent 65%), var(--card);
+}
+.demos-interactive-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 18px 28px;
+}
+.demos-interactive-heading h2 {
+  margin-top: 12px;
+  font-size: 26px;
+  font-weight: 550;
+  letter-spacing: -0.7px;
+}
+.demos-interactive-heading p {
+  max-width: 600px;
+  margin: 12px 0 0;
+  font-size: 12px;
+  line-height: 1.8;
+  color: var(--soft);
+}
+.demos-interactive-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 10px;
+  border: 1px solid #ff7a1a33;
+  border-radius: 6px;
+  color: var(--accent);
+  font-size: 10px;
+}
+.demos-interactive-options {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 24px;
-  margin-bottom: 44px;
-  align-items: stretch;
+  gap: 16px;
+  margin-top: 24px;
 }
-.demos-status-action {
+.demos-interactive-option {
   display: flex;
-  justify-content: flex-end;
-  margin: 0 0 18px;
+  align-items: center;
+  gap: 15px;
+  padding: 20px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--bg);
+  transition:
+    border-color 150ms,
+    background 150ms;
+}
+.demos-interactive-option:hover {
+  border-color: var(--accent);
+  background: #ff7a1a08;
+}
+.demos-interactive-option:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+.demos-interactive-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 42px;
+  height: 42px;
+  color: var(--accent);
+  background: #ff7a1a0c;
+  border: 1px solid #ff7a1a24;
+  border-radius: 8px;
+}
+.demos-interactive-option > span:nth-child(2) {
+  flex: 1;
+  min-width: 0;
+}
+.demos-interactive-option strong {
+  display: block;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 550;
+}
+.demos-interactive-option > span > span {
+  display: block;
+  margin-top: 7px;
+  font-size: 11px;
+  line-height: 1.7;
+  color: var(--muted);
+}
+.demos-interactive-option > svg {
+  flex-shrink: 0;
+  color: var(--accent);
+}
+.demos-interactive-note {
+  margin: 17px 0 0;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.7;
+}
+.demos-toolbar {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px 20px;
+  margin: 0 0 16px;
+}
+.demos-toolbar h2 {
+  font-size: 18px;
+  font-weight: 550;
+  letter-spacing: -0.3px;
+}
+.demos-toolbar .demo-availability {
+  min-height: 0;
+  padding: 6px 0 0;
+  border: 0;
+  color: var(--muted);
+  font-size: 11px;
 }
 .broker-demos > main > .demo-fixture-note {
   margin: 0 0 18px;
 }
-.demos-terminal-choice {
+.demos-options {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  column-gap: 24px;
+  margin-bottom: 20px;
+  align-items: stretch;
+}
+/*
+ * Both demo choices share one card anatomy: header, body, footer action. Subgrid puts
+ * each part on a shared row, so headers and start buttons line up across cards.
+ */
+.demos-card {
+  display: grid;
+  grid-row: span 3;
+  grid-template-rows: auto 1fr auto;
+  grid-template-rows: subgrid;
+  row-gap: 0;
   min-width: 0;
-}
-.demos-choice-action {
-  display: flex;
-  gap: 16px;
-  align-items: center;
-  padding: 0 0 18px;
-}
-.demos-choice-action .button {
-  flex-shrink: 0;
-}
-.demos-choice-action > p {
-  color: var(--muted);
-  font-size: 11px;
-  line-height: 1.7;
-}
-.demos-studio-choice {
-  min-width: 0;
-  border: 1px solid var(--line);
-  background: var(--card);
-  border-radius: 10px;
+  border: 1px solid var(--line-strong);
+  background: linear-gradient(135deg, #1b1c1e, #151719);
+  border-radius: 12px;
+  box-shadow: 0 24px 70px #0002;
   overflow: hidden;
 }
-.demos-studio-topline {
+.demos-card-body {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 12px;
-  padding: 17px 24px;
-  border-bottom: 1px solid var(--line);
-  font: 9px var(--font-mono);
-  letter-spacing: 1px;
-  color: var(--muted);
-}
-.demos-coming-soon {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  letter-spacing: 0;
-}
-.demos-studio-body {
+  flex-direction: column;
   padding: 28px;
 }
-.demos-studio-icon {
+.demos-card-icon {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 62px;
-  height: 62px;
+  width: 52px;
+  height: 52px;
   border: 1px solid var(--line-strong);
-  border-radius: 14px;
+  border-radius: 12px;
   background: var(--bg);
   color: var(--soft);
-  margin-bottom: 23px;
+  margin-bottom: 22px;
 }
-.demos-studio-body h2 {
-  font-size: 33px;
+.demos-card-body h2 {
+  font-size: 31px;
+  font-weight: 550;
   line-height: 1.15;
   letter-spacing: -1px;
-  font-weight: 550;
 }
-.demos-studio-body > p {
+.demos-card-body > p {
+  margin-top: 14px;
+  max-width: 440px;
   font-size: 12px;
   line-height: 1.8;
   color: var(--muted);
-  margin-top: 16px;
-  max-width: 380px;
 }
-.demos-studio-preview {
+.demos-card-flow {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px 10px;
   align-items: center;
-  padding: 20px 0;
-  margin-top: 6px;
-  border-bottom: 1px solid var(--line);
+  gap: 8px 10px;
+  margin: 20px 0 22px;
+  padding: 11px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff03;
   font-size: 10px;
   color: var(--soft);
 }
-.demos-studio-preview svg {
+.demos-card-flow svg {
+  flex-shrink: 0;
   color: var(--muted);
 }
-.demos-studio-body .demos-studio-notice {
-  font-size: 11px;
+.demos-card .demo-included {
+  padding: 0;
 }
-.demos-studio-body > .button {
-  margin-top: 19px;
+.demos-card .demo-included > div:first-child {
+  padding-top: 0;
+}
+.demos-studio-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 0 14px;
+  margin-bottom: 20px;
+}
+.demos-studio-fields .demo-task-box {
+  margin-bottom: 8px;
+}
+.demos-studio-fields > small {
+  grid-column: 1 / -1;
+  font-size: 10px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+.demos-card-body > .demo-task-box:last-child {
+  margin-bottom: 0;
+}
+.demos-card-footer {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px 18px;
+  padding: 18px 28px;
+  border-top: 1px solid var(--line);
+  background: #ffffff02;
+}
+.demos-card-footer .button {
+  flex-shrink: 0;
+}
+.demos-card-footer > p {
+  flex: 1 1 220px;
+  min-width: 0;
+  font-size: 11px;
+  line-height: 1.7;
+  color: var(--muted);
+}
+.demos-card-footer > p svg {
+  vertical-align: -2px;
+  margin-right: 4px;
+  color: var(--soft);
 }
 .demos-shared-allowance {
   display: flex;
@@ -146,7 +284,7 @@
   color: var(--muted);
   font-size: 11px;
   line-height: 1.7;
-  margin: -20px 0 34px;
+  margin: 0 0 34px;
   max-width: 800px;
 }
 .demos-shared-allowance svg {
@@ -180,13 +318,22 @@
 }
 
 @media (max-width: 800px) {
+  .demos-interactive-options {
+    grid-template-columns: 1fr;
+  }
   .demos-options {
     grid-template-columns: 1fr;
   }
-  .demos-studio-body {
+  .demos-card + .demos-card {
+    margin-top: 20px;
+  }
+  .demos-card-body {
     padding: 24px;
   }
-  .demos-studio-body h2 br {
+  .demos-card-footer {
+    padding: 16px 24px;
+  }
+  .demos-card-body h2 br {
     display: none;
   }
   .demos-intro {
@@ -194,6 +341,21 @@
   }
 }
 @media (max-width: 480px) {
+  .demos-interactive {
+    padding: 22px 20px;
+    margin-bottom: 30px;
+  }
+  .demos-interactive-heading h2 {
+    font-size: 23px;
+  }
+  .demos-interactive-option {
+    padding: 16px;
+    gap: 12px;
+  }
+  .demos-interactive-icon {
+    flex-basis: 34px;
+    height: 34px;
+  }
   .demos-intro {
     padding: 34px 0 28px;
   }
@@ -207,24 +369,28 @@
   .demos-intro-meta {
     font-size: 10px;
   }
-  .demos-choice-action {
-    flex-wrap: wrap;
-    gap: 10px;
-    padding: 0 0 15px;
+  .demos-toolbar {
+    align-items: flex-start;
   }
-  .demos-studio-topline {
-    padding: 16px 20px;
-    font-size: 8px;
-  }
-  .demos-studio-body {
+  .demos-card-body {
     padding: 22px 20px;
   }
-  .demos-studio-body h2 {
-    font-size: 28px;
+  .demos-card-footer {
+    padding: 16px 20px;
   }
-  .demos-studio-preview {
-    gap: 8px;
+  .demos-card-body h2 {
+    font-size: 27px;
+  }
+  .demos-card-flow {
+    gap: 6px 8px;
     font-size: 9px;
+  }
+  .demos-studio-fields {
+    grid-template-columns: 1fr;
+  }
+  .demos-card-footer .button {
+    width: 100%;
+    justify-content: center;
   }
   .demos-beta .home-eyebrow {
     font-size: 8px;

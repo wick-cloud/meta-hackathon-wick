@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import type { Mode } from '../shared/types';
 import { ErrorBox, Spinner } from './components';
+import { demoLocation } from './demo-store';
 import '@xterm/xterm/css/xterm.css';
 
 export function TerminalPanel({
@@ -69,6 +70,70 @@ export function TerminalPanel({
     term.current = terminal;
     fit.current = fitAddon;
     fitAddon.fit();
+    if (demoLocation()) {
+      let command = '';
+      const prompt = () => terminal.write('\r\ndemo@wick:/workspace$ ');
+      terminal.writeln('Wick Broker demo · local simulated shell');
+      terminal.writeln('Type help to see available commands. No commands execute on a VM.');
+      prompt();
+      const input = terminal.onData((text) => {
+        for (const char of text) {
+          if (char === '\r') {
+            terminal.write('\r\n');
+            const commands: Record<string, string> = {
+              help: 'Available: ls, pwd, whoami, uname, cat hello.py, python3 hello.py, clear',
+              ls: 'hello.py  hello_world.py  README.md',
+              pwd: '/workspace',
+              whoami: 'demo',
+              uname: 'Linux (simulated)',
+              'uname -a': 'Linux wick-demo 6.1 x86_64 (simulated)',
+              'cat hello.py': 'print("Hello from Wick!")',
+              'cat hello_world.py': 'print("Hello from Wick!")',
+              'cat README.md': 'Sample Wick workspace. Try python3 hello.py.',
+              'python3 hello.py': 'Hello from Wick!',
+              'python3 hello_world.py': 'Hello from Wick!',
+            };
+            const value = command.trim();
+            if (value === 'clear') terminal.clear();
+            else if (value)
+              terminal.write(
+                commands[value] ?? 'This is a sample shell. Type help for supported commands.',
+              );
+            command = '';
+            prompt();
+          } else if (char === '\x7f') {
+            if (command.length) {
+              command = command.slice(0, -1);
+              terminal.write('\b \b');
+            }
+          } else if (char === '\x03') {
+            command = '';
+            terminal.write('^C');
+            prompt();
+          } else if (char >= ' ' && char <= '~' && command.length < 160) {
+            command += char;
+            terminal.write(char);
+          }
+        }
+      });
+      const observer = new ResizeObserver(() => {
+        if (!disposed && host.current?.clientWidth) fitAddon.fit();
+      });
+      observer.observe(host.current);
+      setConnected(true);
+      setConnecting(false);
+      terminal.focus();
+      return () => {
+        disposed = true;
+        observer.disconnect();
+        input.dispose();
+        terminal.dispose();
+        term.current = null;
+        fit.current = null;
+        setConnected(false);
+        setConnecting(false);
+      };
+    }
     const ws = new WebSocket(
       `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/api/vms/${encodeURIComponent(vmId)}/terminal`,
     );

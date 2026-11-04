@@ -4,6 +4,7 @@ import { z } from 'zod';
 import type { Actor, CatalogItem } from '../../shared/types.js';
 import type { Disk, DiskAttachment, DiskDetail, DiskWorkspace } from '../../shared/disks.js';
 import type { WickEnvironment } from '../integrations/types.js';
+import { environmentCleanupConfirmed } from '../integrations/discovery.js';
 import { HttpError, type AppContext } from '../context.js';
 import { withOperation, clientOperationKey } from '../operations.js';
 import { transaction, enqueue } from '../marketplace/db.js';
@@ -112,7 +113,7 @@ export async function reconcileVmDisk(
     !vm.environment_id ||
     !environment ||
     environment.id !== vm.environment_id ||
-    environment.status !== 'terminated'
+    !environmentCleanupConfirmed(environment)
   )
     return false;
   const disk = (

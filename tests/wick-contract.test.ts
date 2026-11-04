@@ -97,6 +97,24 @@ describe('public Wick REST contract', () => {
       terminal: false,
     });
   });
+  it('retains validated native failed-launch cleanup proof without changing the failed state', () => {
+    const proof = {
+      ...environment,
+      status: 'failed',
+      terminatedAt: '2026-11-03T18:12:31.600Z',
+      launch: { state: 'failed', cleanup: 'complete', reason: 'internal' },
+    };
+    expect(parseEnvironment(proof)).toMatchObject({
+      status: 'failed',
+      terminatedAt: proof.terminatedAt,
+      launch: { state: 'failed', cleanup: 'complete' },
+    });
+    expect(parseEnvironment({ ...environment, status: 'failed' }).launch).toBeUndefined();
+    expect(() => parseEnvironment({ ...proof, terminatedAt: 'invalid' })).toThrow('terminatedAt');
+    expect(() =>
+      parseEnvironment({ ...proof, launch: { state: 'failed', cleanup: true } }),
+    ).toThrow();
+  });
   it('reads session expiry from nested public session and enforces environment scope', () => {
     const expiresAt = new Date(Date.now() + 240_000).toISOString();
     const response = {

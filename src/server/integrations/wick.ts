@@ -87,6 +87,19 @@ export function parseEnvironment(value: unknown): WickEnvironment {
     ...(raw.createdAt == null
       ? {}
       : { createdAt: timestamp(raw.createdAt, 'environment.createdAt') }),
+    ...(raw.terminatedAt == null
+      ? {}
+      : { terminatedAt: timestamp(raw.terminatedAt, 'environment.terminatedAt') }),
+    ...(raw.launch == null
+      ? {}
+      : {
+          launch: z
+            .object({
+              state: z.enum(['failed', 'ready', 'routing', 'starting', 'checking', 'cancelled']),
+              cleanup: z.enum(['pending', 'not_needed', 'awaiting_provider', 'complete']),
+            })
+            .parse(raw.launch),
+        }),
     ...Object.fromEntries(
       ['name', 'organizationId', 'groupId', 'provider', 'profile', 'providerKeyId'].flatMap(
         (field) =>
