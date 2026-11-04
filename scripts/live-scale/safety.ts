@@ -486,16 +486,17 @@ export async function cleanupJournal(journal: Journal, adapter: WickAdapter, tim
       let cursor: string | undefined;
       for (let page = 0; page < 3 && Date.now() < deadline; page++) {
         try {
-          const response = await adapter.list({
-            organizationId: header.approval.organizationId,
-            groupId: header.approval.groupId,
-            search: `broker-scale-${header.runId}-`,
-            provider: header.approval.provider,
-            limit: 50,
-            newest: true,
-            archived,
-            ...(cursor ? { cursor } : {}),
-          });
+          const response: Awaited<ReturnType<NonNullable<WickAdapter['list']>>> =
+            await adapter.list({
+              organizationId: header.approval.organizationId,
+              groupId: header.approval.groupId,
+              search: `broker-scale-${header.runId}-`,
+              provider: header.approval.provider,
+              limit: 50,
+              newest: true,
+              archived,
+              ...(cursor ? { cursor } : {}),
+            });
           assert(response.items.length <= 50, 'Environment page exceeded recovery bound.');
           discovered.push(...response.items);
           if (!response.nextCursor || response.nextCursor === cursor) break;

@@ -29,12 +29,12 @@
     "prepack": "npm run build"
   },
   "dependencies": {
-    "ws": "^8.18.3"
+    "ws": "^8.22.1"
   },
   "devDependencies": {
-    "@types/node": "^24.10.0",
+    "@types/node": "^26.6.6",
     "@types/ws": "^8.18.1",
-    "typescript": "^5.9.3"
+    "typescript": "^7.0.2"
   },
   "repository": {
     "type": "git",
