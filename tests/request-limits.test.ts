@@ -25,6 +25,54 @@ function protectedApp(query: ReturnType<typeof vi.fn>, trusted = false) {
 }
 
 describe('preauthentication admission', () => {
+  it('shares admission between canonical and encoded API paths before session lookups', async () => {
+    const app = Fastify();
+    const query = vi.fn(async () => ({ ok: true }));
+    registerRequestLimits(app, { authTrustRailwayProxy: false });
+    app.post('/api/requests', query);
+    try {
+      for (let i = 0; i < 300; i++) {
+        const response = await app.inject({
+          method: 'POST',
+          url: i % 2 ? '/%61pi/requests?path=/api/auth/' : '/api/%72equests',
+        });
+        expect(response.statusCode).toBe(200);
+      }
+      expect((await app.inject({ method: 'POST', url: '/api/requests' })).statusCode).toBe(429);
+      expect((await app.inject({ method: 'POST', url: '/%61pi/requests' })).statusCode).toBe(429);
+      expect(query).toHaveBeenCalledTimes(300);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('keeps encoded authentication paths in the stricter auth bucket', async () => {
+    const app = Fastify();
+    registerRequestLimits(app, { authTrustRailwayProxy: false });
+    app.post('/api/auth/*', async () => ({ ok: true }));
+    app.post('/api/requests', async () => ({ ok: true }));
+    try {
+      for (let i = 0; i < 20; i++)
+        expect(
+          (
+            await app.inject({
+              method: 'POST',
+              url: i % 2 ? '/%61pi/auth/sign-in/email' : '/api/%61uth/sign-in/email',
+            })
+          ).statusCode,
+        ).toBe(200);
+      expect(
+        (await app.inject({ method: 'POST', url: '/api/auth/sign-in/email' })).statusCode,
+      ).toBe(429);
+      expect(
+        (await app.inject({ method: 'POST', url: '/%61pi/%61uth/sign-in/email' })).statusCode,
+      ).toBe(429);
+      expect((await app.inject({ method: 'POST', url: '/api/requests' })).statusCode).toBe(200);
+    } finally {
+      await app.close();
+    }
+  });
+
   it('releases HTTP admission after WebSocket authentication instead of retaining reconnect slots', async () => {
     const app = Fastify();
     registerRequestLimits(app, { authTrustRailwayProxy: false });
